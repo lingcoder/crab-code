@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <!-- Open Graph / Social Media card — 1200x630 standard -->
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#1A1A2E"/>
+
+  <!-- Centered icon -->
+  <g fill="#DA7756" transform="translate(480, 140) scale(2.4)">
+    <path d="M30 38 C26 35, 18 28, 12 24 C9 22, 5 21, 3 23 C1 25, 2 28, 5 29 C8 30, 14 32, 20 35 C24 37, 27 38, 30 38Z"/>
+    <path d="M30 40 C25 40, 16 38, 10 35 C7 33, 3 33, 2 35 C1 37, 3 40, 6 40 C10 40, 18 41, 24 41 C27 41, 29 41, 30 40Z"/>
+    <path d="M70 38 C74 35, 82 28, 88 24 C91 22, 95 21, 97 23 C99 25, 98 28, 95 29 C92 30, 86 32, 80 35 C76 37, 73 38, 70 38Z"/>
+    <path d="M70 40 C75 40, 84 38, 90 35 C93 33, 97 33, 98 35 C99 37, 97 40, 94 40 C90 40, 82 41, 76 41 C73 41, 71 41, 70 40Z"/>
+    <ellipse cx="50" cy="46" rx="22" ry="16"/>
+    <path d="M40 33 C39 30, 36 25, 35 22 C34.5 20, 35 18, 37 18 C39 18, 39.5 20, 39.5 22 C39.5 25, 40 29, 40 33Z"/>
+    <circle cx="36" cy="19" r="2.8"/>
+    <path d="M60 33 C61 30, 64 25, 65 22 C65.5 20, 65 18, 63 18 C61 18, 60.5 20, 60.5 22 C60.5 25, 60 29, 60 33Z"/>
+    <circle cx="64" cy="19" r="2.8"/>
+    <path d="M32 50 C27 54, 19 59, 14 62 C11 64, 9 63, 9 61 C9 59, 12 57, 15 55 C20 52, 27 49, 32 48Z"/>
+    <path d="M30 55 C25 60, 17 68, 12 73 C10 76, 8 75, 8 73 C8 71, 11 67, 14 63 C19 57, 26 53, 30 52Z"/>
+    <path d="M33 59 C29 65, 23 74, 19 80 C17 83, 15 83, 15 80 C15 78, 18 73, 21 68 C25 62, 30 58, 33 57Z"/>
+    <path d="M68 50 C73 54, 81 59, 86 62 C89 64, 91 63, 91 61 C91 59, 88 57, 85 55 C80 52, 73 49, 68 48Z"/>
+    <path d="M70 55 C75 60, 83 68, 88 73 C90 76, 92 75, 92 73 C92 71, 89 67, 86 63 C81 57, 74 53, 70 52Z"/>
+    <path d="M67 59 C71 65, 77 74, 81 80 C83 83, 85 83, 85 80 C85 78, 82 73, 79 68 C75 62, 70 58, 67 57Z"/>
+  </g>
+
+  <!-- Title -->
+  <text x="600" y="480" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="56" font-weight="700" fill="#DA7756" letter-spacing="2">Crab Code</text>
+
+  <!-- Tagline -->
+  <text x="600" y="530" text-anchor="middle" font-family="'Courier New', monospace" font-size="20" fill="#8B8BA0" letter-spacing="3">RUST-NATIVE AGENTIC CLI</text>
+</svg>

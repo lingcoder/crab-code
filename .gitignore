@@ -1,0 +1,31 @@
+# Build
+/target
+
+# Config secrets
+.env
+.env.local
+.env.*.local
+config/*.toml
+
+**/logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+**/*.rs.bk
+node_modules
+frontend/dist
+test-ledger
+.yarn
+temp/
+.playwright-mcp/
+**/.claude/
+CLAUDE.md
