@@ -8,6 +8,7 @@ pub struct PtyProcess {
 }
 
 /// Options for spawning a PTY process.
+#[derive(Debug, Clone)]
 pub struct PtyOptions {
     pub command: String,
     pub args: Vec<String>,

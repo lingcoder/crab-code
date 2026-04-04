@@ -178,4 +178,77 @@ mod tests {
         let parsed: ModelId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, parsed);
     }
+
+    // ─── Additional coverage tests ───
+
+    #[test]
+    fn model_id_equality() {
+        let a = ModelId::from("claude-sonnet-4-6");
+        let b = ModelId::from("claude-sonnet-4-6");
+        let c = ModelId::from("gpt-4o");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn model_id_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(ModelId::from("model-a"));
+        set.insert(ModelId::from("model-b"));
+        set.insert(ModelId::from("model-a")); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn token_usage_add_assign_to_default() {
+        let mut usage = TokenUsage::default();
+        usage += TokenUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        };
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 20);
+        assert!(!usage.is_empty());
+    }
+
+    #[test]
+    fn cost_tracker_default_is_zero() {
+        let tracker = CostTracker::default();
+        assert_eq!(tracker.total_tokens(), 0);
+        assert_eq!(tracker.total_input_tokens, 0);
+        assert_eq!(tracker.total_output_tokens, 0);
+        assert!((tracker.total_cost_usd - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cost_tracker_multiple_records() {
+        let mut tracker = CostTracker::default();
+        for _ in 0..5 {
+            tracker.record(
+                &TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cache_read_tokens: 10,
+                    cache_creation_tokens: 5,
+                },
+                0.01,
+            );
+        }
+        assert_eq!(tracker.total_input_tokens, 500);
+        assert_eq!(tracker.total_output_tokens, 250);
+        assert_eq!(tracker.total_cache_read_tokens, 50);
+        assert_eq!(tracker.total_cache_creation_tokens, 25);
+        assert_eq!(tracker.total_tokens(), 750);
+        assert!((tracker.total_cost_usd - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn token_usage_serde_defaults_to_zero() {
+        let json = r#"{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0}"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        assert!(usage.is_empty());
+    }
 }

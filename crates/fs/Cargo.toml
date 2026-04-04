@@ -16,5 +16,8 @@ similar.workspace = true
 fd-lock.workspace = true
 regex.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

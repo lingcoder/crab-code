@@ -253,4 +253,135 @@ mod tests {
         assert_eq!(turn.messages.len(), 2);
         assert!(turn.estimated_tokens() > 0);
     }
+
+    // ─── Additional coverage tests ───
+
+    #[test]
+    fn turn_messages_out_of_bounds() {
+        let conv = Conversation::new();
+        assert!(conv.turn_messages(0).is_none());
+        assert!(conv.turn_messages(100).is_none());
+    }
+
+    #[test]
+    fn assistant_before_user_no_turn() {
+        let mut conv = Conversation::new();
+        conv.push(Message::assistant("I'll help you!"));
+        assert_eq!(conv.len(), 1);
+        // No turn created because no user message yet
+        assert_eq!(conv.turn_count(), 0);
+    }
+
+    #[test]
+    fn single_user_message_is_one_turn() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("hi"));
+        assert_eq!(conv.turn_count(), 1);
+        let turn = conv.turn_messages(0).unwrap();
+        assert_eq!(turn.len(), 1);
+    }
+
+    #[test]
+    fn turn_with_tool_use_cycle() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("list files"));
+        conv.push(Message::assistant("Sure, let me check."));
+        conv.push(Message::tool_result("t1", "file1.txt", false));
+        // tool_result has role User, so it starts a new turn
+        // This matches the behavior: user messages start turns
+        assert_eq!(conv.turn_count(), 2);
+    }
+
+    #[test]
+    fn last_returns_most_recent() {
+        let mut conv = Conversation::new();
+        assert!(conv.last().is_none());
+        conv.push(Message::user("first"));
+        assert_eq!(conv.last().unwrap().text(), "first");
+        conv.push(Message::assistant("second"));
+        assert_eq!(conv.last().unwrap().text(), "second");
+    }
+
+    #[test]
+    fn iter_returns_all_messages() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("a"));
+        conv.push(Message::assistant("b"));
+        conv.push(Message::user("c"));
+        let texts: Vec<String> = conv.iter().map(Message::text).collect();
+        assert_eq!(texts, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn messages_slice() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("hello"));
+        conv.push(Message::assistant("world"));
+        let msgs = conv.messages();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[1].role, Role::Assistant);
+    }
+
+    #[test]
+    fn truncate_to_budget_very_tight() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("a"));
+        conv.push(Message::assistant("b"));
+        // Budget of 1 token — should keep at least the last message
+        let removed = conv.truncate_to_budget(1);
+        assert!(removed <= 1);
+        assert!(conv.len() >= 1);
+    }
+
+    #[test]
+    fn truncate_preserves_turn_structure() {
+        let mut conv = Conversation::new();
+        // Turn 1
+        conv.push(Message::user("old question"));
+        conv.push(Message::assistant("old answer"));
+        // Turn 2
+        conv.push(Message::user("new question"));
+        conv.push(Message::assistant("new answer"));
+
+        // Set budget so only the last turn fits
+        let last_turn_tokens = conv.turn_messages(1).unwrap().iter()
+            .map(Message::estimated_tokens)
+            .sum::<u64>();
+        let removed = conv.truncate_to_budget(last_turn_tokens + 1);
+
+        if removed > 0 {
+            // If truncation happened, remaining messages should still be coherent
+            assert!(conv.len() >= 1);
+        }
+    }
+
+    #[test]
+    fn clear_then_reuse() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("hello"));
+        conv.push(Message::assistant("world"));
+        conv.clear();
+        assert!(conv.is_empty());
+        assert_eq!(conv.turn_count(), 0);
+
+        // Reuse after clear
+        conv.push(Message::user("fresh start"));
+        assert_eq!(conv.len(), 1);
+        assert_eq!(conv.turn_count(), 1);
+    }
+
+    #[test]
+    fn turn_empty_messages() {
+        let turn = Turn::new(vec![]);
+        assert_eq!(turn.messages.len(), 0);
+        assert_eq!(turn.estimated_tokens(), 0);
+    }
+
+    #[test]
+    fn conversation_default() {
+        let conv = Conversation::default();
+        assert!(conv.is_empty());
+        assert_eq!(conv.turn_count(), 0);
+    }
 }

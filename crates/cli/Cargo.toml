@@ -28,6 +28,7 @@ crab-telemetry.workspace = true
 crab-tui = { workspace = true, optional = true }
 clap.workspace = true
 tokio.workspace = true
+futures.workspace = true
 anyhow.workspace = true
 
 [features]

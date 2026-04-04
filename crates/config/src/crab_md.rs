@@ -1,10 +1,12 @@
 /// Parsed content from a CRAB.md project instruction file.
+#[derive(Debug, Clone)]
 pub struct CrabMd {
     pub content: String,
     pub source: CrabMdSource,
 }
 
 /// Where a CRAB.md file was loaded from.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CrabMdSource {
     Global,
     User,

@@ -1,6 +1,7 @@
 use crate::conversation::Conversation;
 
 /// Manages context window budget and triggers compaction when needed.
+#[derive(Debug, Clone)]
 pub struct ContextManager {
     pub warn_threshold_percent: u8,
     pub compact_threshold_percent: u8,
@@ -43,6 +44,7 @@ impl ContextManager {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
     Ok,
     Warning {

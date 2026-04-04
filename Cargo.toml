@@ -88,6 +88,9 @@ strip-ansi-escapes = "0.2"
 jsonc-parser = "0.32"
 schemars = "1"
 
+# ─── 测试 ───
+tempfile = "3"
+
 # ─── 内部 crate ───
 crab-common = { path = "crates/common" }
 crab-core = { path = "crates/core" }

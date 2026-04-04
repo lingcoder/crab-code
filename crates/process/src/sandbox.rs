@@ -4,6 +4,7 @@
 
 /// Policy describing what a sandboxed process is allowed to do.
 #[cfg(feature = "sandbox")]
+#[derive(Debug, Clone)]
 pub struct SandboxPolicy {
     pub allow_network: bool,
     pub allow_write: Vec<std::path::PathBuf>,

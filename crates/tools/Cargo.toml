@@ -21,5 +21,8 @@ tokio.workspace = true
 globset.workspace = true
 schemars.workspace = true
 
+[dev-dependencies]
+tokio-util.workspace = true
+
 [lints]
 workspace = true

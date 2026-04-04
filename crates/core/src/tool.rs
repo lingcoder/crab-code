@@ -217,4 +217,182 @@ mod tests {
         let parsed: ToolSource = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, src);
     }
+
+    // ─── Additional tests ───
+
+    #[test]
+    fn tool_source_all_variants_serde() {
+        let variants = vec![
+            ToolSource::BuiltIn,
+            ToolSource::McpExternal {
+                server_name: "playwright".into(),
+            },
+            ToolSource::AgentSpawn,
+        ];
+        for src in variants {
+            let json = serde_json::to_string(&src).unwrap();
+            let parsed: ToolSource = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, src);
+        }
+    }
+
+    #[test]
+    fn tool_output_content_text_serde() {
+        let content = ToolOutputContent::Text {
+            text: "hello".into(),
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        let parsed: ToolOutputContent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, ToolOutputContent::Text { text } if text == "hello"));
+    }
+
+    #[test]
+    fn tool_output_content_image_serde() {
+        let content = ToolOutputContent::Image {
+            media_type: "image/png".into(),
+            data: "base64data".into(),
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        let parsed: ToolOutputContent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, ToolOutputContent::Image { media_type, data }
+            if media_type == "image/png" && data == "base64data"
+        ));
+    }
+
+    #[test]
+    fn tool_output_content_json_serde() {
+        let content = ToolOutputContent::Json {
+            value: json!({"key": "value", "count": 42}),
+        };
+        let json_str = serde_json::to_string(&content).unwrap();
+        let parsed: ToolOutputContent = serde_json::from_str(&json_str).unwrap();
+        assert!(matches!(parsed, ToolOutputContent::Json { value } if value["key"] == "value"));
+    }
+
+    #[test]
+    fn tool_output_success_is_not_error() {
+        let out = ToolOutput::success("ok");
+        assert!(!out.is_error);
+        assert_eq!(out.content.len(), 1);
+    }
+
+    #[test]
+    fn tool_output_error_is_error() {
+        let out = ToolOutput::error("fail");
+        assert!(out.is_error);
+        assert_eq!(out.content.len(), 1);
+    }
+
+    #[test]
+    fn tool_output_multi_content_serde_roundtrip() {
+        let out = ToolOutput::with_content(
+            vec![
+                ToolOutputContent::Text {
+                    text: "header".into(),
+                },
+                ToolOutputContent::Image {
+                    media_type: "image/jpeg".into(),
+                    data: "abc123".into(),
+                },
+                ToolOutputContent::Json {
+                    value: json!({"status": "ok"}),
+                },
+            ],
+            false,
+        );
+        let json = serde_json::to_string(&out).unwrap();
+        let parsed: ToolOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.content.len(), 3);
+        assert!(!parsed.is_error);
+        assert_eq!(parsed.text(), "header");
+    }
+
+    /// Mock tool for testing the Tool trait interface.
+    struct MockTool {
+        name: &'static str,
+        read_only: bool,
+    }
+
+    impl Tool for MockTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "A mock tool for testing"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "arg": {"type": "string"}
+                },
+                "required": ["arg"]
+            })
+        }
+
+        fn execute(
+            &self,
+            input: Value,
+            _ctx: &ToolContext,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+            let text = input["arg"].as_str().unwrap_or("no arg").to_owned();
+            Box::pin(async move { Ok(ToolOutput::success(text)) })
+        }
+
+        fn is_read_only(&self) -> bool {
+            self.read_only
+        }
+    }
+
+    #[test]
+    fn mock_tool_name_and_description() {
+        let tool = MockTool {
+            name: "mock_read",
+            read_only: true,
+        };
+        assert_eq!(tool.name(), "mock_read");
+        assert_eq!(tool.description(), "A mock tool for testing");
+        assert!(tool.is_read_only());
+        assert!(!tool.requires_confirmation());
+        assert!(matches!(tool.source(), ToolSource::BuiltIn));
+    }
+
+    #[test]
+    fn mock_tool_input_schema_is_valid_json() {
+        let tool = MockTool {
+            name: "test",
+            read_only: false,
+        };
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["arg"].is_object());
+        assert!(schema["required"].is_array());
+    }
+
+    #[test]
+    fn mock_tool_is_object_safe() {
+        // Verify Tool can be used as a trait object
+        let tool: Box<dyn Tool> = Box::new(MockTool {
+            name: "boxed",
+            read_only: false,
+        });
+        assert_eq!(tool.name(), "boxed");
+        assert!(!tool.is_read_only());
+    }
+
+    #[test]
+    fn tool_context_construction() {
+        let ctx = ToolContext {
+            working_dir: std::path::PathBuf::from("/tmp"),
+            permission_mode: PermissionMode::Default,
+            session_id: "sess_123".into(),
+            cancellation_token: CancellationToken::new(),
+            permission_policy: PermissionPolicy::default(),
+        };
+        assert_eq!(ctx.working_dir, std::path::Path::new("/tmp"));
+        assert_eq!(ctx.permission_mode, PermissionMode::Default);
+        assert_eq!(ctx.session_id, "sess_123");
+    }
 }

@@ -10,6 +10,15 @@ pub enum CacheControl {
     Ephemeral,
 }
 
+impl CacheControl {
+    /// Anthropic API serialization value.
+    pub const fn as_type_str(self) -> &'static str {
+        match self {
+            Self::Ephemeral => "ephemeral",
+        }
+    }
+}
+
 /// Tracks prompt cache hit/miss statistics.
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
@@ -18,11 +27,11 @@ pub struct CacheStats {
 }
 
 impl CacheStats {
-    pub const fn record_read(&mut self, tokens: u64) {
+    pub fn record_read(&mut self, tokens: u64) {
         self.cache_read_tokens += tokens;
     }
 
-    pub const fn record_creation(&mut self, tokens: u64) {
+    pub fn record_creation(&mut self, tokens: u64) {
         self.cache_creation_tokens += tokens;
     }
 }

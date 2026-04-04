@@ -5,6 +5,7 @@ use std::pin::Pin;
 use crate::conversation::Conversation;
 
 /// 5-level compaction strategy, triggered by context usage thresholds.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompactionStrategy {
     /// Level 1 (70-80%): Trim old tool output, keep only summary lines.
     Snip,
