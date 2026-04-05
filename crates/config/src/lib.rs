@@ -1,3 +1,4 @@
+pub mod completion;
 pub mod config_toml;
 pub mod crab_md;
 pub mod feature_flag;
@@ -9,7 +10,9 @@ pub mod permissions;
 pub mod plugin_registry;
 pub mod policy;
 pub mod profile;
+pub mod schema_gen;
 pub mod settings;
+pub mod validation;
 
 pub use config_toml::ConfigToml;
 pub use hot_reload::ConfigWatcher;
