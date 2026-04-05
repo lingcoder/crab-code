@@ -7,6 +7,7 @@ pub mod diff;
 pub mod input;
 pub mod input_history;
 pub mod markdown;
+pub mod markdown_enhanced;
 pub mod notification;
 pub mod search;
 pub mod select;
