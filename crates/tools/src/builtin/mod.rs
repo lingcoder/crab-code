@@ -14,6 +14,7 @@ pub mod mcp_tool;
 pub mod notebook;
 pub mod plan_mode;
 pub mod read;
+pub mod read_enhanced;
 pub mod remote_trigger;
 pub mod scheduler_tool;
 pub mod symlink_check;
