@@ -5,6 +5,7 @@ pub mod filetype;
 pub mod gitignore;
 pub mod glob;
 pub mod grep;
+pub mod incremental_hash;
 pub mod index;
 pub mod lock;
 pub mod project_detect;
