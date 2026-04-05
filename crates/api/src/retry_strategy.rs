@@ -83,7 +83,7 @@ pub trait RetryStrategy: Send + Sync {
     fn should_retry(&self, category: ErrorCategory, attempt: u32) -> RetryDecision;
 
     /// Strategy name (for logging).
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,12 +284,11 @@ impl CircuitBreakerRetry {
 
     fn check_transition(&self) {
         let mut state = self.state.lock().unwrap();
-        if state.current == CircuitState::Open {
-            if let Some(opened_at) = state.opened_at {
-                if opened_at.elapsed() >= self.open_duration {
-                    state.current = CircuitState::HalfOpen;
-                }
-            }
+        if state.current == CircuitState::Open
+            && let Some(opened_at) = state.opened_at
+            && opened_at.elapsed() >= self.open_duration
+        {
+            state.current = CircuitState::HalfOpen;
         }
     }
 }
@@ -334,7 +333,7 @@ impl RetryStrategy for CircuitBreakerRetry {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "circuit_breaker"
     }
 }
@@ -370,7 +369,7 @@ impl RetryStrategy for CompositeRetryStrategy {
         RetryDecision::retry_after(max_delay, "all strategies agree to retry")
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "composite"
     }
 }

@@ -4,6 +4,7 @@
 //! (Chat Completions) — dispatched via the `LlmBackend` enum.
 //! No dynamic trait dispatch; compile-time determined, exhaustive match.
 
+pub mod ab_compare;
 pub mod anthropic;
 pub mod batch;
 pub mod cache;
@@ -21,7 +22,9 @@ pub mod output_format;
 pub mod parallel;
 pub mod rate_limit;
 pub mod response_cache;
+pub mod response_scorer;
 pub mod retry_strategy;
+pub mod stream_aggregator;
 pub mod streaming;
 pub mod token_budget;
 pub mod token_limiter;
