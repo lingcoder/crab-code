@@ -69,8 +69,8 @@ fn is_identifier(s: &str) -> bool {
     }
     // Must contain underscore (snake_case) or mixed case (CamelCase) or be ALL_CAPS
     let has_underscore = s.contains('_');
-    let has_upper = s.chars().any(|c| c.is_uppercase());
-    let has_lower = s.chars().any(|c| c.is_lowercase());
+    let has_upper = s.chars().any(char::is_uppercase);
+    let has_lower = s.chars().any(char::is_lowercase);
     has_underscore || (has_upper && has_lower)
 }
 
@@ -326,7 +326,7 @@ pub fn format_context_section(snippets: &[ContextSnippet]) -> String {
 
 /// Rough token estimate: chars / 4.
 fn estimate_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 // ── High-level API ────────────────────────────────────────────────────
@@ -405,7 +405,7 @@ impl ContextUsageTracker {
         } else {
             // Logarithmic boost, capped at 1.5x
             #[allow(clippy::cast_precision_loss)]
-            let boost = 1.0 + (count as f64).ln() * 0.15;
+            let boost = (count as f64).ln().mul_add(0.15, 1.0);
             boost.min(1.5)
         }
     }

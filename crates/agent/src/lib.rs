@@ -4,6 +4,7 @@ pub mod code_nav;
 pub mod conversation_tree;
 pub mod coordinator;
 pub mod health;
+pub mod memory_retriever;
 pub mod message_bus;
 pub mod message_router;
 pub mod metrics;
@@ -12,6 +13,7 @@ pub mod query_loop;
 pub mod repl_commands;
 pub mod retry;
 pub mod smart_context;
+pub mod summarizer;
 pub mod system_prompt;
 pub mod task;
 pub mod team;
@@ -30,6 +32,10 @@ pub use code_nav::{
 };
 pub use conversation_tree::{Branch, BranchError, BranchId, ConversationNode, ConversationTree};
 pub use coordinator::{AgentCoordinator, AgentHandle, AgentSession, SessionConfig};
+pub use memory_retriever::{
+    MemoryRanker, RankedMemory, RetrieverConfig, format_retrieved_memories, retrieve_for_context,
+    retrieve_memories,
+};
 pub use health::{HealthConfig, HealthMonitor, HealthStatus};
 pub use message_bus::{AgentMessage, AgentStatus, Envelope, event_channel};
 pub use message_router::MessageRouter;
@@ -41,6 +47,10 @@ pub use project_context::{
 pub use query_loop::{QueryLoopConfig, StreamingToolExecutor, query_loop};
 pub use repl_commands::{CommandResult, ReplCommand, execute_command};
 pub use retry::{RetryDecision, RetryPolicy, RetryTracker};
+pub use summarizer::{
+    ConversationSummary, SummarizerConfig, SummaryItem, SummaryItemKind,
+    summarize_conversation,
+};
 pub use smart_context::{
     ContextConfig, ContextSnippet, ContextUsageTracker, QueryTerms, RelevantFile,
     build_context_snippets_from_content, extract_query_terms, format_context_section,

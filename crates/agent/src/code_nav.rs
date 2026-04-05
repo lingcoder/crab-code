@@ -367,9 +367,8 @@ pub fn find_definitions_in_content(
         for pat in &patterns {
             if let Some(rest) = trimmed.strip_prefix(pat.prefix) {
                 // Check if the symbol name follows the prefix
-                if rest.starts_with(symbol) {
+                if let Some(after) = rest.strip_prefix(symbol) {
                     // Verify it's a word boundary (next char is not alphanumeric/underscore)
-                    let after = &rest[symbol.len()..];
                     if after.is_empty()
                         || !after.starts_with(|c: char| c.is_alphanumeric() || c == '_')
                     {
