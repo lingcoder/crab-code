@@ -8,6 +8,7 @@ pub mod protocol;
 pub mod resource;
 pub mod server;
 pub mod sse_server;
+pub mod tool_chain;
 pub mod tool_group;
 pub mod tool_sandbox;
 pub mod tool_version;
@@ -27,6 +28,7 @@ pub use server::{
     ToolHandler, ToolRegistryHandler,
 };
 pub use sse_server::run_sse;
+pub use tool_chain::{ChainBuilder, ChainExecutor, ChainResult, ChainStep, ToolChain, ToolChainTemplate};
 pub use tool_group::{IndexedTool, ToolGroup, ToolIndex};
 pub use tool_sandbox::{McpPermissionBoundary, McpToolSandbox, PermissionLevel, SandboxPolicy, SandboxVerdict};
 pub use tool_version::{ToolVersion, ToolVersionRegistry, VersionedTool};
