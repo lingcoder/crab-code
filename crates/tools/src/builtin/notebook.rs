@@ -223,9 +223,9 @@ fn value_to_text(val: &Value) -> String {
     }
 }
 
-// ─── NotebookTool (edit — existing stub) ─────────────────────────────
+// ─── NotebookTool (edit) ─────────────────────────────────────────────
 
-/// Jupyter notebook editing tool.
+/// Jupyter notebook editing tool — supports replace, insert, and delete modes.
 pub struct NotebookTool;
 
 impl Tool for NotebookTool {
@@ -234,17 +234,37 @@ impl Tool for NotebookTool {
     }
 
     fn description(&self) -> &'static str {
-        "Edit a cell in a Jupyter notebook"
+        "Edit a cell in a Jupyter notebook (.ipynb). Supports three edit modes: \
+         'replace' (default) replaces a cell's content, 'insert' adds a new cell \
+         at the given index, 'delete' removes a cell. The cell_number is 0-indexed."
     }
 
     fn input_schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "notebook_path": { "type": "string", "description": "Absolute path to the notebook" },
-                "cell_number": { "type": "integer", "description": "0-indexed cell number" },
-                "new_source": { "type": "string", "description": "New source for the cell" },
-                "cell_type": { "type": "string", "enum": ["code", "markdown"] }
+                "notebook_path": {
+                    "type": "string",
+                    "description": "Absolute path to the .ipynb file"
+                },
+                "cell_number": {
+                    "type": "integer",
+                    "description": "0-indexed cell number to edit/insert-at/delete"
+                },
+                "new_source": {
+                    "type": "string",
+                    "description": "New source content for the cell"
+                },
+                "cell_type": {
+                    "type": "string",
+                    "enum": ["code", "markdown"],
+                    "description": "Cell type (required for insert, optional for replace)"
+                },
+                "edit_mode": {
+                    "type": "string",
+                    "enum": ["replace", "insert", "delete"],
+                    "description": "Edit mode: replace (default), insert, or delete"
+                }
             },
             "required": ["notebook_path", "new_source"]
         })
@@ -252,12 +272,110 @@ impl Tool for NotebookTool {
 
     fn execute(
         &self,
-        _input: Value,
+        input: Value,
         _ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let notebook_path = input["notebook_path"].as_str().unwrap_or("").to_owned();
+        let new_source = input["new_source"].as_str().unwrap_or("").to_owned();
+        let cell_type = input["cell_type"].as_str().map(ToOwned::to_owned);
+        let edit_mode = input["edit_mode"].as_str().unwrap_or("replace").to_owned();
+        #[allow(clippy::cast_possible_truncation)]
+        let cell_number = input["cell_number"].as_u64().map(|v| v as usize);
+
         Box::pin(async move {
-            // TODO: implement notebook editing
-            Ok(ToolOutput::error("not implemented"))
+            if notebook_path.is_empty() {
+                return Ok(ToolOutput::error("notebook_path is required"));
+            }
+
+            // Read and parse
+            let content = match tokio::fs::read_to_string(&notebook_path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(ToolOutput::error(format!(
+                        "Failed to read {notebook_path}: {e}"
+                    )));
+                }
+            };
+
+            let mut notebook: Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(ToolOutput::error(format!(
+                        "Failed to parse notebook JSON: {e}"
+                    )));
+                }
+            };
+
+            let Some(cells) = notebook.get_mut("cells").and_then(Value::as_array_mut) else {
+                return Ok(ToolOutput::error(
+                    "Invalid notebook format: missing 'cells' array",
+                ));
+            };
+
+            match edit_mode.as_str() {
+                "replace" => {
+                    let idx = cell_number.unwrap_or(0);
+                    if idx >= cells.len() {
+                        return Ok(ToolOutput::error(format!(
+                            "cell_number {idx} out of range (notebook has {} cells)",
+                            cells.len()
+                        )));
+                    }
+                    // Update source
+                    cells[idx]["source"] = Value::String(new_source);
+                    // Update cell_type if provided
+                    if let Some(ct) = &cell_type {
+                        cells[idx]["cell_type"] = Value::String(ct.clone());
+                    }
+                }
+                "insert" => {
+                    let idx = cell_number.unwrap_or(cells.len());
+                    if idx > cells.len() {
+                        return Ok(ToolOutput::error(format!(
+                            "cell_number {idx} out of range for insert (max {})",
+                            cells.len()
+                        )));
+                    }
+                    let ct = cell_type.as_deref().unwrap_or("code");
+                    let new_cell = serde_json::json!({
+                        "cell_type": ct,
+                        "source": new_source,
+                        "metadata": {},
+                        "outputs": if ct == "code" { Value::Array(vec![]) } else { Value::Null },
+                    });
+                    cells.insert(idx, new_cell);
+                }
+                "delete" => {
+                    let idx = cell_number.unwrap_or(0);
+                    if idx >= cells.len() {
+                        return Ok(ToolOutput::error(format!(
+                            "cell_number {idx} out of range (notebook has {} cells)",
+                            cells.len()
+                        )));
+                    }
+                    cells.remove(idx);
+                }
+                other => {
+                    return Ok(ToolOutput::error(format!(
+                        "unknown edit_mode: '{other}' (expected replace, insert, or delete)"
+                    )));
+                }
+            }
+
+            // Write back
+            let updated =
+                serde_json::to_string_pretty(&notebook).unwrap_or_else(|_| notebook.to_string());
+
+            if let Err(e) = tokio::fs::write(&notebook_path, &updated).await {
+                return Ok(ToolOutput::error(format!(
+                    "Failed to write {notebook_path}: {e}"
+                )));
+            }
+
+            let cell_count = notebook["cells"].as_array().map_or(0, std::vec::Vec::len);
+            Ok(ToolOutput::success(format!(
+                "Notebook updated ({edit_mode}). Total cells: {cell_count}"
+            )))
         })
     }
 
@@ -446,5 +564,185 @@ mod tests {
     fn extract_source_missing() {
         let cell = serde_json::json!({});
         assert_eq!(extract_source(&cell), "");
+    }
+
+    // ─── NotebookTool (edit) tests ──────────────────────────────────
+
+    #[test]
+    fn notebook_edit_schema_has_edit_mode() {
+        let schema = NotebookTool.input_schema();
+        assert!(schema["properties"]["edit_mode"].is_object());
+        assert!(schema["properties"]["cell_number"].is_object());
+        assert!(schema["properties"]["cell_type"].is_object());
+    }
+
+    #[test]
+    fn notebook_edit_description_mentions_modes() {
+        let desc = NotebookTool.description();
+        assert!(desc.contains("replace"));
+        assert!(desc.contains("insert"));
+        assert!(desc.contains("delete"));
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_replace_cell() {
+        let path = write_temp_notebook("crab_test_nb_edit_replace.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 1,
+            "new_source": "print('updated')",
+            "edit_mode": "replace"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("replace"));
+        assert!(out.text().contains("Total cells: 4"));
+
+        // Verify the cell was updated
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let nb: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(nb["cells"][1]["source"], "print('updated')");
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_replace_with_cell_type() {
+        let path = write_temp_notebook("crab_test_nb_edit_type.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 1,
+            "new_source": "# Now markdown",
+            "cell_type": "markdown",
+            "edit_mode": "replace"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let nb: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(nb["cells"][1]["cell_type"], "markdown");
+        assert_eq!(nb["cells"][1]["source"], "# Now markdown");
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_insert_cell() {
+        let path = write_temp_notebook("crab_test_nb_edit_insert.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 1,
+            "new_source": "# Inserted cell",
+            "cell_type": "markdown",
+            "edit_mode": "insert"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("insert"));
+        assert!(out.text().contains("Total cells: 5"));
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let nb: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(nb["cells"][1]["source"], "# Inserted cell");
+        assert_eq!(nb["cells"][1]["cell_type"], "markdown");
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_insert_defaults_to_code() {
+        let path = write_temp_notebook("crab_test_nb_edit_insert_code.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 0,
+            "new_source": "x = 1",
+            "edit_mode": "insert"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let nb: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(nb["cells"][0]["cell_type"], "code");
+        assert_eq!(nb["cells"][0]["source"], "x = 1");
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_delete_cell() {
+        let path = write_temp_notebook("crab_test_nb_edit_delete.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 0,
+            "new_source": "",
+            "edit_mode": "delete"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("delete"));
+        assert!(out.text().contains("Total cells: 3"));
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_out_of_range() {
+        let path = write_temp_notebook("crab_test_nb_edit_oor.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 99,
+            "new_source": "x",
+            "edit_mode": "replace"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("out of range"));
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_unknown_mode() {
+        let path = write_temp_notebook("crab_test_nb_edit_bad_mode.ipynb").await;
+        let tool = NotebookTool;
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "new_source": "x",
+            "edit_mode": "merge"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("unknown edit_mode"));
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_empty_path() {
+        let tool = NotebookTool;
+        let input = serde_json::json!({ "notebook_path": "", "new_source": "x" });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(out.is_error);
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_default_mode_is_replace() {
+        let path = write_temp_notebook("crab_test_nb_edit_default.ipynb").await;
+        let tool = NotebookTool;
+        // No edit_mode — should default to replace
+        let input = serde_json::json!({
+            "notebook_path": path.to_str().unwrap(),
+            "cell_number": 0,
+            "new_source": "# Replaced default"
+        });
+        let out = tool.execute(input, &make_ctx()).await.unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("replace"));
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let nb: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(nb["cells"][0]["source"], "# Replaced default");
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }

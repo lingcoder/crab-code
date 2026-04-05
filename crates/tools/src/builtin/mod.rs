@@ -21,6 +21,7 @@ pub mod symlink_check;
 pub mod task;
 pub mod web_fetch;
 pub mod web_search;
+pub mod worktree;
 pub mod write;
 
 use std::sync::Arc;
@@ -80,6 +81,9 @@ pub fn register_all_builtins(
     )));
 
     registry.register(Arc::new(remote_trigger::RemoteTriggerTool));
+
+    registry.register(Arc::new(worktree::EnterWorktreeTool));
+    registry.register(Arc::new(worktree::ExitWorktreeTool));
 }
 
 /// Create a `ToolRegistry` pre-populated with all built-in tools.
@@ -128,19 +132,21 @@ mod tests {
         assert!(registry.get("scheduler_list").is_some());
         assert!(registry.get("scheduler_cancel").is_some());
         assert!(registry.get("remote_trigger").is_some());
+        assert!(registry.get("enter_worktree").is_some());
+        assert!(registry.get("exit_worktree").is_some());
     }
 
     #[test]
     fn default_registry_has_22_tools() {
         let registry = create_default_registry();
-        assert_eq!(registry.len(), 29);
+        assert_eq!(registry.len(), 31);
     }
 
     #[test]
     fn all_tools_have_schemas() {
         let registry = create_default_registry();
         let schemas = registry.tool_schemas();
-        assert_eq!(schemas.len(), 29);
+        assert_eq!(schemas.len(), 31);
         for schema in &schemas {
             assert!(schema.get("name").is_some());
             assert!(schema.get("description").is_some());
