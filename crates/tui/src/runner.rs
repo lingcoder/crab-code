@@ -1,6 +1,14 @@
 //! TUI REPL runner — wires App, [`AgentSession`], and terminal lifecycle together.
+//!
+//! Features:
+//! - Full agent query loop with tool execution
+//! - Permission dialog integration via `PermissionDialog` component
+//! - Tool execution progress (spinner) and result display in content area
+//! - Session persistence (auto-save on exit, `--resume` support)
+//! - Skill `/command` input detection and resolution via `SkillRegistry`
 
 use std::io;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -17,7 +25,8 @@ use crab_agent::SessionConfig;
 use crab_api::LlmBackend;
 use crab_core::event::Event;
 use crab_core::message::Message;
-use crab_session::Conversation;
+use crab_plugin::skill::SkillRegistry;
+use crab_session::{Conversation, SessionHistory};
 use crab_tools::builtin::create_default_registry;
 use crab_tools::executor::{PermissionHandler, ToolExecutor};
 
@@ -28,28 +37,75 @@ use crate::event::spawn_event_loop;
 pub struct TuiConfig {
     pub session_config: SessionConfig,
     pub backend: Arc<LlmBackend>,
+    /// Skill directories to scan for `/command` support.
+    pub skill_dirs: Vec<PathBuf>,
 }
 
 /// Run the interactive TUI REPL. This is the main entry point for interactive mode.
 ///
 /// Sets up the terminal, creates the agent components, and runs the render+event loop
-/// until the user quits.
+/// until the user quits. On exit, auto-saves the session to disk.
+#[allow(clippy::too_many_lines)]
 pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     // Build tool registry and executor
     let registry = create_default_registry();
     let tool_schemas = registry.tool_schemas();
     let mut executor = ToolExecutor::new(Arc::new(registry));
 
-    let conversation = Conversation::new(
-        config.session_config.session_id.clone(),
-        config.session_config.system_prompt,
+    let session_id = config.session_config.session_id.clone();
+
+    // Load memories and build conversation with system prompt
+    let memory_store = config
+        .session_config
+        .memory_dir
+        .as_ref()
+        .map(|d| crab_session::MemoryStore::new(d.clone()));
+    let session_history = config
+        .session_config
+        .sessions_dir
+        .as_ref()
+        .map(|d| SessionHistory::new(d.clone()));
+
+    let mut system_prompt = config.session_config.system_prompt.clone();
+
+    // Inject memories into system prompt
+    if let Some(ref store) = memory_store
+        && let Ok(memories) = store.load_all()
+        && !memories.is_empty()
+    {
+        system_prompt.push_str("\n\n# Loaded Memories\n\n");
+        for mem in &memories {
+            use std::fmt::Write as _;
+            let _ = writeln!(system_prompt, "## {} (type: {})", mem.name, mem.memory_type);
+            if !mem.description.is_empty() {
+                let _ = writeln!(system_prompt, "> {}", mem.description);
+                system_prompt.push('\n');
+            }
+            let _ = writeln!(system_prompt, "{}", mem.body);
+            system_prompt.push('\n');
+        }
+    }
+
+    let mut conversation = Conversation::new(
+        session_id.clone(),
+        system_prompt,
         config.session_config.context_window,
     );
+
+    // Resume from previous session if requested
+    if let Some(ref resume_id) = config.session_config.resume_session_id
+        && let Some(ref history) = session_history
+        && let Ok(Some(messages)) = history.load(resume_id)
+    {
+        for msg in messages {
+            conversation.push(msg);
+        }
+    }
 
     let tool_ctx = crab_core::tool::ToolContext {
         working_dir: config.session_config.working_dir,
         permission_mode: config.session_config.permission_policy.mode,
-        session_id: config.session_config.session_id,
+        session_id: session_id.clone(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: config.session_config.permission_policy,
     };
@@ -60,6 +116,8 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         temperature: config.session_config.temperature,
         tool_schemas,
         cache_enabled: false,
+        token_budget: None,
+        retry_policy: None,
     };
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);
@@ -71,6 +129,9 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         response_rx: Arc::new(tokio::sync::Mutex::new(perm_resp_rx)),
     }));
     let executor = Arc::new(executor);
+
+    // Discover skills for /command support
+    let skill_registry = SkillRegistry::discover(&config.skill_dirs).unwrap_or_default();
 
     // Bridge: bounded session events → unbounded TUI channel
     let (agent_ui_tx, agent_ui_rx) = mpsc::unbounded_channel::<Event>();
@@ -102,6 +163,9 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         loop_config,
         event_tx,
         perm_resp_tx,
+        &skill_registry,
+        session_history.as_ref(),
+        &session_id,
     )
     .await;
 
@@ -187,6 +251,9 @@ async fn run_loop(
     loop_config: crab_agent::QueryLoopConfig,
     event_tx: mpsc::Sender<Event>,
     perm_resp_tx: mpsc::UnboundedSender<(String, bool)>,
+    skill_registry: &SkillRegistry,
+    session_history: Option<&SessionHistory>,
+    session_id: &str,
 ) -> anyhow::Result<()> {
     // Channel to get conversation back from agent task
     let mut conv_return: Option<tokio::sync::oneshot::Receiver<AgentTaskResult>> = None;
@@ -221,6 +288,14 @@ async fn run_loop(
                                 message: e.to_string(),
                             }).await;
                         }
+                        // Auto-save session after each agent turn
+                        if let Some(history) = session_history
+                            && let Err(e) = history.save(session_id, conversation.messages())
+                        {
+                            let _ = event_tx.send(Event::Error {
+                                message: format!("Session save failed: {e}"),
+                            }).await;
+                        }
                     }
                     Err(_) => {
                         let _ = event_tx.send(Event::Error {
@@ -240,17 +315,26 @@ async fn run_loop(
                 cancel.cancel();
                 if let Some(rx) = conv_return.take() {
                     // Wait for agent task to return conversation (for clean shutdown)
-                    let _ = rx.await;
+                    if let Ok(agent_result) = rx.await {
+                        conversation = agent_result.conversation;
+                    }
+                }
+                // Final session save on exit
+                if let Some(history) = session_history {
+                    let _ = history.save(session_id, conversation.messages());
                 }
                 break;
             }
             AppAction::Submit(text) => {
+                // Resolve /commands to skill content
+                let effective_text = resolve_slash_command(&text, skill_registry);
+
                 // Fresh cancellation token for this request
                 cancel = tokio_util::sync::CancellationToken::new();
                 tool_ctx.cancellation_token = cancel.clone();
 
                 // Take conversation, push user message, spawn agent task
-                conversation.push(Message::user(&text));
+                conversation.push(Message::user(&effective_text));
                 let mut task_conversation = std::mem::take(&mut conversation);
                 let task_backend = backend.clone();
                 let task_executor = executor.clone();
@@ -273,6 +357,8 @@ async fn run_loop(
                         temperature: task_temperature,
                         tool_schemas: task_schemas,
                         cache_enabled: task_cache,
+                        token_budget: None,
+                        retry_policy: None,
                     };
 
                     let result = crab_agent::query_loop(
@@ -299,11 +385,59 @@ async fn run_loop(
                 // Send response to the permission handler waiting in the agent task
                 let _ = perm_resp_tx.send((request_id, allowed));
             }
+            AppAction::NewSession | AppAction::SwitchSession(_) => {
+                // Session management actions are handled by the outer runner
+                // when multi-session support is fully wired up.
+                // For now, log to content buffer.
+                if matches!(action, AppAction::NewSession) {
+                    app.content_buffer
+                        .push_str("\n[session] New session requested (not yet wired)\n");
+                }
+            }
             AppAction::None => {}
         }
     }
 
     Ok(())
+}
+
+/// Resolve `/command` input to skill content if a matching skill exists.
+///
+/// If the input starts with `/` and matches a registered skill command,
+/// returns the skill's prompt content (with any arguments appended).
+/// Otherwise returns the original input unchanged.
+fn resolve_slash_command(input: &str, skill_registry: &SkillRegistry) -> String {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return input.to_string();
+    }
+
+    let command = trimmed
+        .trim_start_matches('/')
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+
+    // Built-in commands pass through
+    if matches!(command, "exit" | "quit" | "help") {
+        return input.to_string();
+    }
+
+    if let Some(skill) = skill_registry.find_command(command) {
+        let args = trimmed
+            .trim_start_matches('/')
+            .trim_start_matches(command)
+            .trim();
+
+        let mut prompt = skill.content.clone();
+        if !args.is_empty() {
+            prompt.push_str("\n\nUser arguments: ");
+            prompt.push_str(args);
+        }
+        return prompt;
+    }
+
+    input.to_string()
 }
 
 /// Spawn a task that forwards agent events from a bounded `mpsc::Receiver`
@@ -321,6 +455,7 @@ fn spawn_event_forwarder(mut rx: mpsc::Receiver<Event>, tx: mpsc::UnboundedSende
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crab_plugin::skill::{Skill, SkillTrigger};
 
     #[test]
     fn agent_task_result_struct() {
@@ -340,5 +475,85 @@ mod tests {
             result: Err(crab_common::Error::Other("test error".into())),
         };
         assert!(result.result.is_err());
+    }
+
+    #[test]
+    fn resolve_slash_command_passthrough() {
+        let reg = SkillRegistry::new();
+        assert_eq!(resolve_slash_command("hello world", &reg), "hello world");
+    }
+
+    #[test]
+    fn resolve_slash_command_builtin() {
+        let reg = SkillRegistry::new();
+        assert_eq!(resolve_slash_command("/exit", &reg), "/exit");
+        assert_eq!(resolve_slash_command("/quit", &reg), "/quit");
+        assert_eq!(resolve_slash_command("/help", &reg), "/help");
+    }
+
+    #[test]
+    fn resolve_slash_command_no_match() {
+        let reg = SkillRegistry::new();
+        assert_eq!(resolve_slash_command("/unknown", &reg), "/unknown");
+    }
+
+    #[test]
+    fn resolve_slash_command_matches_skill() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            name: "commit".into(),
+            description: "Create a commit".into(),
+            trigger: SkillTrigger::Command {
+                name: "commit".into(),
+            },
+            content: "You are a commit helper.".into(),
+            source_path: None,
+        });
+
+        let result = resolve_slash_command("/commit", &reg);
+        assert_eq!(result, "You are a commit helper.");
+    }
+
+    #[test]
+    fn resolve_slash_command_with_args() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            name: "review".into(),
+            description: "Review code".into(),
+            trigger: SkillTrigger::Command {
+                name: "review".into(),
+            },
+            content: "Review the code.".into(),
+            source_path: None,
+        });
+
+        let result = resolve_slash_command("/review src/main.rs", &reg);
+        assert!(result.contains("Review the code."));
+        assert!(result.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn tui_config_construction() {
+        let config = TuiConfig {
+            session_config: SessionConfig {
+                session_id: "test".into(),
+                system_prompt: "You are helpful.".into(),
+                model: crab_core::model::ModelId::from("test-model"),
+                max_tokens: 4096,
+                temperature: None,
+                context_window: 200_000,
+                working_dir: PathBuf::from("/tmp"),
+                permission_policy: crab_core::permission::PermissionPolicy::default(),
+                memory_dir: None,
+                sessions_dir: None,
+                resume_session_id: None,
+            },
+            backend: Arc::new(crab_api::LlmBackend::OpenAi(
+                crab_api::openai::OpenAiClient::new("http://localhost:0/v1", None),
+            )),
+            skill_dirs: vec![],
+        };
+        assert_eq!(config.session_config.session_id, "test");
+        assert!(config.skill_dirs.is_empty());
     }
 }

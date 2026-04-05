@@ -9,9 +9,15 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
+use crate::components::dialog::{PermissionDialog, PermissionResponse, RiskLevel};
 use crate::components::input::InputBox;
+use crate::components::search::{self, SearchState};
+use crate::components::session_panel::{SessionEntry, SessionPanel};
 use crate::components::spinner::Spinner;
+use crate::components::tool_output::{ToolOutputEntry, ToolOutputList};
 use crate::event::TuiEvent;
+use crate::keybindings::{Action, Keybindings};
 use crate::layout::AppLayout;
 
 /// Application state phases.
@@ -38,6 +44,10 @@ pub enum AppAction {
     PermissionResponse { request_id: String, allowed: bool },
     /// User requested quit (Ctrl+C / Ctrl+D).
     Quit,
+    /// User wants to create a new session.
+    NewSession,
+    /// User wants to switch to a different session by ID.
+    SwitchSession(String),
 }
 
 /// Main TUI application.
@@ -52,10 +62,34 @@ pub struct App {
     pub content_buffer: String,
     /// Model name (displayed in top bar).
     pub model_name: String,
-    /// Current pending permission request ID, if any.
-    pending_permission: Option<String>,
+    /// Current pending permission dialog, if any.
+    permission_dialog: Option<PermissionDialog>,
     /// Whether the app should exit.
     pub should_quit: bool,
+    /// Name of the tool currently executing (for display).
+    current_tool: Option<String>,
+    /// Session sidebar panel.
+    pub session_panel: SessionPanel,
+    /// Whether the sidebar is visible.
+    pub sidebar_visible: bool,
+    /// Current session ID.
+    pub session_id: String,
+    /// Keybinding configuration.
+    keybindings: Keybindings,
+    /// Cumulative token usage for status bar.
+    pub total_input_tokens: u64,
+    /// Cumulative output token usage.
+    pub total_output_tokens: u64,
+    /// Content scroll offset (lines from bottom).
+    content_scroll: usize,
+    /// Tool output list with fold/unfold state.
+    pub tool_outputs: ToolOutputList,
+    /// Code block tracker for copy support.
+    pub code_blocks: CodeBlockTracker,
+    /// Search state for in-conversation search.
+    pub search: SearchState,
+    /// Image placeholders encountered during the session.
+    pub image_placeholders: Vec<ImagePlaceholder>,
 }
 
 impl App {
@@ -68,9 +102,38 @@ impl App {
             spinner: Spinner::new(),
             content_buffer: String::new(),
             model_name: model_name.into(),
-            pending_permission: None,
+            permission_dialog: None,
             should_quit: false,
+            current_tool: None,
+            session_panel: SessionPanel::new(),
+            sidebar_visible: false,
+            session_id: String::new(),
+            keybindings: Keybindings::defaults(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            content_scroll: 0,
+            tool_outputs: ToolOutputList::new(),
+            code_blocks: CodeBlockTracker::new(),
+            search: SearchState::new(),
+            image_placeholders: Vec::new(),
         }
+    }
+
+    /// Set the current session ID and update the sidebar.
+    pub fn set_session_id(&mut self, id: impl Into<String>) {
+        self.session_id = id.into();
+        self.session_panel.set_active(&self.session_id);
+    }
+
+    /// Set custom keybindings.
+    pub fn set_keybindings(&mut self, keybindings: Keybindings) {
+        self.keybindings = keybindings;
+    }
+
+    /// Update the session list in the sidebar.
+    pub fn set_sessions(&mut self, sessions: Vec<SessionEntry>) {
+        self.session_panel.set_sessions(sessions);
+        self.session_panel.set_active(&self.session_id);
     }
 
     /// Handle a TUI event and return an action for the outer loop.
@@ -89,13 +152,119 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
-        // Global: Ctrl+C / Ctrl+D quits
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && let KeyCode::Char('c' | 'd') = key.code
+        // Search mode intercepts all keys except Esc and Enter
+        if self.search.is_active() {
+            return self.handle_search_key(key);
+        }
+
+        // Check keybinding actions first (global shortcuts)
+        if let Some(action) = self.keybindings.resolve(key.code, key.modifiers) {
+            match action {
+                Action::Quit => {
+                    self.should_quit = true;
+                    return AppAction::Quit;
+                }
+                Action::NewSession if self.state != AppState::Confirming => {
+                    return AppAction::NewSession;
+                }
+                Action::NextSession if self.state != AppState::Confirming => {
+                    self.session_panel.select_next();
+                    if let Some(entry) = self.session_panel.selected_entry() {
+                        let id = entry.id.clone();
+                        return AppAction::SwitchSession(id);
+                    }
+                    return AppAction::None;
+                }
+                Action::PrevSession if self.state != AppState::Confirming => {
+                    self.session_panel.select_prev();
+                    if let Some(entry) = self.session_panel.selected_entry() {
+                        let id = entry.id.clone();
+                        return AppAction::SwitchSession(id);
+                    }
+                    return AppAction::None;
+                }
+                Action::ToggleSidebar => {
+                    self.sidebar_visible = !self.sidebar_visible;
+                    return AppAction::None;
+                }
+                Action::ScrollUp if self.state != AppState::Confirming => {
+                    self.content_scroll = self.content_scroll.saturating_add(10);
+                    return AppAction::None;
+                }
+                Action::ScrollDown if self.state != AppState::Confirming => {
+                    self.content_scroll = self.content_scroll.saturating_sub(10);
+                    return AppAction::None;
+                }
+                Action::ToggleFold if self.state != AppState::Confirming => {
+                    self.tool_outputs.toggle_selected();
+                    return AppAction::None;
+                }
+                Action::CopyCodeBlock if self.state != AppState::Confirming => {
+                    self.code_blocks.update(&self.content_buffer);
+                    if let Some(text) = self.code_blocks.copy_focused() {
+                        let _ = write!(
+                            self.content_buffer,
+                            "\n[copied {} bytes to clipboard]",
+                            text.len()
+                        );
+                    }
+                    return AppAction::None;
+                }
+                Action::Search if self.state != AppState::Confirming => {
+                    self.search.activate();
+                    return AppAction::None;
+                }
+                Action::SearchNext if self.state != AppState::Confirming => {
+                    self.search.next_match();
+                    self.scroll_to_search_match();
+                    return AppAction::None;
+                }
+                Action::SearchPrev if self.state != AppState::Confirming => {
+                    self.search.prev_match();
+                    self.scroll_to_search_match();
+                    return AppAction::None;
+                }
+                _ => {} // Fall through for non-matching states
+            }
+        }
+
+        // '/' key activates search when idle/waiting and input is empty
+        if (self.state == AppState::Idle || self.state == AppState::WaitingForInput)
+            && key.code == KeyCode::Char('/')
+            && key.modifiers.is_empty()
+            && self.input.is_empty()
         {
-            self.should_quit = true;
-            return AppAction::Quit;
+            self.search.activate();
+            return AppAction::None;
+        }
+
+        // 'y' key copies focused code block when idle and input is empty
+        if self.state == AppState::Idle
+            && key.code == KeyCode::Char('y')
+            && key.modifiers.is_empty()
+            && self.input.is_empty()
+        {
+            self.code_blocks.update(&self.content_buffer);
+            if let Some(text) = self.code_blocks.copy_focused() {
+                let _ = write!(
+                    self.content_buffer,
+                    "\n[copied {} bytes to clipboard]",
+                    text.len()
+                );
+            }
+            return AppAction::None;
+        }
+
+        // Enter toggles fold when idle and input is empty
+        if self.state == AppState::Idle
+            && key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.input.is_empty()
+        {
+            self.tool_outputs.toggle_selected();
+            return AppAction::None;
         }
 
         match self.state {
@@ -109,6 +278,9 @@ impl App {
                 if self.state == AppState::Idle {
                     self.state = AppState::WaitingForInput;
                 }
+
+                // Reset scroll to bottom on new input
+                self.content_scroll = 0;
 
                 // Enter (without shift) submits
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -127,48 +299,124 @@ impl App {
         }
     }
 
-    fn handle_confirming_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
+    /// Handle keystrokes in search mode.
+    fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
         match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                if let Some(id) = self.pending_permission.take() {
-                    self.state = AppState::Processing;
-                    self.spinner.start("Executing tool...");
-                    return AppAction::PermissionResponse {
-                        request_id: id,
-                        allowed: true,
-                    };
-                }
-                AppAction::None
+            KeyCode::Esc => {
+                self.search.deactivate();
             }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                if let Some(id) = self.pending_permission.take() {
-                    self.state = AppState::Processing;
-                    return AppAction::PermissionResponse {
-                        request_id: id,
-                        allowed: false,
-                    };
-                }
-                AppAction::None
+            KeyCode::Enter => {
+                // Move to next match and exit search mode
+                self.search.next_match();
+                self.scroll_to_search_match();
+                self.search.deactivate();
             }
-            _ => AppAction::None,
+            KeyCode::Backspace => {
+                self.search.pop_char();
+                self.search.search(&self.content_buffer);
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.search.push_char(c);
+                self.search.search(&self.content_buffer);
+            }
+            _ => {}
+        }
+        AppAction::None
+    }
+
+    /// Scroll content to show the current search match.
+    fn scroll_to_search_match(&mut self) {
+        if let Some(m) = self.search.current() {
+            let total_lines = self.content_buffer.lines().count();
+            let from_bottom = total_lines.saturating_sub(m.line + 1);
+            self.content_scroll = from_bottom;
         }
     }
 
+    fn handle_confirming_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
+        if let Some(ref mut dialog) = self.permission_dialog {
+            if let Some(response) = dialog.handle_key(key.code) {
+                let request_id = dialog.request_id.clone();
+                let allowed = matches!(
+                    response,
+                    PermissionResponse::Allow | PermissionResponse::AlwaysAllow
+                );
+                self.permission_dialog = None;
+                self.state = AppState::Processing;
+                if allowed {
+                    self.spinner.start("Executing tool...");
+                }
+                return AppAction::PermissionResponse {
+                    request_id,
+                    allowed,
+                };
+            }
+            return AppAction::None;
+        }
+        AppAction::None
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn handle_agent_event(&mut self, event: crab_core::event::Event) {
         use crab_core::event::Event;
         match event {
             Event::ContentDelta { delta, .. } => {
                 self.content_buffer.push_str(&delta);
+                self.content_scroll = 0; // auto-scroll on new content
             }
-            Event::MessageEnd { .. } => {
+            Event::MessageEnd { usage, .. } => {
                 self.spinner.stop();
+                self.current_tool = None;
                 self.state = AppState::Idle;
+                // Accumulate token usage
+                self.total_input_tokens += usage.input_tokens;
+                self.total_output_tokens += usage.output_tokens;
+                // Show token usage summary
+                let total = usage.input_tokens + usage.output_tokens;
+                if total > 0 {
+                    let _ = write!(
+                        self.content_buffer,
+                        "\n[tokens: {}in/{}out",
+                        usage.input_tokens, usage.output_tokens
+                    );
+                    if usage.cache_read_tokens > 0 {
+                        let _ = write!(self.content_buffer, " cache:{}r", usage.cache_read_tokens);
+                    }
+                    let _ = writeln!(self.content_buffer, "]");
+                }
             }
             Event::ToolUseStart { name, .. } => {
+                self.current_tool = Some(name.clone());
                 self.spinner.set_message(format!("Running {name}..."));
+                let _ = write!(self.content_buffer, "\n[tool] {name}\n");
             }
-            Event::ToolResult { .. } => {
+            Event::ToolResult { output, .. } => {
+                let tool_name = self.current_tool.take().unwrap_or_default();
                 self.spinner.set_message("Thinking...".to_string());
+                // Show tool result summary in content area
+                let text = output.text();
+                if output.is_error {
+                    let _ = writeln!(self.content_buffer, "[tool error] {text}");
+                    self.tool_outputs
+                        .push(ToolOutputEntry::new(&tool_name, text.clone(), true));
+                } else if !text.is_empty() {
+                    // Truncate long output for display
+                    if text.len() > 500 {
+                        let _ = writeln!(
+                            self.content_buffer,
+                            "[{tool_name} result] {}...",
+                            &text[..500]
+                        );
+                    } else {
+                        let _ = writeln!(self.content_buffer, "[{tool_name} result] {text}");
+                    }
+                    self.tool_outputs
+                        .push(ToolOutputEntry::new(&tool_name, text.clone(), false));
+                }
+                // Update code block detection
+                self.code_blocks.update(&self.content_buffer);
             }
             Event::PermissionRequest {
                 request_id,
@@ -177,14 +425,57 @@ impl App {
             } => {
                 self.spinner.stop();
                 self.state = AppState::Confirming;
-                self.pending_permission = Some(request_id);
-                // Store info for display (simplified — just update spinner message)
-                self.spinner
-                    .start(format!("Allow {tool_name}? {input_summary} [y/n]"));
+                // Determine risk level based on tool name
+                let risk = classify_tool_risk(&tool_name);
+                self.permission_dialog = Some(PermissionDialog::new(
+                    tool_name,
+                    input_summary,
+                    risk,
+                    request_id,
+                ));
+            }
+            Event::CompactStart { strategy, .. } => {
+                let _ = writeln!(
+                    self.content_buffer,
+                    "\n[compact] Starting compaction: {strategy}"
+                );
+            }
+            Event::CompactEnd {
+                after_tokens,
+                removed_messages,
+            } => {
+                let _ = writeln!(
+                    self.content_buffer,
+                    "[compact] Removed {removed_messages} messages, now {after_tokens} tokens"
+                );
+            }
+            Event::TokenWarning {
+                usage_pct,
+                used,
+                limit,
+            } => {
+                let _ = writeln!(
+                    self.content_buffer,
+                    "[warn] Token usage {:.0}% ({used}/{limit})",
+                    usage_pct * 100.0,
+                );
+            }
+            Event::SessionSaved { session_id } => {
+                let _ = writeln!(self.content_buffer, "[session] Saved: {session_id}");
+            }
+            Event::SessionResumed {
+                session_id,
+                message_count,
+            } => {
+                let _ = writeln!(
+                    self.content_buffer,
+                    "[session] Resumed {session_id} ({message_count} messages)"
+                );
             }
             Event::Error { message } => {
                 self.spinner.stop();
-                let _ = write!(self.content_buffer, "\n[Error: {message}]\n");
+                self.current_tool = None;
+                let _ = writeln!(self.content_buffer, "\n[Error: {message}]");
                 self.state = AppState::Idle;
             }
             _ => {}
@@ -194,13 +485,36 @@ impl App {
     /// Render the full app into a ratatui frame.
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         #[allow(clippy::cast_possible_truncation)]
-        let layout = AppLayout::compute(area, self.input.line_count() as u16);
+        let layout = AppLayout::compute_with_sidebar(
+            area,
+            self.input.line_count() as u16,
+            self.sidebar_visible,
+            crate::layout::DEFAULT_SIDEBAR_WIDTH,
+        );
 
-        // Top bar
-        render_top_bar(&self.model_name, self.state, layout.top_bar, buf);
+        // Top bar (enhanced with session ID + token usage)
+        render_top_bar_enhanced(
+            &self.model_name,
+            self.state,
+            &self.session_id,
+            self.total_input_tokens,
+            self.total_output_tokens,
+            layout.top_bar,
+            buf,
+        );
 
-        // Content area (just render the buffer text for now)
-        render_content(&self.content_buffer, layout.content, buf);
+        // Sidebar (session list)
+        if let Some(sidebar_area) = layout.sidebar {
+            Widget::render(&self.session_panel, sidebar_area, buf);
+        }
+
+        // Content area with scroll support
+        render_content_scrolled(
+            &self.content_buffer,
+            self.content_scroll,
+            layout.content,
+            buf,
+        );
 
         // Status line / spinner
         Widget::render(&self.spinner, layout.status, buf);
@@ -208,12 +522,54 @@ impl App {
         // Input
         Widget::render(&self.input, layout.input, buf);
 
-        // Bottom bar
-        render_bottom_bar(self.state, layout.bottom_bar, buf);
+        // Search bar (overlays bottom of content when active)
+        if self.search.is_active() {
+            let search_area = Rect {
+                x: layout.content.x,
+                y: layout.content.y + layout.content.height.saturating_sub(1),
+                width: layout.content.width,
+                height: 1,
+            };
+            search::render_search_bar(&self.search, search_area, buf);
+        }
+
+        // Bottom bar (enhanced with sidebar toggle hint)
+        render_bottom_bar_enhanced(
+            self.state,
+            self.sidebar_visible,
+            self.search.is_active(),
+            layout.bottom_bar,
+            buf,
+        );
+
+        // Permission dialog overlay (renders on top of everything)
+        if let Some(ref dialog) = self.permission_dialog {
+            let dialog_area = PermissionDialog::dialog_area(area);
+            Widget::render(dialog, dialog_area, buf);
+        }
     }
 }
 
-fn render_top_bar(model_name: &str, state: AppState, area: Rect, buf: &mut Buffer) {
+/// Format token count with `k` suffix for large values.
+#[allow(clippy::cast_precision_loss)]
+fn format_tokens(n: u64) -> String {
+    if n >= 10_000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_top_bar_enhanced(
+    model_name: &str,
+    state: AppState,
+    session_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let state_str = match state {
         AppState::Idle => "idle",
         AppState::WaitingForInput => "input",
@@ -221,7 +577,7 @@ fn render_top_bar(model_name: &str, state: AppState, area: Rect, buf: &mut Buffe
         AppState::Confirming => "confirm",
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             " crab ",
             Style::default()
@@ -233,23 +589,54 @@ fn render_top_bar(model_name: &str, state: AppState, area: Rect, buf: &mut Buffe
         Span::styled(model_name, Style::default().fg(Color::Cyan)),
         Span::raw(" | "),
         Span::styled(state_str, Style::default().fg(Color::Yellow)),
-    ]);
+    ];
 
-    Widget::render(line, area, buf);
+    // Session ID (show short version)
+    if !session_id.is_empty() {
+        let short_id = if session_id.len() > 8 {
+            &session_id[..8]
+        } else {
+            session_id
+        };
+        spans.push(Span::raw(" | "));
+        spans.push(Span::styled(short_id, Style::default().fg(Color::DarkGray)));
+    }
+
+    // Token usage
+    let total = input_tokens + output_tokens;
+    if total > 0 {
+        spans.push(Span::raw(" | "));
+        spans.push(Span::styled(
+            format!(
+                "{}in/{}out",
+                format_tokens(input_tokens),
+                format_tokens(output_tokens)
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    Widget::render(Line::from(spans), area, buf);
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn render_content(text: &str, area: Rect, buf: &mut Buffer) {
+fn render_content_scrolled(text: &str, scroll_offset: usize, area: Rect, buf: &mut Buffer) {
     if area.height == 0 || text.is_empty() {
         return;
     }
 
     let lines: Vec<&str> = text.lines().collect();
     let visible = area.height as usize;
-    // Show the last N lines (auto-scroll to bottom)
-    let start = lines.len().saturating_sub(visible);
+    // Show the last N lines minus scroll offset (auto-scroll to bottom)
+    let end = lines.len().saturating_sub(scroll_offset);
+    let start = end.saturating_sub(visible);
 
-    for (i, line) in lines.iter().skip(start).take(visible).enumerate() {
+    for (i, line) in lines
+        .iter()
+        .skip(start)
+        .take(visible.min(end - start))
+        .enumerate()
+    {
         let y = area.y + i as u16;
         let line_widget = Line::from(*line);
         let line_area = Rect {
@@ -262,13 +649,36 @@ fn render_content(text: &str, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_bottom_bar(state: AppState, area: Rect, buf: &mut Buffer) {
-    let hints = match state {
-        AppState::Idle | AppState::WaitingForInput => {
-            "Enter: send | Shift+Enter: newline | Ctrl+C: quit"
+/// Classify tool risk level based on tool name for the permission dialog.
+fn classify_tool_risk(tool_name: &str) -> RiskLevel {
+    match tool_name {
+        "bash" | "write" | "notebook_edit" => RiskLevel::High,
+        "edit" | "multi_edit" => RiskLevel::Medium,
+        _ => RiskLevel::Low,
+    }
+}
+
+fn render_bottom_bar_enhanced(
+    state: AppState,
+    sidebar_visible: bool,
+    search_active: bool,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let hints = if search_active {
+        "Enter: next match | Esc: close search | type to search"
+    } else {
+        match state {
+            AppState::Idle | AppState::WaitingForInput => {
+                if sidebar_visible {
+                    "Enter: send | /: search | y: copy code | Ctrl+B: hide sidebar | Ctrl+C: quit"
+                } else {
+                    "Enter: send | /: search | y: copy code | Ctrl+N: new session | Ctrl+C: quit"
+                }
+            }
+            AppState::Processing => "Ctrl+C: quit | PageUp/Down: scroll",
+            AppState::Confirming => "y: allow | n: deny | a: always | Esc: deny",
         }
-        AppState::Processing => "Ctrl+C: quit",
-        AppState::Confirming => "y: allow | n: deny | Esc: deny",
     };
 
     let line = Line::from(Span::styled(hints, Style::default().fg(Color::DarkGray)));
@@ -297,6 +707,11 @@ mod tests {
         assert!(app.content_buffer.is_empty());
         assert_eq!(app.model_name, "gpt-4o");
         assert!(!app.should_quit);
+        assert!(!app.sidebar_visible);
+        assert!(app.session_id.is_empty());
+        assert_eq!(app.total_input_tokens, 0);
+        assert_eq!(app.total_output_tokens, 0);
+        assert_eq!(app.content_scroll, 0);
     }
 
     #[test]
@@ -345,7 +760,6 @@ mod tests {
         let mut app = App::new("test");
         app.spinner.start("Working");
         app.handle_event(TuiEvent::Tick);
-        // Just verify it doesn't panic and spinner advanced
         assert!(app.spinner.is_active());
     }
 
@@ -361,6 +775,7 @@ mod tests {
             delta: "world".into(),
         }));
         assert_eq!(app.content_buffer, "Hello world");
+        assert_eq!(app.content_scroll, 0); // auto-scrolled
     }
 
     #[test]
@@ -375,6 +790,34 @@ mod tests {
 
         assert!(!app.spinner.is_active());
         assert_eq!(app.state, AppState::Idle);
+    }
+
+    #[test]
+    fn agent_message_end_accumulates_tokens() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+
+        let mut usage = crab_core::model::TokenUsage::default();
+        usage.input_tokens = 100;
+        usage.output_tokens = 50;
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::MessageEnd {
+            usage,
+        }));
+
+        assert_eq!(app.total_input_tokens, 100);
+        assert_eq!(app.total_output_tokens, 50);
+
+        // Second turn
+        app.state = AppState::Processing;
+        let mut usage2 = crab_core::model::TokenUsage::default();
+        usage2.input_tokens = 200;
+        usage2.output_tokens = 80;
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::MessageEnd {
+            usage: usage2,
+        }));
+
+        assert_eq!(app.total_input_tokens, 300);
+        assert_eq!(app.total_output_tokens, 130);
     }
 
     #[test]
@@ -411,7 +854,12 @@ mod tests {
     fn confirming_y_allows() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.pending_permission = Some("req_1".into());
+        app.permission_dialog = Some(PermissionDialog::new(
+            "bash",
+            "rm -rf /tmp",
+            RiskLevel::High,
+            "req_1",
+        ));
 
         let action = app.handle_event(key(KeyCode::Char('y')));
         assert_eq!(
@@ -422,13 +870,19 @@ mod tests {
             }
         );
         assert_eq!(app.state, AppState::Processing);
+        assert!(app.permission_dialog.is_none());
     }
 
     #[test]
     fn confirming_n_denies() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.pending_permission = Some("req_1".into());
+        app.permission_dialog = Some(PermissionDialog::new(
+            "bash",
+            "rm -rf /tmp",
+            RiskLevel::High,
+            "req_1",
+        ));
 
         let action = app.handle_event(key(KeyCode::Char('n')));
         assert_eq!(
@@ -444,7 +898,12 @@ mod tests {
     fn confirming_esc_denies() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.pending_permission = Some("req_2".into());
+        app.permission_dialog = Some(PermissionDialog::new(
+            "edit",
+            "src/main.rs",
+            RiskLevel::Medium,
+            "req_2",
+        ));
 
         let action = app.handle_event(key(KeyCode::Esc));
         assert_eq!(
@@ -491,11 +950,109 @@ mod tests {
         let mut buf = Buffer::empty(area);
         app.render(area, &mut buf);
 
-        // Verify some expected content is rendered
         let top_row: String = (0..area.width)
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         assert!(top_row.contains("crab"));
+    }
+
+    #[test]
+    fn tool_result_shown_in_content() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.current_tool = Some("bash".into());
+
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolResult {
+            id: "tu_1".into(),
+            output: crab_core::tool::ToolOutput::success("file1.txt\nfile2.txt"),
+        }));
+
+        assert!(app.content_buffer.contains("file1.txt"));
+        assert!(app.content_buffer.contains("bash result"));
+    }
+
+    #[test]
+    fn tool_error_shown_in_content() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.current_tool = Some("bash".into());
+
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolResult {
+            id: "tu_1".into(),
+            output: crab_core::tool::ToolOutput::error("command not found"),
+        }));
+
+        assert!(app.content_buffer.contains("tool error"));
+        assert!(app.content_buffer.contains("command not found"));
+    }
+
+    #[test]
+    fn tool_use_start_shown_in_content() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.spinner.start("Thinking...");
+
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolUseStart {
+            id: "tu_1".into(),
+            name: "read".into(),
+        }));
+
+        assert!(app.content_buffer.contains("[tool] read"));
+        assert_eq!(app.current_tool.as_deref(), Some("read"));
+    }
+
+    #[test]
+    fn permission_dialog_renders_in_frame() {
+        let mut app = App::new("test");
+        app.state = AppState::Confirming;
+        app.permission_dialog = Some(PermissionDialog::new(
+            "bash",
+            "rm -rf /tmp",
+            RiskLevel::High,
+            "req_1",
+        ));
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf);
+
+        let buf_ref = &buf;
+        let all_text: String = (0..area.height)
+            .flat_map(|y| {
+                (0..area.width).map(move |x| buf_ref.cell((x, y)).unwrap().symbol().to_string())
+            })
+            .collect();
+        assert!(all_text.contains("bash"));
+        assert!(all_text.contains("Permission"));
+    }
+
+    #[test]
+    fn classify_tool_risk_levels() {
+        assert_eq!(classify_tool_risk("bash"), RiskLevel::High);
+        assert_eq!(classify_tool_risk("write"), RiskLevel::High);
+        assert_eq!(classify_tool_risk("edit"), RiskLevel::Medium);
+        assert_eq!(classify_tool_risk("read"), RiskLevel::Low);
+        assert_eq!(classify_tool_risk("glob"), RiskLevel::Low);
+    }
+
+    #[test]
+    fn session_saved_event_shown() {
+        let mut app = App::new("test");
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::SessionSaved {
+            session_id: "sess_abc".into(),
+        }));
+        assert!(app.content_buffer.contains("[session] Saved: sess_abc"));
+    }
+
+    #[test]
+    fn token_warning_shown() {
+        let mut app = App::new("test");
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::TokenWarning {
+            usage_pct: 0.90,
+            used: 90000,
+            limit: 100_000,
+        }));
+        assert!(app.content_buffer.contains("90%"));
     }
 
     #[test]
@@ -508,5 +1065,171 @@ mod tests {
     fn app_action_variants() {
         assert_eq!(AppAction::None, AppAction::None);
         assert_ne!(AppAction::Quit, AppAction::None);
+    }
+
+    // ── New Phase 2 tests ──
+
+    #[test]
+    fn ctrl_b_toggles_sidebar() {
+        let mut app = App::new("test");
+        assert!(!app.sidebar_visible);
+
+        let action = app.handle_event(ctrl_key('b'));
+        assert_eq!(action, AppAction::None);
+        assert!(app.sidebar_visible);
+
+        let action = app.handle_event(ctrl_key('b'));
+        assert_eq!(action, AppAction::None);
+        assert!(!app.sidebar_visible);
+    }
+
+    #[test]
+    fn ctrl_n_creates_new_session() {
+        let mut app = App::new("test");
+        let action = app.handle_event(ctrl_key('n'));
+        assert_eq!(action, AppAction::NewSession);
+    }
+
+    #[test]
+    fn set_session_id_updates_panel() {
+        let mut app = App::new("test");
+        app.set_sessions(vec![
+            SessionEntry::new("s1", "Session 1"),
+            SessionEntry::new("s2", "Session 2"),
+        ]);
+        app.set_session_id("s2");
+        assert_eq!(app.session_id, "s2");
+    }
+
+    #[test]
+    fn set_sessions_populates_panel() {
+        let mut app = App::new("test");
+        app.set_sessions(vec![
+            SessionEntry::new("s1", "Session 1"),
+            SessionEntry::new("s2", "Session 2"),
+            SessionEntry::new("s3", "Session 3"),
+        ]);
+        assert_eq!(app.session_panel.len(), 3);
+    }
+
+    #[test]
+    fn set_keybindings_custom() {
+        let mut app = App::new("test");
+        let kb = Keybindings::defaults();
+        app.set_keybindings(kb);
+        // Should not panic
+        let action = app.handle_event(ctrl_key('c'));
+        assert_eq!(action, AppAction::Quit);
+    }
+
+    #[test]
+    fn render_with_sidebar() {
+        let mut app = App::new("test-model");
+        app.sidebar_visible = true;
+        app.set_sessions(vec![
+            SessionEntry::new("s1", "Session 1").with_active(true),
+            SessionEntry::new("s2", "Session 2"),
+        ]);
+        app.set_session_id("s1");
+        app.content_buffer = "Hello world\n".into();
+
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf);
+
+        let buf_ref = &buf;
+        let all_text: String = (0..area.height)
+            .flat_map(|y| {
+                (0..area.width).map(move |x| buf_ref.cell((x, y)).unwrap().symbol().to_string())
+            })
+            .collect();
+        assert!(all_text.contains("Sessions"));
+        assert!(all_text.contains("Session 1"));
+        assert!(all_text.contains("crab"));
+    }
+
+    #[test]
+    fn render_top_bar_shows_session_id() {
+        let mut app = App::new("gpt-4o");
+        app.set_session_id("sess_abcdef12345");
+        app.total_input_tokens = 15000;
+        app.total_output_tokens = 3000;
+
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf);
+
+        let top_row: String = (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        assert!(top_row.contains("sess_abc")); // truncated to 8 chars
+        assert!(top_row.contains("15.0k")); // formatted tokens
+    }
+
+    #[test]
+    fn page_up_scrolls_content() {
+        let mut app = App::new("test");
+        app.content_buffer = (0..100)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let action = app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::empty(),
+        )));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.content_scroll, 10);
+
+        let action = app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::empty(),
+        )));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.content_scroll, 0);
+    }
+
+    #[test]
+    fn new_session_action_variant() {
+        assert_eq!(AppAction::NewSession, AppAction::NewSession);
+        assert_ne!(AppAction::NewSession, AppAction::Quit);
+    }
+
+    #[test]
+    fn switch_session_action_variant() {
+        let a = AppAction::SwitchSession("s1".into());
+        let b = AppAction::SwitchSession("s1".into());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn format_tokens_basic() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(10_000), "10.0k");
+        assert_eq!(format_tokens(150_000), "150.0k");
+    }
+
+    #[test]
+    fn content_scroll_resets_on_input() {
+        let mut app = App::new("test");
+        app.content_scroll = 20;
+        app.state = AppState::WaitingForInput;
+
+        // Typing should reset scroll
+        app.handle_event(key(KeyCode::Char('a')));
+        assert_eq!(app.content_scroll, 0);
+    }
+
+    #[test]
+    fn content_delta_resets_scroll() {
+        let mut app = App::new("test");
+        app.content_scroll = 15;
+
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::ContentDelta {
+            index: 0,
+            delta: "new text".into(),
+        }));
+        assert_eq!(app.content_scroll, 0);
     }
 }

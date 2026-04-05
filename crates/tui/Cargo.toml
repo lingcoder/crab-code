@@ -10,11 +10,14 @@ description = "Terminal UI for Crab Code"
 [dependencies]
 crab-common.workspace = true
 crab-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 crab-config.workspace = true
 crab-agent.workspace = true
 crab-api.workspace = true
 crab-tools.workspace = true
 crab-session.workspace = true
+crab-plugin.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 syntect.workspace = true

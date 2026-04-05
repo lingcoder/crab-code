@@ -1,10 +1,16 @@
 pub mod ansi;
+pub mod autocomplete;
+pub mod code_block;
 pub mod cost_bar;
 pub mod dialog;
 pub mod diff;
 pub mod input;
+pub mod input_history;
 pub mod markdown;
+pub mod search;
 pub mod select;
+pub mod session_panel;
 pub mod spinner;
 pub mod syntax;
 pub mod task_list;
+pub mod tool_output;
