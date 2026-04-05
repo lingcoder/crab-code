@@ -325,10 +325,9 @@ impl PluginRegistry {
         let valid = matches!(
             (entry.state, target),
             (PluginState::Registered, PluginState::Initialized)
-                | (PluginState::Initialized, PluginState::Running)
+                | (PluginState::Initialized | PluginState::Stopped, PluginState::Running)
                 | (PluginState::Running, PluginState::Stopped)
-                | (PluginState::Stopped, PluginState::Running)
-                | (PluginState::Stopped, PluginState::Registered) // re-init
+                | (PluginState::Stopped, PluginState::Registered)
         );
 
         if valid {
