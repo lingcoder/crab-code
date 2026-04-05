@@ -31,8 +31,7 @@ pub fn parse_ansi(input: &str) -> Vec<Line<'static>> {
                 let params = consume_csi_params(&mut chars);
                 // Only handle SGR (terminated by 'm')
                 current_style = apply_sgr(&params, current_style);
-            }
-            else {
+            } else {
                 // Non-CSI escape: consume the next char (escape type indicator)
                 chars.next();
             }
@@ -127,9 +126,9 @@ fn apply_sgr(params: &[u16], mut style: Style) -> Style {
                         }
                         2 if i + 4 < params.len() => {
                             style = style.fg(Color::Rgb(
-                                params[i + 2] as u8,
-                                params[i + 3] as u8,
-                                params[i + 4] as u8,
+                                truncate_u8(params[i + 2]),
+                                truncate_u8(params[i + 3]),
+                                truncate_u8(params[i + 4]),
                             ));
                             i += 4;
                         }
@@ -147,9 +146,9 @@ fn apply_sgr(params: &[u16], mut style: Style) -> Style {
                         }
                         2 if i + 4 < params.len() => {
                             style = style.bg(Color::Rgb(
-                                params[i + 2] as u8,
-                                params[i + 3] as u8,
-                                params[i + 4] as u8,
+                                truncate_u8(params[i + 2]),
+                                truncate_u8(params[i + 3]),
+                                truncate_u8(params[i + 4]),
                             ));
                             i += 4;
                         }
@@ -164,6 +163,11 @@ fn apply_sgr(params: &[u16], mut style: Style) -> Style {
     style
 }
 
+/// Truncate u16 to u8 (ANSI color values are always 0-255).
+const fn truncate_u8(v: u16) -> u8 {
+    (v & 0xFF) as u8
+}
+
 /// Map 0-7 to the standard 8 terminal colors.
 fn standard_color(idx: u16) -> Color {
     match idx {
@@ -174,7 +178,6 @@ fn standard_color(idx: u16) -> Color {
         4 => Color::Blue,
         5 => Color::Magenta,
         6 => Color::Cyan,
-        7 => Color::White,
         _ => Color::White,
     }
 }
@@ -189,14 +192,13 @@ fn bright_color(idx: u16) -> Color {
         4 => Color::LightBlue,
         5 => Color::LightMagenta,
         6 => Color::LightCyan,
-        7 => Color::White,
         _ => Color::White,
     }
 }
 
 /// Convert a 256-color index to a ratatui `Color`.
 fn color_256(idx: u16) -> Color {
-    Color::Indexed(idx as u8)
+    Color::Indexed(truncate_u8(idx))
 }
 
 #[cfg(test)]

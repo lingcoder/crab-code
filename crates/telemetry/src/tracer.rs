@@ -1,10 +1,6 @@
 use std::path::Path;
 
-use tracing_subscriber::{
-    fmt,
-    prelude::*,
-    EnvFilter,
-};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// Build the default `EnvFilter`: INFO unless `RUST_LOG` is set.
 fn default_filter() -> EnvFilter {
@@ -18,9 +14,7 @@ fn default_filter() -> EnvFilter {
 ///
 /// Returns `Err` if a global subscriber has already been set.
 pub fn init() -> Result<(), tracing_subscriber::util::TryInitError> {
-    let fmt_layer = fmt::layer()
-        .with_target(true)
-        .compact();
+    let fmt_layer = fmt::layer().with_target(true).compact();
 
     tracing_subscriber::registry()
         .with(default_filter())
@@ -41,9 +35,7 @@ pub fn init_with_file(log_dir: &Path) -> Result<(), tracing_subscriber::util::Tr
     // Without this, the background writer thread would be dropped immediately.
     std::mem::forget(guard);
 
-    let stderr_layer = fmt::layer()
-        .with_target(true)
-        .compact();
+    let stderr_layer = fmt::layer().with_target(true).compact();
 
     let file_layer = fmt::layer()
         .with_target(true)

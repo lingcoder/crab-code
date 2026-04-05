@@ -25,16 +25,16 @@ pub enum VimAction {
     Ignored,
 }
 
-/// Vim-style key handler wrapping an `InputBox`.
+/// Vim-style key handler wrapping an [`InputBox`].
 ///
 /// Maintains the current vim mode and translates key events into
-/// InputBox operations or mode transitions.
+/// `InputBox` operations or mode transitions.
 pub struct VimHandler {
     /// The wrapped input box.
     pub input: InputBox,
     /// Current vim mode.
     mode: VimMode,
-    /// Whether vim mode is enabled (false = pass-through to InputBox).
+    /// Whether vim mode is enabled (false = pass-through to `InputBox`).
     enabled: bool,
 }
 
@@ -116,13 +116,11 @@ impl VimHandler {
                 // Open line below: move to end of line, insert newline, enter insert
                 let (row, _) = self.input.cursor();
                 let lines = self.collect_lines();
-                let end_col = lines.get(row).map_or(0, |l| l.len());
+                let end_col = lines.get(row).map_or(0, String::len);
                 self.set_cursor(row, end_col);
                 // Insert a newline via InputBox
-                self.input.handle_key(KeyEvent::new(
-                    KeyCode::Enter,
-                    KeyModifiers::SHIFT,
-                ));
+                self.input
+                    .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
                 self.mode = VimMode::Insert;
                 VimAction::Consumed
             }
@@ -130,7 +128,7 @@ impl VimHandler {
                 // Append at end of line
                 let (row, _) = self.input.cursor();
                 let lines = self.collect_lines();
-                let end_col = lines.get(row).map_or(0, |l| l.len());
+                let end_col = lines.get(row).map_or(0, String::len);
                 self.set_cursor(row, end_col);
                 self.mode = VimMode::Insert;
                 VimAction::Consumed

@@ -43,10 +43,7 @@ impl McpManager {
     ///
     /// Servers that fail to connect are logged and skipped — a single broken
     /// server should not prevent the rest from working.
-    pub async fn connect_all(
-        &mut self,
-        configs: &[McpServerConfig],
-    ) -> Vec<String> {
+    pub async fn connect_all(&mut self, configs: &[McpServerConfig]) -> Vec<String> {
         let mut failed = Vec::new();
 
         for config in configs {
@@ -75,10 +72,7 @@ impl McpManager {
     }
 
     /// Connect to a single MCP server and add it to the manager.
-    pub async fn connect_one(
-        &mut self,
-        config: &McpServerConfig,
-    ) -> crab_common::Result<()> {
+    pub async fn connect_one(&mut self, config: &McpServerConfig) -> crab_common::Result<()> {
         let client = connect_server(config).await?;
         self.clients
             .insert(config.name.clone(), Arc::new(Mutex::new(client)));
@@ -127,24 +121,16 @@ impl McpManager {
     }
 
     /// Refresh the tool list for a specific server.
-    pub async fn refresh_tools(
-        &self,
-        server_name: &str,
-    ) -> crab_common::Result<()> {
+    pub async fn refresh_tools(&self, server_name: &str) -> crab_common::Result<()> {
         let client_arc = self.clients.get(server_name).ok_or_else(|| {
-            crab_common::Error::Other(format!(
-                "MCP server '{server_name}' not connected"
-            ))
+            crab_common::Error::Other(format!("MCP server '{server_name}' not connected"))
         })?;
         let mut client = client_arc.lock().await;
         client.refresh_tools().await
     }
 
     /// Disconnect a specific server.
-    pub async fn disconnect(
-        &mut self,
-        server_name: &str,
-    ) -> crab_common::Result<()> {
+    pub async fn disconnect(&mut self, server_name: &str) -> crab_common::Result<()> {
         if let Some(client_arc) = self.clients.remove(server_name) {
             // Try to get exclusive ownership — if other references exist,
             // we can only close via the shared reference.
@@ -178,10 +164,7 @@ impl McpManager {
     }
 
     /// Restart a specific server by disconnecting and reconnecting.
-    pub async fn restart_server(
-        &mut self,
-        config: &McpServerConfig,
-    ) -> crab_common::Result<()> {
+    pub async fn restart_server(&mut self, config: &McpServerConfig) -> crab_common::Result<()> {
         self.disconnect(&config.name).await?;
         self.connect_one(config).await
     }
@@ -253,7 +236,139 @@ mod tests {
         assert_eq!(mgr.server_count(), 0);
     }
 
-    // Integration tests with MockTransport require more setup;
-    // the mock-based tests in client.rs and mcp_tool.rs already cover
-    // the McpClient → Tool bridging path end-to-end.
+    #[tokio::test]
+    async fn start_all_with_empty_object() {
+        let mut mgr = McpManager::new();
+        let failed = mgr.start_all(&serde_json::json!({})).await.unwrap();
+        assert!(failed.is_empty());
+        assert_eq!(mgr.server_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_all_with_invalid_value() {
+        let mut mgr = McpManager::new();
+        let result = mgr.start_all(&serde_json::json!("not an object")).await;
+        assert!(result.is_err());
+    }
+
+    /// Helper to create a manager with a mock client injected directly.
+    async fn manager_with_mock_client() -> McpManager {
+        use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
+        use crate::transport::Transport;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct MockTransport {
+            call_count: AtomicUsize,
+            responses: tokio::sync::Mutex<Vec<serde_json::Value>>,
+        }
+
+        impl Transport for MockTransport {
+            fn send(
+                &self,
+                req: JsonRpcRequest,
+            ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
+                    let responses = self.responses.lock().await;
+                    let result = responses
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    Ok(JsonRpcResponse {
+                        jsonrpc: "2.0".into(),
+                        id: req.id,
+                        result: Some(result),
+                        error: None,
+                    })
+                })
+            }
+
+            fn notify(
+                &self,
+                _method: &str,
+                _params: serde_json::Value,
+            ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let transport = MockTransport {
+            call_count: AtomicUsize::new(0),
+            responses: tokio::sync::Mutex::new(vec![
+                // initialize response
+                serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "mock-server", "version": "1.0"}
+                }),
+                // tools/list response
+                serde_json::json!({
+                    "tools": [
+                        {
+                            "name": "read_file",
+                            "description": "Read a file",
+                            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}
+                        },
+                        {
+                            "name": "write_file",
+                            "description": "Write a file",
+                            "inputSchema": {"type": "object"}
+                        }
+                    ]
+                }),
+            ]),
+        };
+
+        let client = McpClient::connect(Box::new(transport), "test-server")
+            .await
+            .unwrap();
+
+        let mut mgr = McpManager::new();
+        mgr.clients
+            .insert("test-server".into(), Arc::new(Mutex::new(client)));
+        mgr
+    }
+
+    #[tokio::test]
+    async fn manager_with_mock_discovers_tools() {
+        let mgr = manager_with_mock_client().await;
+
+        assert_eq!(mgr.server_count(), 1);
+        assert_eq!(mgr.server_names(), vec!["test-server"]);
+        assert!(mgr.get_client("test-server").is_some());
+
+        let tools = mgr.discovered_tools().await;
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].server_name, "test-server");
+        // Tools are in the order the server returned them
+        let names: Vec<&str> = tools.iter().map(|t| t.tool_def.name.as_str()).collect();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+    }
+
+    #[tokio::test]
+    async fn manager_disconnect_removes_server() {
+        let mut mgr = manager_with_mock_client().await;
+        assert_eq!(mgr.server_count(), 1);
+
+        mgr.disconnect("test-server").await.unwrap();
+        assert_eq!(mgr.server_count(), 0);
+        assert!(mgr.get_client("test-server").is_none());
+    }
+
+    #[tokio::test]
+    async fn manager_close_all_clears_everything() {
+        let mut mgr = manager_with_mock_client().await;
+        assert_eq!(mgr.server_count(), 1);
+
+        mgr.close_all().await;
+        assert_eq!(mgr.server_count(), 0);
+    }
 }

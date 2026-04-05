@@ -286,7 +286,9 @@ This is the body content.
             )
             .unwrap();
         // MEMORY.md should be excluded
-        store.save("MEMORY.md", "- [User role](user_role.md)").unwrap();
+        store
+            .save("MEMORY.md", "- [User role](user_role.md)")
+            .unwrap();
 
         let all = store.load_all().unwrap();
         assert_eq!(all.len(), 2);
@@ -329,5 +331,121 @@ This is the body content.
 
         store.delete("temp.md").unwrap();
         assert!(store.load("temp.md").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_nonexistent_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        store.delete("nonexistent.md").unwrap(); // should not error
+    }
+
+    #[test]
+    fn parse_memory_file_empty_body() {
+        let content = "---\nname: Empty body\ndescription: test\ntype: user\n---\n";
+        let mem = MemoryStore::parse_memory_file(content).unwrap();
+        assert_eq!(mem.name, "Empty body");
+        assert!(mem.body.is_empty());
+    }
+
+    #[test]
+    fn parse_memory_file_incomplete_frontmatter() {
+        // Missing closing ---
+        let content = "---\nname: Test\ndescription: test\ntype: user\nno closing";
+        assert!(MemoryStore::parse_memory_file(content).is_none());
+    }
+
+    #[test]
+    fn parse_memory_file_extra_fields_ignored() {
+        let content =
+            "---\nname: Test\ndescription: test\ntype: user\nunknown_field: value\n---\n\nBody.";
+        let mem = MemoryStore::parse_memory_file(content).unwrap();
+        assert_eq!(mem.name, "Test");
+    }
+
+    #[test]
+    fn load_all_skips_non_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+
+        store
+            .save(
+                "user_role.md",
+                "---\nname: Role\ndescription: test\ntype: user\n---\n\nBody.",
+            )
+            .unwrap();
+        // Save a non-md file
+        std::fs::write(dir.path().join("notes.txt"), "not a memory file").unwrap();
+        // Save a file without valid frontmatter
+        store.save("invalid.md", "no frontmatter here").unwrap();
+
+        let all = store.load_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].filename, "user_role.md");
+    }
+
+    #[test]
+    fn load_all_nonexistent_dir_returns_empty() {
+        let store = MemoryStore::new(PathBuf::from("/nonexistent/memory/dir"));
+        let all = store.load_all().unwrap();
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn load_index_nonexistent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        let entries = store.load_index().unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn save_overwrites_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+
+        store.save("test.md", "original").unwrap();
+        store.save("test.md", "updated").unwrap();
+        let loaded = store.load("test.md").unwrap().unwrap();
+        assert_eq!(loaded, "updated");
+    }
+
+    #[test]
+    fn parse_index_with_dash_dash_separator() {
+        let content = "- [Title](file.md) -- description with dashes\n";
+        let entries = MemoryStore::parse_index(content);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].title, "Title");
+        assert_eq!(entries[0].filename, "file.md");
+        assert_eq!(entries[0].description, "description with dashes");
+    }
+
+    #[test]
+    fn save_index_then_load_index_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+
+        let entries = vec![MemoryIndexEntry {
+            title: "First".into(),
+            filename: "first.md".into(),
+            description: "First memory".into(),
+        }];
+        store.save_index(&entries).unwrap();
+
+        let loaded = store.load_index().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "First");
+        assert_eq!(loaded[0].filename, "first.md");
+        assert_eq!(loaded[0].description, "First memory");
+    }
+
+    #[test]
+    fn save_creates_directory_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("deep").join("memory");
+        let store = MemoryStore::new(nested.clone());
+
+        store.save("test.md", "content").unwrap();
+        assert!(nested.join("test.md").exists());
     }
 }

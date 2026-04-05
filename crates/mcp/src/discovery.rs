@@ -37,9 +37,7 @@ pub enum McpTransportConfig {
         args: Vec<String>,
     },
     /// SSE transport — connect to a remote HTTP SSE endpoint.
-    Sse {
-        url: String,
-    },
+    Sse { url: String },
 }
 
 /// Parse MCP server configurations from a `mcpServers` JSON value.
@@ -60,9 +58,9 @@ pub enum McpTransportConfig {
 pub fn parse_mcp_servers(
     mcp_servers_value: &serde_json::Value,
 ) -> crab_common::Result<Vec<McpServerConfig>> {
-    let obj = mcp_servers_value.as_object().ok_or_else(|| {
-        crab_common::Error::Other("mcpServers must be a JSON object".into())
-    })?;
+    let obj = mcp_servers_value
+        .as_object()
+        .ok_or_else(|| crab_common::Error::Other("mcpServers must be a JSON object".into()))?;
 
     let mut configs = Vec::new();
 
@@ -89,17 +87,12 @@ pub fn parse_mcp_servers(
 ///
 /// Spawns the appropriate transport based on the config and performs the
 /// MCP initialize handshake.
-pub async fn connect_server(
-    config: &McpServerConfig,
-) -> crab_common::Result<crate::McpClient> {
+pub async fn connect_server(config: &McpServerConfig) -> crab_common::Result<crate::McpClient> {
     match &config.transport {
         McpTransportConfig::Stdio { command, args } => {
-            let transport = crate::transport::stdio::StdioTransport::spawn(
-                command,
-                args,
-                config.env.as_ref(),
-            )
-            .await?;
+            let transport =
+                crate::transport::stdio::StdioTransport::spawn(command, args, config.env.as_ref())
+                    .await?;
             crate::McpClient::connect(Box::new(transport), &config.name).await
         }
         McpTransportConfig::Sse { url } => {

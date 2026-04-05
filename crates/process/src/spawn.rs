@@ -91,12 +91,10 @@ pub async fn run(opts: SpawnOptions) -> crab_common::Result<SpawnOutput> {
             let mut stdout_buf = String::new();
             let mut stderr_buf = String::new();
             if let Some(mut r) = stdout_pipe {
-                let _ =
-                    tokio::io::AsyncReadExt::read_to_string(&mut r, &mut stdout_buf).await;
+                let _ = tokio::io::AsyncReadExt::read_to_string(&mut r, &mut stdout_buf).await;
             }
             if let Some(mut r) = stderr_pipe {
-                let _ =
-                    tokio::io::AsyncReadExt::read_to_string(&mut r, &mut stderr_buf).await;
+                let _ = tokio::io::AsyncReadExt::read_to_string(&mut r, &mut stderr_buf).await;
             }
             SpawnOutput {
                 stdout: stdout_buf,

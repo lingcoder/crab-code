@@ -10,6 +10,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use crab_config::crab_md;
+use crab_session::MemoryFile;
 use crab_tools::registry::ToolRegistry;
 
 /// Build the complete system prompt.
@@ -18,11 +19,24 @@ pub fn build_system_prompt(
     registry: &ToolRegistry,
     custom_instructions: Option<&str>,
 ) -> String {
+    build_system_prompt_with_memories(project_dir, registry, custom_instructions, &[])
+}
+
+/// Build the complete system prompt with memory context injected.
+pub fn build_system_prompt_with_memories(
+    project_dir: &Path,
+    registry: &ToolRegistry,
+    custom_instructions: Option<&str>,
+    memories: &[MemoryFile],
+) -> String {
     let mut prompt = String::with_capacity(4096);
 
     // Base instructions
-    let _ = writeln!(prompt, "You are Crab Code, an AI coding assistant. \
-        You help users with software engineering tasks using the tools available to you.");
+    let _ = writeln!(
+        prompt,
+        "You are Crab Code, an AI coding assistant. \
+        You help users with software engineering tasks using the tools available to you."
+    );
     let _ = writeln!(prompt);
 
     // Environment info
@@ -33,6 +47,9 @@ pub fn build_system_prompt(
 
     // CRAB.md instructions
     append_crab_md_instructions(&mut prompt, project_dir);
+
+    // Memory context
+    append_memory_context(&mut prompt, memories);
 
     // Custom instructions from settings
     if let Some(instructions) = custom_instructions
@@ -97,6 +114,26 @@ fn append_tool_descriptions(prompt: &mut String, registry: &ToolRegistry) {
         }
     }
     let _ = writeln!(prompt);
+}
+
+/// Append loaded memory files to the system prompt.
+fn append_memory_context(prompt: &mut String, memories: &[MemoryFile]) {
+    if memories.is_empty() {
+        return;
+    }
+
+    let _ = writeln!(prompt, "# Loaded Memories\n");
+    let _ = writeln!(
+        prompt,
+        "The following memories were loaded from previous sessions.\n"
+    );
+    for mem in memories {
+        let _ = writeln!(prompt, "## {} (type: {})\n", mem.name, mem.memory_type);
+        if !mem.description.is_empty() {
+            let _ = writeln!(prompt, "> {}\n", mem.description);
+        }
+        let _ = writeln!(prompt, "{}\n", mem.body);
+    }
 }
 
 /// Append CRAB.md project instructions.
@@ -190,5 +227,64 @@ mod tests {
         append_environment_info(&mut prompt);
         assert!(prompt.contains("Platform:"));
         assert!(prompt.contains("Shell:"));
+    }
+
+    #[test]
+    fn build_with_memories_includes_memory_section() {
+        let registry = ToolRegistry::new();
+        let memories = vec![
+            MemoryFile {
+                name: "User role".into(),
+                description: "Senior Rust developer".into(),
+                memory_type: "user".into(),
+                body: "The user is a senior Rust developer.".into(),
+                filename: "user_role.md".into(),
+            },
+            MemoryFile {
+                name: "No mocks".into(),
+                description: "Use real DB in tests".into(),
+                memory_type: "feedback".into(),
+                body: "Always use real database connections in integration tests.".into(),
+                filename: "feedback_testing.md".into(),
+            },
+        ];
+        let prompt = build_system_prompt_with_memories(Path::new("."), &registry, None, &memories);
+        assert!(prompt.contains("Loaded Memories"));
+        assert!(prompt.contains("User role"));
+        assert!(prompt.contains("type: user"));
+        assert!(prompt.contains("Senior Rust developer"));
+        assert!(prompt.contains("No mocks"));
+        assert!(prompt.contains("type: feedback"));
+        assert!(prompt.contains("real database"));
+    }
+
+    #[test]
+    fn build_with_no_memories_omits_section() {
+        let registry = ToolRegistry::new();
+        let prompt = build_system_prompt_with_memories(Path::new("."), &registry, None, &[]);
+        assert!(!prompt.contains("Loaded Memories"));
+    }
+
+    #[test]
+    fn append_memory_context_empty() {
+        let mut prompt = String::new();
+        append_memory_context(&mut prompt, &[]);
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn append_memory_context_formats_entries() {
+        let mut prompt = String::new();
+        let memories = vec![MemoryFile {
+            name: "Test".into(),
+            description: "A test memory".into(),
+            memory_type: "project".into(),
+            body: "Some project context.".into(),
+            filename: "test.md".into(),
+        }];
+        append_memory_context(&mut prompt, &memories);
+        assert!(prompt.contains("## Test (type: project)"));
+        assert!(prompt.contains("> A test memory"));
+        assert!(prompt.contains("Some project context."));
     }
 }

@@ -64,12 +64,10 @@ impl<'t> DiffView<'t> {
         additions: usize,
         deletions: usize,
     ) -> Line<'static> {
-        let mut spans = vec![
-            Span::styled(
-                format!("{file_path}  "),
-                Style::default().fg(self.theme.fg),
-            ),
-        ];
+        let mut spans = vec![Span::styled(
+            format!("{file_path}  "),
+            Style::default().fg(self.theme.fg),
+        )];
 
         if additions > 0 {
             spans.push(Span::styled(

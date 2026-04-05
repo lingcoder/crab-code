@@ -462,7 +462,11 @@ mod tests {
         };
         let events = chunk_to_stream_event(&chunk);
         assert!(events.iter().any(|e| matches!(e, StreamEvent::MessageStop)));
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::MessageDelta { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageDelta { .. }))
+        );
     }
 
     #[test]

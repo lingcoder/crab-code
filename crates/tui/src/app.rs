@@ -170,12 +170,17 @@ impl App {
             Event::ToolResult { .. } => {
                 self.spinner.set_message("Thinking...".to_string());
             }
-            Event::PermissionRequest { request_id, tool_name, input_summary } => {
+            Event::PermissionRequest {
+                request_id,
+                tool_name,
+                input_summary,
+            } => {
                 self.spinner.stop();
                 self.state = AppState::Confirming;
                 self.pending_permission = Some(request_id);
                 // Store info for display (simplified — just update spinner message)
-                self.spinner.start(format!("Allow {tool_name}? {input_summary} [y/n]"));
+                self.spinner
+                    .start(format!("Allow {tool_name}? {input_summary} [y/n]"));
             }
             Event::Error { message } => {
                 self.spinner.stop();
@@ -259,15 +264,14 @@ fn render_content(text: &str, area: Rect, buf: &mut Buffer) {
 
 fn render_bottom_bar(state: AppState, area: Rect, buf: &mut Buffer) {
     let hints = match state {
-        AppState::Idle | AppState::WaitingForInput => "Enter: send | Shift+Enter: newline | Ctrl+C: quit",
+        AppState::Idle | AppState::WaitingForInput => {
+            "Enter: send | Shift+Enter: newline | Ctrl+C: quit"
+        }
         AppState::Processing => "Ctrl+C: quit",
         AppState::Confirming => "y: allow | n: deny | Esc: deny",
     };
 
-    let line = Line::from(Span::styled(
-        hints,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let line = Line::from(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     Widget::render(line, area, buf);
 }
 
@@ -281,10 +285,7 @@ mod tests {
     }
 
     fn ctrl_key(c: char) -> TuiEvent {
-        TuiEvent::Key(KeyEvent::new(
-            KeyCode::Char(c),
-            KeyModifiers::CONTROL,
-        ))
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
     }
 
     #[test]
@@ -395,11 +396,13 @@ mod tests {
         let mut app = App::new("test");
         app.state = AppState::Processing;
 
-        app.handle_event(TuiEvent::Agent(crab_core::event::Event::PermissionRequest {
-            tool_name: "bash".into(),
-            input_summary: "rm -rf /tmp".into(),
-            request_id: "req_1".into(),
-        }));
+        app.handle_event(TuiEvent::Agent(
+            crab_core::event::Event::PermissionRequest {
+                tool_name: "bash".into(),
+                input_summary: "rm -rf /tmp".into(),
+                request_id: "req_1".into(),
+            },
+        ));
 
         assert_eq!(app.state, AppState::Confirming);
     }

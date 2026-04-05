@@ -22,12 +22,7 @@ impl RateLimiter {
     }
 
     /// Update state from API response headers.
-    pub fn update(
-        &mut self,
-        remaining_requests: u32,
-        remaining_tokens: u32,
-        reset_at: Instant,
-    ) {
+    pub fn update(&mut self, remaining_requests: u32, remaining_tokens: u32, reset_at: Instant) {
         self.remaining_requests = remaining_requests;
         self.remaining_tokens = remaining_tokens;
         self.reset_at = reset_at;
@@ -108,25 +103,36 @@ mod tests {
 
     #[test]
     fn rate_limited_is_retryable() {
-        let err = ApiError::RateLimited { retry_after_ms: 1000 };
+        let err = ApiError::RateLimited {
+            retry_after_ms: 1000,
+        };
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn status_429_is_retryable() {
-        let err = ApiError::Api { status: 429, message: "rate limited".into() };
+        let err = ApiError::Api {
+            status: 429,
+            message: "rate limited".into(),
+        };
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn status_529_is_retryable() {
-        let err = ApiError::Api { status: 529, message: "overloaded".into() };
+        let err = ApiError::Api {
+            status: 529,
+            message: "overloaded".into(),
+        };
         assert!(is_retryable(&err));
     }
 
     #[test]
     fn status_400_is_not_retryable() {
-        let err = ApiError::Api { status: 400, message: "bad request".into() };
+        let err = ApiError::Api {
+            status: 400,
+            message: "bad request".into(),
+        };
         assert!(!is_retryable(&err));
     }
 
@@ -141,5 +147,104 @@ mod tests {
         let rl = RateLimiter::new();
         assert!(!rl.should_wait());
         assert_eq!(rl.wait_duration(), Duration::ZERO);
+    }
+
+    #[test]
+    fn rate_limiter_should_wait_zero_requests() {
+        let mut rl = RateLimiter::new();
+        rl.update(0, 100, Instant::now() + Duration::from_secs(10));
+        assert!(rl.should_wait());
+    }
+
+    #[test]
+    fn rate_limiter_should_wait_zero_tokens() {
+        let mut rl = RateLimiter::new();
+        rl.update(100, 0, Instant::now() + Duration::from_secs(5));
+        assert!(rl.should_wait());
+    }
+
+    #[test]
+    fn rate_limiter_wait_duration_future_reset() {
+        let mut rl = RateLimiter::new();
+        let future = Instant::now() + Duration::from_secs(5);
+        rl.update(0, 0, future);
+        assert!(rl.should_wait());
+        // wait_duration should be positive (close to 5s)
+        let d = rl.wait_duration();
+        assert!(d > Duration::ZERO);
+        assert!(d <= Duration::from_secs(6));
+    }
+
+    #[test]
+    fn rate_limiter_wait_duration_past_reset() {
+        let mut rl = RateLimiter::new();
+        // reset_at in the past
+        let past = Instant::now() - Duration::from_secs(1);
+        rl.update(0, 0, past);
+        assert!(rl.should_wait());
+        // saturating_duration_since should return ZERO for past instants
+        assert_eq!(rl.wait_duration(), Duration::ZERO);
+    }
+
+    #[test]
+    fn rate_limiter_update_restores_capacity() {
+        let mut rl = RateLimiter::new();
+        rl.update(0, 0, Instant::now() + Duration::from_secs(10));
+        assert!(rl.should_wait());
+        // Simulate header update with restored capacity
+        rl.update(100, 50000, Instant::now());
+        assert!(!rl.should_wait());
+    }
+
+    #[test]
+    fn rate_limiter_default_trait() {
+        let rl = RateLimiter::default();
+        assert!(!rl.should_wait());
+        assert_eq!(rl.remaining_requests, u32::MAX);
+        assert_eq!(rl.remaining_tokens, u32::MAX);
+    }
+
+    #[test]
+    fn backoff_delay_all_attempts() {
+        // Verify the full sequence
+        assert_eq!(backoff_delay(0), Duration::from_millis(500));
+        assert_eq!(backoff_delay(1), Duration::from_millis(1000));
+        assert_eq!(backoff_delay(2), Duration::from_millis(2000));
+        assert_eq!(backoff_delay(3), Duration::from_millis(4000));
+        assert_eq!(backoff_delay(4), Duration::from_millis(8000));
+        assert_eq!(backoff_delay(5), Duration::from_millis(16000));
+        assert_eq!(backoff_delay(6), Duration::from_secs(30)); // capped
+    }
+
+    #[test]
+    fn backoff_delay_huge_attempt_saturates() {
+        // u32::MAX should not panic; just caps at 30s
+        let d = backoff_delay(u32::MAX);
+        assert_eq!(d, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn max_retries_constant() {
+        assert_eq!(MAX_RETRIES, 3);
+    }
+
+    #[test]
+    fn timeout_is_retryable() {
+        assert!(is_retryable(&ApiError::Timeout));
+    }
+
+    #[test]
+    fn status_500_is_not_retryable() {
+        let err = ApiError::Api {
+            status: 500,
+            message: "internal".into(),
+        };
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn common_error_is_not_retryable() {
+        let err = ApiError::Common(crab_common::Error::Other("test".into()));
+        assert!(!is_retryable(&err));
     }
 }

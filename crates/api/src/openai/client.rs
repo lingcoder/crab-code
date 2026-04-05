@@ -60,17 +60,13 @@ impl OpenAiClient {
         // We need to use stream::once + flatten to handle the async request
         // setup followed by the streaming response.
         stream::once(async move {
-            let resp = self
-                .build_request(&chat_req)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        ApiError::Timeout
-                    } else {
-                        ApiError::Http(e)
-                    }
-                })?;
+            let resp = self.build_request(&chat_req).send().await.map_err(|e| {
+                if e.is_timeout() {
+                    ApiError::Timeout
+                } else {
+                    ApiError::Http(e)
+                }
+            })?;
 
             let status = resp.status();
             if !status.is_success() {
@@ -97,17 +93,13 @@ impl OpenAiClient {
     pub async fn send(&self, req: MessageRequest<'_>) -> Result<MessageResponse> {
         let chat_req = convert::to_chat_completion_request(&req, false);
 
-        let resp = self
-            .build_request(&chat_req)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ApiError::Timeout
-                } else {
-                    ApiError::Http(e)
-                }
-            })?;
+        let resp = self.build_request(&chat_req).send().await.map_err(|e| {
+            if e.is_timeout() {
+                ApiError::Timeout
+            } else {
+                ApiError::Http(e)
+            }
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -132,9 +124,7 @@ impl OpenAiClient {
 ///
 /// Each `data: {...}` line is parsed as a `ChatCompletionChunk` and converted
 /// to internal events. The stream terminates on `data: [DONE]`.
-fn parse_sse_stream(
-    resp: reqwest::Response,
-) -> impl Stream<Item = Result<StreamEvent>> + Send {
+fn parse_sse_stream(resp: reqwest::Response) -> impl Stream<Item = Result<StreamEvent>> + Send {
     use eventsource_stream::Eventsource;
 
     resp.bytes_stream()
@@ -143,38 +133,30 @@ fn parse_sse_stream(
             let done = matches!(event, Ok(ev) if ev.data == "[DONE]");
             async move { !done }
         })
-        .flat_map(move |event| {
-            match event {
-                Ok(ev) => {
-                    if ev.data.is_empty() || ev.data == "[DONE]" {
-                        return stream::iter(vec![]).boxed();
-                    }
+        .flat_map(move |event| match event {
+            Ok(ev) => {
+                if ev.data.is_empty() || ev.data == "[DONE]" {
+                    return stream::iter(vec![]).boxed();
+                }
 
-                    match serde_json::from_str::<super::types::ChatCompletionChunk>(&ev.data) {
-                        Ok(chunk) => {
-                            let events: Vec<Result<StreamEvent>> =
-                                convert::chunk_to_stream_event(&chunk)
-                                    .into_iter()
-                                    .map(Ok)
-                                    .collect();
-                            stream::iter(events).boxed()
-                        }
-                        Err(e) => {
-                            stream::once(async move {
-                                Err(ApiError::Sse(format!(
-                                    "failed to parse SSE chunk: {e}"
-                                )))
-                            })
-                            .boxed()
-                        }
+                match serde_json::from_str::<super::types::ChatCompletionChunk>(&ev.data) {
+                    Ok(chunk) => {
+                        let events: Vec<Result<StreamEvent>> =
+                            convert::chunk_to_stream_event(&chunk)
+                                .into_iter()
+                                .map(Ok)
+                                .collect();
+                        stream::iter(events).boxed()
                     }
-                }
-                Err(e) => {
-                    stream::once(async move {
-                        Err(ApiError::Sse(format!("SSE stream error: {e}")))
+                    Err(e) => stream::once(async move {
+                        Err(ApiError::Sse(format!("failed to parse SSE chunk: {e}")))
                     })
-                    .boxed()
+                    .boxed(),
                 }
+            }
+            Err(e) => {
+                stream::once(async move { Err(ApiError::Sse(format!("SSE stream error: {e}"))) })
+                    .boxed()
             }
         })
 }

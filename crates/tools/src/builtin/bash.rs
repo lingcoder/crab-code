@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crab_common::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
-use crab_process::spawn::{run, SpawnOptions};
+use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
 /// Shell command execution tool.
@@ -46,10 +46,7 @@ impl Tool for BashTool {
         input: Value,
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
-        let command = input["command"]
-            .as_str()
-            .unwrap_or("")
-            .to_owned();
+        let command = input["command"].as_str().unwrap_or("").to_owned();
         let timeout_ms = input["timeout"].as_u64();
         let working_dir = ctx.working_dir.clone();
 
@@ -93,9 +90,7 @@ impl Tool for BashTool {
             }
 
             if output.timed_out {
-                return Ok(ToolOutput::error(format!(
-                    "Command timed out\n{combined}"
-                )));
+                return Ok(ToolOutput::error(format!("Command timed out\n{combined}")));
             }
 
             if output.exit_code != 0 {
@@ -148,11 +143,7 @@ mod tests {
     #[tokio::test]
     async fn bash_nonzero_exit_is_error() {
         let tool = BashTool;
-        let cmd = if cfg!(windows) {
-            "exit 1"
-        } else {
-            "exit 1"
-        };
+        let cmd = if cfg!(windows) { "exit 1" } else { "exit 1" };
         let input = serde_json::json!({ "command": cmd });
         let out = tool.execute(input, &make_ctx()).await.unwrap();
         assert!(out.is_error);

@@ -48,9 +48,7 @@ impl StdioTransport {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            crab_common::Error::Other(format!(
-                "failed to spawn MCP server '{command}': {e}"
-            ))
+            crab_common::Error::Other(format!("failed to spawn MCP server '{command}': {e}"))
         })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
@@ -143,9 +141,7 @@ impl Transport for StdioTransport {
 
             // Wait for the response from the reader task.
             rx.await.map_err(|_| {
-                crab_common::Error::Other(
-                    "MCP server closed connection before responding".into(),
-                )
+                crab_common::Error::Other("MCP server closed connection before responding".into())
             })
         })
     }
@@ -157,11 +153,7 @@ impl Transport for StdioTransport {
     ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
         let notif = JsonRpcNotification::new(
             method.to_string(),
-            if params.is_null() {
-                None
-            } else {
-                Some(params)
-            },
+            if params.is_null() { None } else { Some(params) },
         );
         Box::pin(async move {
             let json = serde_json::to_string(&notif).map_err(|e| {
@@ -200,9 +192,10 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
 
     loop {
         header_line.clear();
-        let bytes_read = reader.read_line(&mut header_line).await.map_err(|e| {
-            crab_common::Error::Other(format!("failed to read header: {e}"))
-        })?;
+        let bytes_read = reader
+            .read_line(&mut header_line)
+            .await
+            .map_err(|e| crab_common::Error::Other(format!("failed to read header: {e}")))?;
 
         if bytes_read == 0 {
             return Ok(None); // EOF
@@ -227,13 +220,11 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     let mut body = vec![0u8; length];
     tokio::io::AsyncReadExt::read_exact(reader, &mut body)
         .await
-        .map_err(|e| {
-            crab_common::Error::Other(format!("failed to read message body: {e}"))
-        })?;
+        .map_err(|e| crab_common::Error::Other(format!("failed to read message body: {e}")))?;
 
-    String::from_utf8(body).map(Some).map_err(|e| {
-        crab_common::Error::Other(format!("invalid UTF-8 in MCP message: {e}"))
-    })
+    String::from_utf8(body)
+        .map(Some)
+        .map_err(|e| crab_common::Error::Other(format!("invalid UTF-8 in MCP message: {e}")))
 }
 
 #[cfg(test)]

@@ -63,18 +63,14 @@ pub fn check_permission(
     match source {
         // MCP external: Default and TrustProject both require Prompt (untrusted source)
         ToolSource::McpExternal { .. } => {
-            PermissionDecision::AskUser(format!(
-                "Allow MCP tool '{tool_name}' to execute?"
-            ))
+            PermissionDecision::AskUser(format!("Allow MCP tool '{tool_name}' to execute?"))
         }
 
         // Agent spawn: TrustProject auto-allows, Default requires Prompt
         ToolSource::AgentSpawn => match policy.mode {
             PermissionMode::TrustProject => PermissionDecision::Allow,
             PermissionMode::Default => {
-                PermissionDecision::AskUser(format!(
-                    "Allow agent tool '{tool_name}' to execute?"
-                ))
+                PermissionDecision::AskUser(format!("Allow agent tool '{tool_name}' to execute?"))
             }
             PermissionMode::Dangerously => unreachable!(),
         },
@@ -139,11 +135,7 @@ pub fn is_dangerous_command(input: &serde_json::Value) -> bool {
 /// Check if the file path in the tool input is within the project directory.
 ///
 /// Uses `std::fs::canonicalize()` to resolve symlinks before comparison.
-fn is_path_in_project(
-    tool_name: &str,
-    input: &serde_json::Value,
-    project_dir: &Path,
-) -> bool {
+fn is_path_in_project(tool_name: &str, input: &serde_json::Value, project_dir: &Path) -> bool {
     // BashTool: cannot reliably determine paths from shell commands,
     // so conservatively assume in-project (dangerous commands caught separately)
     if tool_name == "bash" {
@@ -164,9 +156,13 @@ fn is_path_in_project(
     let target = Path::new(path_str);
 
     // Try to canonicalize both paths for symlink-safe comparison
-    let canonical_project = project_dir.canonicalize().unwrap_or_else(|_| project_dir.to_path_buf());
+    let canonical_project = project_dir
+        .canonicalize()
+        .unwrap_or_else(|_| project_dir.to_path_buf());
     let canonical_target = if target.exists() {
-        target.canonicalize().unwrap_or_else(|_| target.to_path_buf())
+        target
+            .canonicalize()
+            .unwrap_or_else(|_| target.to_path_buf())
     } else {
         // For non-existent paths, canonicalize the parent
         target
@@ -302,14 +298,7 @@ mod tests {
     #[test]
     fn default_mode_prompts_for_write_tools() {
         let p = policy(PermissionMode::Default);
-        let result = check_permission(
-            &p,
-            "write",
-            &ToolSource::BuiltIn,
-            false,
-            &json!({}),
-            cwd(),
-        );
+        let result = check_permission(&p, "write", &ToolSource::BuiltIn, false, &json!({}), cwd());
         assert!(matches!(result, PermissionDecision::AskUser(_)));
     }
 
@@ -429,7 +418,9 @@ mod tests {
 
     #[test]
     fn detects_dangerous_sudo() {
-        assert!(is_dangerous_command(&json!({"command": "sudo apt install foo"})));
+        assert!(is_dangerous_command(
+            &json!({"command": "sudo apt install foo"})
+        ));
     }
 
     #[test]
@@ -466,22 +457,14 @@ mod tests {
             allowed_tools: vec!["bash".into()],
             denied_tools: vec!["bash".into()],
         };
-        let result = check_permission(
-            &p,
-            "bash",
-            &ToolSource::BuiltIn,
-            false,
-            &json!({}),
-            cwd(),
-        );
+        let result = check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
         assert!(matches!(result, PermissionDecision::Deny(_)));
     }
 
     #[test]
     fn denied_overrides_read_only() {
         let p = policy_with_denied(PermissionMode::Default, vec!["read".into()]);
-        let result =
-            check_permission(&p, "read", &ToolSource::BuiltIn, true, &json!({}), cwd());
+        let result = check_permission(&p, "read", &ToolSource::BuiltIn, true, &json!({}), cwd());
         assert!(matches!(result, PermissionDecision::Deny(_)));
     }
 }

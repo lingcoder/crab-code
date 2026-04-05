@@ -66,6 +66,41 @@ pub enum Event {
         limit: u64,
     },
 
+    // ─── Memory ───
+    /// Memory files were loaded at session start.
+    MemoryLoaded { count: usize },
+
+    /// A memory file was saved during the session.
+    MemorySaved { filename: String },
+
+    // ─── Session history ───
+    /// Session was saved to disk.
+    SessionSaved { session_id: String },
+
+    /// Session was resumed from disk.
+    SessionResumed {
+        session_id: String,
+        message_count: usize,
+    },
+
+    // ─── Sub-agent workers ───
+    /// A sub-agent worker has started.
+    AgentWorkerStarted {
+        worker_id: String,
+        task_prompt: String,
+    },
+
+    /// A sub-agent worker has completed.
+    AgentWorkerCompleted {
+        worker_id: String,
+        /// Final text output from the worker, if any.
+        result: Option<String>,
+        /// Whether the worker completed successfully.
+        success: bool,
+        /// Total tokens used by this worker.
+        usage: TokenUsage,
+    },
+
     // ─── Errors ───
     /// An error occurred during processing.
     Error { message: String },
@@ -336,6 +371,33 @@ mod tests {
     fn event_serde_error() {
         serde_roundtrip(&Event::Error {
             message: "rate limit exceeded".into(),
+        });
+    }
+
+    #[test]
+    fn event_serde_memory_loaded() {
+        serde_roundtrip(&Event::MemoryLoaded { count: 5 });
+    }
+
+    #[test]
+    fn event_serde_memory_saved() {
+        serde_roundtrip(&Event::MemorySaved {
+            filename: "user_role.md".into(),
+        });
+    }
+
+    #[test]
+    fn event_serde_session_saved() {
+        serde_roundtrip(&Event::SessionSaved {
+            session_id: "sess_abc".into(),
+        });
+    }
+
+    #[test]
+    fn event_serde_session_resumed() {
+        serde_roundtrip(&Event::SessionResumed {
+            session_id: "sess_abc".into(),
+            message_count: 42,
         });
     }
 }

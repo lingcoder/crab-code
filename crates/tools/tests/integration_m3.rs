@@ -151,8 +151,14 @@ async fn read_file_with_offset_and_limit() {
     // Should show lines 2-3 only
     assert!(text.contains("2\tline2"), "expected line2: {text}");
     assert!(text.contains("3\tline3"), "expected line3: {text}");
-    assert!(!text.contains("1\tline1"), "should not contain line1: {text}");
-    assert!(!text.contains("4\tline4"), "should not contain line4: {text}");
+    assert!(
+        !text.contains("1\tline1"),
+        "should not contain line1: {text}"
+    );
+    assert!(
+        !text.contains("4\tline4"),
+        "should not contain line4: {text}"
+    );
 }
 
 #[tokio::test]
@@ -286,7 +292,10 @@ async fn glob_with_explicit_path() {
     assert!(!output.is_error);
     let text = output.text();
     assert!(text.contains("inner.rs"), "expected inner.rs: {text}");
-    assert!(!text.contains("outer.rs"), "should not contain outer.rs: {text}");
+    assert!(
+        !text.contains("outer.rs"),
+        "should not contain outer.rs: {text}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -338,11 +347,7 @@ async fn grep_files_with_matches_mode() {
 async fn grep_count_mode() {
     let executor = make_executor();
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        tmp.path().join("multi.txt"),
-        "match1\nmatch2\nmatch3\n",
-    )
-    .unwrap();
+    std::fs::write(tmp.path().join("multi.txt"), "match1\nmatch2\nmatch3\n").unwrap();
 
     let ctx = make_ctx(tmp.path(), PermissionMode::Default);
     let input = serde_json::json!({
@@ -351,7 +356,11 @@ async fn grep_count_mode() {
     });
     let output = executor.execute("grep", input, &ctx).await.unwrap();
     assert!(!output.is_error);
-    assert!(output.text().contains(":3"), "expected count 3: {}", output.text());
+    assert!(
+        output.text().contains(":3"),
+        "expected count 3: {}",
+        output.text()
+    );
 }
 
 #[tokio::test]
@@ -383,7 +392,10 @@ async fn grep_with_glob_filter() {
     assert!(!output.is_error);
     let text = output.text();
     assert!(text.contains("code.rs"), "expected code.rs: {text}");
-    assert!(!text.contains("doc.md"), "should not contain doc.md: {text}");
+    assert!(
+        !text.contains("doc.md"),
+        "should not contain doc.md: {text}"
+    );
 }
 
 #[tokio::test]
@@ -424,7 +436,11 @@ async fn permission_denied_tool_blocked() {
     let input = serde_json::json!({ "command": "echo hello" });
     let output = executor.execute("bash", input, &ctx).await.unwrap();
     assert!(output.is_error);
-    assert!(output.text().contains("denied"), "expected denied message: {}", output.text());
+    assert!(
+        output.text().contains("denied"),
+        "expected denied message: {}",
+        output.text()
+    );
 }
 
 #[tokio::test]
@@ -455,7 +471,11 @@ async fn permission_read_only_always_allowed() {
     let ctx = make_ctx(tmp.path(), PermissionMode::Default);
     let input = serde_json::json!({ "file_path": file.to_str().unwrap() });
     let output = executor.execute("read", input, &ctx).await.unwrap();
-    assert!(!output.is_error, "read should be allowed: {}", output.text());
+    assert!(
+        !output.is_error,
+        "read should be allowed: {}",
+        output.text()
+    );
 }
 
 #[tokio::test]
@@ -466,7 +486,11 @@ async fn permission_dangerously_allows_all() {
 
     let input = serde_json::json!({ "command": "echo permitted" });
     let output = executor.execute("bash", input, &ctx).await.unwrap();
-    assert!(!output.is_error, "Dangerously should auto-allow: {}", output.text());
+    assert!(
+        !output.is_error,
+        "Dangerously should auto-allow: {}",
+        output.text()
+    );
     assert!(output.text().contains("permitted"));
 }
 
@@ -498,7 +522,11 @@ async fn execute_unchecked_skips_permission() {
         .execute_unchecked("read", input, &ctx)
         .await
         .unwrap();
-    assert!(!output.is_error, "unchecked should bypass denial: {}", output.text());
+    assert!(
+        !output.is_error,
+        "unchecked should bypass denial: {}",
+        output.text()
+    );
     assert!(output.text().contains("unchecked content"));
 }
 
@@ -516,9 +544,20 @@ fn register_all_builtins_produces_14_tools() {
 fn all_expected_tools_registered() {
     let registry = create_default_registry();
     let expected = [
-        "bash", "read", "write", "edit", "glob", "grep",
-        "notebook_edit", "agent", "web_search", "web_fetch",
-        "task_create", "task_list", "task_update", "task_get",
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        "notebook_edit",
+        "agent",
+        "web_search",
+        "web_fetch",
+        "task_create",
+        "task_list",
+        "task_update",
+        "task_get",
     ];
     for name in &expected {
         assert!(
@@ -572,10 +611,10 @@ fn tool_schemas_are_sorted_by_name() {
 #[test]
 fn register_same_tool_twice_overwrites() {
     let mut registry = ToolRegistry::new();
-    register_all_builtins(&mut registry);
+    register_all_builtins(&mut registry, None);
     let count_before = registry.len();
     // Re-register — should overwrite, not duplicate
-    register_all_builtins(&mut registry);
+    register_all_builtins(&mut registry, None);
     assert_eq!(registry.len(), count_before);
 }
 
@@ -584,7 +623,10 @@ fn filtered_schemas_works() {
     let registry = create_default_registry();
     let filtered = registry.tool_schemas_filtered(&["bash", "read", "missing_tool"]);
     assert_eq!(filtered.len(), 2);
-    let names: Vec<&str> = filtered.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = filtered
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"bash"));
     assert!(names.contains(&"read"));
 }

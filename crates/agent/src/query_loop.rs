@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
-use crab_api::types::{CacheBreakpoint, MessageRequest, StreamEvent};
 use crab_api::LlmBackend;
+use crab_api::types::{CacheBreakpoint, MessageRequest, StreamEvent};
 use crab_core::event::Event;
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
@@ -48,9 +48,7 @@ pub async fn query_loop(
         check_and_compact(conversation, &context_mgr, &event_tx).await;
 
         // Emit turn start
-        let _ = event_tx
-            .send(Event::TurnStart { turn_index })
-            .await;
+        let _ = event_tx.send(Event::TurnStart { turn_index }).await;
         turn_index += 1;
 
         // Build cache breakpoints
@@ -78,9 +76,7 @@ pub async fn query_loop(
         // Record usage
         conversation.record_usage(total_usage.clone());
         let _ = event_tx
-            .send(Event::MessageEnd {
-                usage: total_usage,
-            })
+            .send(Event::MessageEnd { usage: total_usage })
             .await;
 
         // Add assistant message to conversation
@@ -93,14 +89,8 @@ pub async fn query_loop(
         }
 
         // Extract tool calls and execute them
-        let tool_results = execute_tool_calls(
-            &assistant_msg,
-            executor,
-            tool_ctx,
-            &event_tx,
-            &cancel,
-        )
-        .await?;
+        let tool_results =
+            execute_tool_calls(&assistant_msg, executor, tool_ctx, &event_tx, &cancel).await?;
 
         // Build tool result message and add to conversation
         let result_msg = tool_results_message(tool_results);
@@ -129,16 +119,18 @@ async fn stream_response(
             break;
         }
 
-        let event = event.map_err(|e| {
-            crab_common::Error::Other(format!("SSE stream error: {e}"))
-        })?;
+        let event =
+            event.map_err(|e| crab_common::Error::Other(format!("SSE stream error: {e}")))?;
 
         match event {
             StreamEvent::MessageStart { id, usage } => {
                 total_usage += usage;
                 let _ = event_tx.send(Event::MessageStart { id }).await;
             }
-            StreamEvent::ContentBlockStart { index, content_type } => {
+            StreamEvent::ContentBlockStart {
+                index,
+                content_type,
+            } => {
                 // Ensure we have enough slots
                 while content_blocks.len() <= index {
                     content_blocks.push(ContentBlockAccum::new("text"));
@@ -149,14 +141,10 @@ async fn stream_response(
                 if let Some(block) = content_blocks.get_mut(index) {
                     block.text.push_str(&delta);
                 }
-                let _ = event_tx
-                    .send(Event::ContentDelta { index, delta })
-                    .await;
+                let _ = event_tx.send(Event::ContentDelta { index, delta }).await;
             }
             StreamEvent::ContentBlockStop { index } => {
-                let _ = event_tx
-                    .send(Event::ContentBlockStop { index })
-                    .await;
+                let _ = event_tx.send(Event::ContentBlockStop { index }).await;
             }
             StreamEvent::MessageDelta {
                 usage,
@@ -215,9 +203,20 @@ impl ContentBlockAccum {
                 // but in the SSE protocol those come as separate fields.
                 // For now, parse the accumulated JSON as a tool_use block.
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&self.text) {
-                    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let input = val.get("input").cloned().unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+                    let id = val
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = val
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let input = val
+                        .get("input")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
                     ContentBlock::ToolUse { id, name, input }
                 } else {
                     // Fallback: treat as text
@@ -272,9 +271,7 @@ async fn check_and_compact(
                     .await;
             }
         }
-        ContextAction::Warning {
-            used, limit, ..
-        } => {
+        ContextAction::Warning { used, limit, .. } => {
             let _ = event_tx
                 .send(Event::TokenWarning {
                     usage_pct: used as f32 / limit as f32,
@@ -388,9 +385,7 @@ pub fn partition_tool_calls<'a>(
     for block in blocks {
         if let ContentBlock::ToolUse { id, name, input } = block {
             let call = ToolCallRef { id, name, input };
-            let is_read = registry
-                .get(name)
-                .is_some_and(|t| t.is_read_only());
+            let is_read = registry.get(name).is_some_and(|t| t.is_read_only());
             if is_read {
                 reads.push(call);
             } else {
@@ -421,16 +416,19 @@ impl StreamingToolExecutor {
         name: String,
         input: serde_json::Value,
         ctx: ToolContext,
-        tool_fn: impl FnOnce(String, serde_json::Value, ToolContext) -> tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>,
+        tool_fn: impl FnOnce(
+            String,
+            serde_json::Value,
+            ToolContext,
+        )
+            -> tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>,
     ) {
         let handle = tool_fn(name, input, ctx);
         self.pending.push(handle);
     }
 
     /// Collect all pending tool results after `message_stop`.
-    pub async fn collect_all(
-        &mut self,
-    ) -> Vec<(String, crab_common::Result<ToolOutput>)> {
+    pub async fn collect_all(&mut self) -> Vec<(String, crab_common::Result<ToolOutput>)> {
         let mut results = Vec::new();
         for handle in self.pending.drain(..) {
             results.push(handle.await.expect("tool task panicked"));

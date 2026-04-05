@@ -100,10 +100,7 @@ impl Widget for &CostBar {
             Span::styled(format!("{} calls", self.api_calls), value),
         ]);
 
-        let line_area = Rect {
-            height: 1,
-            ..area
-        };
+        let line_area = Rect { height: 1, ..area };
         Widget::render(line, line_area, buf);
     }
 }

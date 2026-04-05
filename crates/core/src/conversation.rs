@@ -345,7 +345,10 @@ mod tests {
         conv.push(Message::assistant("new answer"));
 
         // Set budget so only the last turn fits
-        let last_turn_tokens = conv.turn_messages(1).unwrap().iter()
+        let last_turn_tokens = conv
+            .turn_messages(1)
+            .unwrap()
+            .iter()
             .map(Message::estimated_tokens)
             .sum::<u64>();
         let removed = conv.truncate_to_budget(last_turn_tokens + 1);

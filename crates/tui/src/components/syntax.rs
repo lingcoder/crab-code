@@ -82,10 +82,16 @@ impl SyntaxHighlighter {
                 .map(|(style, text)| {
                     let fg = syntect_color_to_ratatui(style.foreground);
                     let mut ratatui_style = Style::default().fg(fg);
-                    if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                    if style
+                        .font_style
+                        .contains(syntect::highlighting::FontStyle::BOLD)
+                    {
                         ratatui_style = ratatui_style.add_modifier(Modifier::BOLD);
                     }
-                    if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                    if style
+                        .font_style
+                        .contains(syntect::highlighting::FontStyle::ITALIC)
+                    {
                         ratatui_style = ratatui_style.add_modifier(Modifier::ITALIC);
                     }
                     if style

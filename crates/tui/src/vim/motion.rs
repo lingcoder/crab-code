@@ -95,10 +95,7 @@ impl Motion {
             Self::BufferTop => CursorPos { row: 0, col: 0 },
             Self::BufferBottom => {
                 let last = lines.len() - 1;
-                CursorPos {
-                    row: last,
-                    col: 0,
-                }
+                CursorPos { row: last, col: 0 }
             }
         }
     }

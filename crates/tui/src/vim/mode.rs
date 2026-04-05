@@ -3,9 +3,10 @@
 use std::fmt;
 
 /// Active vim editing mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VimMode {
     /// Normal mode — navigation and operators.
+    #[default]
     Normal,
     /// Insert mode — text input.
     Insert,
@@ -37,12 +38,6 @@ impl VimMode {
             Self::Visual => "VISUAL",
             Self::Command => "COMMAND",
         }
-    }
-}
-
-impl Default for VimMode {
-    fn default() -> Self {
-        Self::Normal
     }
 }
 

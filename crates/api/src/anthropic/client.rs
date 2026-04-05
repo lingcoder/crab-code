@@ -35,11 +35,7 @@ impl AnthropicClient {
 
     /// Build a POST request to `/v1/messages` with auth and standard headers.
     async fn build_request(&self, body: &[u8]) -> Result<reqwest::RequestBuilder> {
-        let auth = self
-            .auth
-            .get_auth()
-            .await
-            .map_err(ApiError::Common)?;
+        let auth = self.auth.get_auth().await.map_err(ApiError::Common)?;
 
         let url = format!("{}/v1/messages", self.base_url);
         let mut builder = self
@@ -54,8 +50,7 @@ impl AnthropicClient {
                 builder = builder.header("x-api-key", key);
             }
             crab_auth::AuthMethod::OAuth(token) => {
-                builder =
-                    builder.header("authorization", format!("Bearer {}", token.access_token));
+                builder = builder.header("authorization", format!("Bearer {}", token.access_token));
             }
         }
 

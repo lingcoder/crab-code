@@ -1,6 +1,7 @@
-//! TUI REPL runner — wires App, AgentSession, and terminal lifecycle together.
+//! TUI REPL runner — wires App, [`AgentSession`], and terminal lifecycle together.
 
 use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -18,7 +19,7 @@ use crab_core::event::Event;
 use crab_core::message::Message;
 use crab_session::Conversation;
 use crab_tools::builtin::create_default_registry;
-use crab_tools::executor::ToolExecutor;
+use crab_tools::executor::{PermissionHandler, ToolExecutor};
 
 use crate::app::{App, AppAction};
 use crate::event::spawn_event_loop;
@@ -37,7 +38,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     // Build tool registry and executor
     let registry = create_default_registry();
     let tool_schemas = registry.tool_schemas();
-    let executor = Arc::new(ToolExecutor::new(Arc::new(registry)));
+    let mut executor = ToolExecutor::new(Arc::new(registry));
 
     let conversation = Conversation::new(
         config.session_config.session_id.clone(),
@@ -62,6 +63,14 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     };
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);
+
+    // Permission response channel: TUI event loop → permission handler
+    let (perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel::<(String, bool)>();
+    executor.set_permission_handler(Arc::new(TuiPermissionHandler {
+        event_tx: event_tx.clone(),
+        response_rx: Arc::new(tokio::sync::Mutex::new(perm_resp_rx)),
+    }));
+    let executor = Arc::new(executor);
 
     // Bridge: bounded session events → unbounded TUI channel
     let (agent_ui_tx, agent_ui_rx) = mpsc::unbounded_channel::<Event>();
@@ -92,6 +101,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         tool_ctx,
         loop_config,
         event_tx,
+        perm_resp_tx,
     )
     .await;
 
@@ -107,6 +117,57 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     result
 }
 
+/// TUI-based permission handler.
+///
+/// When the executor encounters a tool that needs user confirmation, this handler:
+/// 1. Sends a `PermissionRequest` event through the event channel to the TUI
+/// 2. Waits for the TUI to send back a `PermissionResponse` via a oneshot channel
+///
+/// The TUI event loop listens for `AppAction::PermissionResponse` and sends
+/// the response back through the event channel, which the forwarder picks up
+/// and delivers to the waiting oneshot receiver.
+struct TuiPermissionHandler {
+    event_tx: mpsc::Sender<Event>,
+    /// Receiver for permission responses from the TUI.
+    /// Each request creates a fresh oneshot; we use an unbounded channel
+    /// indexed by `request_id`.
+    response_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(String, bool)>>>,
+}
+
+impl PermissionHandler for TuiPermissionHandler {
+    fn ask_permission(
+        &self,
+        tool_name: &str,
+        prompt: &str,
+    ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+        let tool_name = tool_name.to_string();
+        let prompt = prompt.to_string();
+        let request_id = crab_common::id::new_ulid();
+        let event_tx = self.event_tx.clone();
+        let response_rx = self.response_rx.clone();
+
+        Box::pin(async move {
+            // Send permission request to TUI
+            let _ = event_tx
+                .send(Event::PermissionRequest {
+                    tool_name,
+                    input_summary: prompt,
+                    request_id: request_id.clone(),
+                })
+                .await;
+
+            // Wait for response from TUI
+            let mut rx = response_rx.lock().await;
+            while let Some((id, allowed)) = rx.recv().await {
+                if id == request_id {
+                    return allowed;
+                }
+            }
+            false // channel closed — deny by default
+        })
+    }
+}
+
 /// Wrapper to shuttle conversation back from a spawned agent task.
 struct AgentTaskResult {
     conversation: Conversation,
@@ -114,7 +175,7 @@ struct AgentTaskResult {
 }
 
 /// The core render + event loop.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -125,6 +186,7 @@ async fn run_loop(
     mut tool_ctx: crab_core::tool::ToolContext,
     loop_config: crab_agent::QueryLoopConfig,
     event_tx: mpsc::Sender<Event>,
+    perm_resp_tx: mpsc::UnboundedSender<(String, bool)>,
 ) -> anyhow::Result<()> {
     // Channel to get conversation back from agent task
     let mut conv_return: Option<tokio::sync::oneshot::Receiver<AgentTaskResult>> = None;
@@ -177,9 +239,8 @@ async fn run_loop(
             AppAction::Quit => {
                 cancel.cancel();
                 if let Some(rx) = conv_return.take() {
-                    if let Ok(result) = rx.await {
-                        conversation = result.conversation;
-                    }
+                    // Wait for agent task to return conversation (for clean shutdown)
+                    let _ = rx.await;
                 }
                 break;
             }
@@ -231,11 +292,12 @@ async fn run_loop(
                     });
                 });
             }
-            AppAction::PermissionResponse { request_id, allowed } => {
-                let _ = event_tx.send(Event::PermissionResponse {
-                    request_id,
-                    allowed,
-                }).await;
+            AppAction::PermissionResponse {
+                request_id,
+                allowed,
+            } => {
+                // Send response to the permission handler waiting in the agent task
+                let _ = perm_resp_tx.send((request_id, allowed));
             }
             AppAction::None => {}
         }
@@ -244,12 +306,9 @@ async fn run_loop(
     Ok(())
 }
 
-/// Spawn a task that forwards agent events from a bounded mpsc::Receiver
+/// Spawn a task that forwards agent events from a bounded `mpsc::Receiver`
 /// to the TUI's unbounded channel.
-fn spawn_event_forwarder(
-    mut rx: mpsc::Receiver<Event>,
-    tx: mpsc::UnboundedSender<Event>,
-) {
+fn spawn_event_forwarder(mut rx: mpsc::Receiver<Event>, tx: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             if tx.send(event).is_err() {

@@ -85,9 +85,7 @@ mod tests {
                 .args(["/C", "ping -n 100 127.0.0.1 >nul"])
                 .spawn()
         } else {
-            tokio::process::Command::new("sleep")
-                .arg("100")
-                .spawn()
+            tokio::process::Command::new("sleep").arg("100").spawn()
         };
 
         let child = child.expect("failed to spawn test process");

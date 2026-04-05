@@ -1,6 +1,6 @@
 use crab_common::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
-use crab_fs::grep::{search, GrepMatch, GrepOptions};
+use crab_fs::grep::{GrepMatch, GrepOptions, search};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -62,9 +62,9 @@ impl Tool for GrepTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let working_dir = ctx.working_dir.clone();
         Box::pin(async move {
-            let pattern = input["pattern"]
-                .as_str()
-                .ok_or_else(|| crab_common::Error::Other("missing required field: pattern".into()))?;
+            let pattern = input["pattern"].as_str().ok_or_else(|| {
+                crab_common::Error::Other("missing required field: pattern".into())
+            })?;
 
             let search_path = match input["path"].as_str() {
                 Some(p) if !p.is_empty() => {
@@ -78,7 +78,9 @@ impl Tool for GrepTool {
                 _ => working_dir,
             };
 
-            let output_mode = input["output_mode"].as_str().unwrap_or("files_with_matches");
+            let output_mode = input["output_mode"]
+                .as_str()
+                .unwrap_or("files_with_matches");
             let context_lines = input["context"].as_u64().unwrap_or(0) as usize;
             let head_limit = input["head_limit"].as_u64().unwrap_or(0) as usize;
 
@@ -87,8 +89,16 @@ impl Tool for GrepTool {
                 path: search_path,
                 case_insensitive: false,
                 file_glob: input["glob"].as_str().map(String::from),
-                max_results: if output_mode == "content" { head_limit } else { 0 },
-                context_lines: if output_mode == "content" { context_lines } else { 0 },
+                max_results: if output_mode == "content" {
+                    head_limit
+                } else {
+                    0
+                },
+                context_lines: if output_mode == "content" {
+                    context_lines
+                } else {
+                    0
+                },
                 respect_gitignore: true,
             };
 
@@ -172,7 +182,10 @@ fn format_files_with_matches(matches: &[GrepMatch], limit: usize) -> String {
         output.push('\n');
     }
     if truncated {
-        let _ = write!(output, "\n({effective_limit} files shown, more available.)\n");
+        let _ = write!(
+            output,
+            "\n({effective_limit} files shown, more available.)\n"
+        );
     }
     output
 }
@@ -232,7 +245,11 @@ mod tests {
     #[tokio::test]
     async fn grep_finds_content() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("test.rs"), "fn main() {}\nfn helper() {}\nlet x = 5;\n").unwrap();
+        fs::write(
+            tmp.path().join("test.rs"),
+            "fn main() {}\nfn helper() {}\nlet x = 5;\n",
+        )
+        .unwrap();
 
         let ctx = make_ctx(tmp.path());
         let input = serde_json::json!({"pattern": "fn\\s+\\w+", "output_mode": "content"});
@@ -307,10 +324,12 @@ mod tests {
         fs::write(
             tmp.path().join("ctx.txt"),
             "line1\nline2\nTARGET\nline4\nline5\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let ctx = make_ctx(tmp.path());
-        let input = serde_json::json!({"pattern": "TARGET", "output_mode": "content", "context": 1});
+        let input =
+            serde_json::json!({"pattern": "TARGET", "output_mode": "content", "context": 1});
         let result = GrepTool.execute(input, &ctx).await.unwrap();
         assert!(!result.is_error);
         let text = result.text();

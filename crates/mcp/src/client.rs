@@ -50,10 +50,9 @@ impl McpClient {
         let resp = transport.send(req).await?;
         let result_value = resp.into_result()?;
 
-        let init_result: InitializeResult =
-            serde_json::from_value(result_value).map_err(|e| {
-                crab_common::Error::Other(format!("failed to parse initialize result: {e}"))
-            })?;
+        let init_result: InitializeResult = serde_json::from_value(result_value).map_err(|e| {
+            crab_common::Error::Other(format!("failed to parse initialize result: {e}"))
+        })?;
 
         tracing::info!(
             server = server_name,
@@ -299,9 +298,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn close(
-            &self,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -327,7 +324,9 @@ mod tests {
             }),
         ]);
 
-        let client = McpClient::connect(Box::new(transport), "test").await.unwrap();
+        let client = McpClient::connect(Box::new(transport), "test")
+            .await
+            .unwrap();
         assert_eq!(client.server_name(), "test");
         assert_eq!(client.server_info().name, "test-server");
         assert_eq!(client.tools().len(), 1);
@@ -336,15 +335,15 @@ mod tests {
 
     #[tokio::test]
     async fn connect_without_tools_capability() {
-        let transport = MockTransport::new(vec![
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "serverInfo": {"name": "no-tools", "version": "1.0"}
-            }),
-        ]);
+        let transport = MockTransport::new(vec![json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "no-tools", "version": "1.0"}
+        })]);
 
-        let client = McpClient::connect(Box::new(transport), "test").await.unwrap();
+        let client = McpClient::connect(Box::new(transport), "test")
+            .await
+            .unwrap();
         assert!(client.tools().is_empty());
     }
 
@@ -364,7 +363,9 @@ mod tests {
             }),
         ]);
 
-        let client = McpClient::connect(Box::new(transport), "test").await.unwrap();
+        let client = McpClient::connect(Box::new(transport), "test")
+            .await
+            .unwrap();
         let result = client
             .call_tool("echo", json!({"message": "hello"}))
             .await

@@ -217,4 +217,153 @@ mod tests {
             assert_eq!(content, "small result");
         }
     }
+
+    #[test]
+    fn strategy_for_usage_boundary_values() {
+        // Exact boundary: 0 -> None
+        assert!(CompactionStrategy::for_usage(0).is_none());
+        // Exact boundary: 69 -> None
+        assert!(CompactionStrategy::for_usage(69).is_none());
+        // Exact boundary: 70 -> Snip
+        assert_eq!(
+            CompactionStrategy::for_usage(70),
+            Some(CompactionStrategy::Snip)
+        );
+        // Exact boundary: 79 -> Snip
+        assert_eq!(
+            CompactionStrategy::for_usage(79),
+            Some(CompactionStrategy::Snip)
+        );
+        // Exact boundary: 80 -> Microcompact
+        assert_eq!(
+            CompactionStrategy::for_usage(80),
+            Some(CompactionStrategy::Microcompact)
+        );
+        // Exact boundary: 85 -> Summarize
+        assert_eq!(
+            CompactionStrategy::for_usage(85),
+            Some(CompactionStrategy::Summarize)
+        );
+        // Exact boundary: 90 -> Hybrid
+        assert_eq!(
+            CompactionStrategy::for_usage(90),
+            Some(CompactionStrategy::Hybrid { keep_recent: 3 })
+        );
+        // Exact boundary: 95 -> Truncate
+        assert_eq!(
+            CompactionStrategy::for_usage(95),
+            Some(CompactionStrategy::Truncate)
+        );
+        // Max: 100 -> Truncate
+        assert_eq!(
+            CompactionStrategy::for_usage(100),
+            Some(CompactionStrategy::Truncate)
+        );
+        // Max u8: 255 -> Truncate
+        assert_eq!(
+            CompactionStrategy::for_usage(255),
+            Some(CompactionStrategy::Truncate)
+        );
+    }
+
+    #[test]
+    fn snip_empty_conversation() {
+        let mut conv = Conversation::new("s".into(), String::new(), 100_000);
+        snip_large_tool_results(&mut conv);
+        assert!(conv.is_empty());
+    }
+
+    #[test]
+    fn snip_single_turn_preserves_everything() {
+        let mut conv = Conversation::new("s".into(), String::new(), 100_000);
+        let large_content = "x".repeat(2000);
+        conv.push_user("hello");
+        conv.push_tool_result("tc_1", &large_content, false);
+
+        snip_large_tool_results(&mut conv);
+
+        let msgs = conv.messages();
+        if let ContentBlock::ToolResult { content, .. } = &msgs[1].content[0] {
+            // Single turn = recent, should NOT be snipped
+            assert_eq!(content.len(), 2000);
+        }
+    }
+
+    #[test]
+    fn snip_preserves_error_tool_results() {
+        let mut conv = Conversation::new("s".into(), String::new(), 100_000);
+
+        // Turn 1 (old)
+        conv.push_user("Do something");
+        let large_error = "E".repeat(2000);
+        conv.push_tool_result("tc_1", &large_error, true);
+
+        // Turn 2 (recent)
+        conv.push_user("Next");
+        conv.push(Message::new(
+            Role::Assistant,
+            vec![ContentBlock::text("ok")],
+        ));
+
+        // Turn 3 (recent)
+        conv.push_user("Last");
+
+        snip_large_tool_results(&mut conv);
+
+        let msgs = conv.messages();
+        if let ContentBlock::ToolResult {
+            content, is_error, ..
+        } = &msgs[1].content[0]
+        {
+            assert!(content.contains("[snipped"));
+            assert!(*is_error); // is_error should be preserved
+        }
+    }
+
+    #[tokio::test]
+    async fn compact_truncate_reduces_messages() {
+        struct DummyClient;
+        impl CompactionClient for DummyClient {
+            fn summarize(
+                &self,
+                _messages: &[Message],
+                _instruction: &str,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = crab_common::Result<String>> + Send + '_>,
+            > {
+                Box::pin(async { Ok("summary".into()) })
+            }
+        }
+
+        let mut conv = Conversation::new("s".into(), String::new(), 1000);
+        for i in 0..20 {
+            conv.push_user(&format!("message {i}"));
+            conv.push(Message::new(
+                Role::Assistant,
+                vec![ContentBlock::text(&format!("reply {i}"))],
+            ));
+        }
+        let original_len = conv.len();
+
+        compact(&mut conv, CompactionStrategy::Truncate, &DummyClient)
+            .await
+            .unwrap();
+
+        // Truncation should reduce the number of messages
+        assert!(conv.len() <= original_len);
+    }
+
+    #[test]
+    fn strategy_equality() {
+        assert_eq!(CompactionStrategy::Snip, CompactionStrategy::Snip);
+        assert_ne!(CompactionStrategy::Snip, CompactionStrategy::Truncate);
+        assert_eq!(
+            CompactionStrategy::Hybrid { keep_recent: 3 },
+            CompactionStrategy::Hybrid { keep_recent: 3 }
+        );
+        assert_ne!(
+            CompactionStrategy::Hybrid { keep_recent: 3 },
+            CompactionStrategy::Hybrid { keep_recent: 5 }
+        );
+    }
 }

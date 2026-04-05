@@ -81,6 +81,9 @@ mod tests {
             .await
             .unwrap();
         let event = rx.recv().await.unwrap();
-        assert!(matches!(event, crab_core::event::Event::TurnStart { turn_index: 0 }));
+        assert!(matches!(
+            event,
+            crab_core::event::Event::TurnStart { turn_index: 0 }
+        ));
     }
 }

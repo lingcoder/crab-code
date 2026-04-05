@@ -87,10 +87,7 @@ impl Widget for &Spinner {
         ]);
 
         // Render into the first line of the area
-        let line_area = Rect {
-            height: 1,
-            ..area
-        };
+        let line_area = Rect { height: 1, ..area };
         Widget::render(line, line_area, buf);
     }
 }

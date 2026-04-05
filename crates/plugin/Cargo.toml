@@ -10,6 +10,12 @@ description = "Plugin system for Crab Code"
 [dependencies]
 crab-common.workspace = true
 crab-core.workspace = true
+crab-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+regex.workspace = true
 wasmtime = { workspace = true, optional = true }
 
 [features]

@@ -16,7 +16,14 @@ use std::sync::Arc;
 use crate::registry::ToolRegistry;
 
 /// Register all built-in tools with the given registry.
-pub fn register_all_builtins(registry: &mut ToolRegistry) {
+///
+/// Accepts an optional shared task store. If `None`, a new one is created.
+pub fn register_all_builtins(
+    registry: &mut ToolRegistry,
+    task_store: Option<task::SharedTaskStore>,
+) {
+    let store = task_store.unwrap_or_else(task::shared_task_store);
+
     registry.register(Arc::new(bash::BashTool));
     registry.register(Arc::new(read::ReadTool));
     registry.register(Arc::new(write::WriteTool));
@@ -27,17 +34,17 @@ pub fn register_all_builtins(registry: &mut ToolRegistry) {
     registry.register(Arc::new(agent::AgentTool));
     registry.register(Arc::new(web_search::WebSearchTool));
     registry.register(Arc::new(web_fetch::WebFetchTool));
-    registry.register(Arc::new(task::TaskCreateTool));
-    registry.register(Arc::new(task::TaskListTool));
-    registry.register(Arc::new(task::TaskUpdateTool));
-    registry.register(Arc::new(task::TaskGetTool));
+    registry.register(Arc::new(task::TaskCreateTool::new(Arc::clone(&store))));
+    registry.register(Arc::new(task::TaskListTool::new(Arc::clone(&store))));
+    registry.register(Arc::new(task::TaskUpdateTool::new(Arc::clone(&store))));
+    registry.register(Arc::new(task::TaskGetTool::new(store)));
 }
 
 /// Create a `ToolRegistry` pre-populated with all built-in tools.
 #[must_use]
 pub fn create_default_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    register_all_builtins(&mut registry);
+    register_all_builtins(&mut registry, None);
     registry
 }
 

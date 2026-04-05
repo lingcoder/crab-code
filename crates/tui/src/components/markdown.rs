@@ -24,9 +24,8 @@ impl<'t> MarkdownRenderer<'t> {
     /// Parse and render a Markdown string into styled `Line`s.
     #[allow(clippy::too_many_lines)]
     pub fn render(&self, markdown: &str) -> Vec<Line<'static>> {
-        let opts = Options::ENABLE_TABLES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TASKLISTS;
+        let opts =
+            Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
         let parser = Parser::new_ext(markdown, opts);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -63,18 +62,15 @@ impl<'t> MarkdownRenderer<'t> {
                         };
                     }
                     Tag::Emphasis => {
-                        let style = current_style(&style_stack)
-                            .add_modifier(self.theme.italic);
+                        let style = current_style(&style_stack).add_modifier(self.theme.italic);
                         style_stack.push(style);
                     }
                     Tag::Strong => {
-                        let style = current_style(&style_stack)
-                            .add_modifier(self.theme.bold);
+                        let style = current_style(&style_stack).add_modifier(self.theme.bold);
                         style_stack.push(style);
                     }
                     Tag::Strikethrough => {
-                        let style = current_style(&style_stack)
-                            .add_modifier(Modifier::CROSSED_OUT);
+                        let style = current_style(&style_stack).add_modifier(Modifier::CROSSED_OUT);
                         style_stack.push(style);
                     }
                     Tag::Link { dest_url, .. } => {
@@ -171,10 +167,7 @@ impl<'t> MarkdownRenderer<'t> {
                     let style = Style::default()
                         .fg(self.theme.inline_code_fg)
                         .bg(self.theme.inline_code_bg);
-                    current_spans.push(Span::styled(
-                        format!("`{code}`"),
-                        style,
-                    ));
+                    current_spans.push(Span::styled(format!("`{code}`"), style));
                 }
 
                 Event::SoftBreak => {
@@ -188,10 +181,7 @@ impl<'t> MarkdownRenderer<'t> {
                 Event::Rule => {
                     flush_line(&mut current_spans, &mut lines);
                     let style = Style::default().fg(self.theme.muted);
-                    lines.push(Line::from(Span::styled(
-                        "─".repeat(40),
-                        style,
-                    )));
+                    lines.push(Line::from(Span::styled("─".repeat(40), style)));
                 }
 
                 _ => {}
@@ -243,7 +233,11 @@ mod tests {
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("Hello world");
         assert!(!lines.is_empty());
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("Hello world"));
     }
 
@@ -252,7 +246,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("# Title");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("# "));
         assert!(text.contains("Title"));
     }
@@ -262,7 +260,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("## Sub-heading");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("## "));
     }
 
@@ -271,7 +273,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("**bold** and *italic*");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("bold"));
         assert!(text.contains("italic"));
     }
@@ -281,7 +287,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("Use `foo()` here");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("`foo()`"));
     }
 
@@ -291,7 +301,11 @@ mod tests {
         let r = MarkdownRenderer::new(&theme, &hl);
         let md = "```rust\nfn main() {}\n```";
         let lines = r.render(md);
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("fn"));
         assert!(text.contains("main"));
     }
@@ -301,7 +315,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("- one\n- two\n- three");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("- "));
         assert!(text.contains("one"));
         assert!(text.contains("two"));
@@ -312,7 +330,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("1. first\n2. second");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("1. "));
         assert!(text.contains("first"));
     }
@@ -322,7 +344,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("[click](https://example.com)");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("click"));
     }
 
@@ -331,7 +357,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("---");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("─"));
     }
 
@@ -340,7 +370,11 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let lines = r.render("> quoted text");
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("│ "));
         assert!(text.contains("quoted text"));
     }

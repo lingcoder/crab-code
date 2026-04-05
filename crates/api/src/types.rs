@@ -6,7 +6,6 @@
 use crab_core::message::Message;
 use crab_core::model::{ModelId, TokenUsage};
 
-
 /// Internal message request — each client converts this to its own API format.
 #[derive(Debug, Clone)]
 pub struct MessageRequest<'a> {
@@ -37,17 +36,30 @@ pub enum CacheBreakpoint {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     /// Emitted once at the start; carries initial usage (cache read/creation tokens).
-    MessageStart { id: String, usage: TokenUsage },
-    ContentBlockStart { index: usize, content_type: String },
-    ContentDelta { index: usize, delta: String },
-    ContentBlockStop { index: usize },
+    MessageStart {
+        id: String,
+        usage: TokenUsage,
+    },
+    ContentBlockStart {
+        index: usize,
+        content_type: String,
+    },
+    ContentDelta {
+        index: usize,
+        delta: String,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
     /// Final usage update with optional stop reason.
     MessageDelta {
         usage: TokenUsage,
         stop_reason: Option<String>,
     },
     MessageStop,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// Non-streaming response wrapper.

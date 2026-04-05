@@ -34,11 +34,7 @@ impl SessionHistory {
     }
 
     /// Save a session transcript to disk.
-    pub fn save(
-        &self,
-        session_id: &str,
-        messages: &[Message],
-    ) -> crab_common::Result<()> {
+    pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_common::Result<()> {
         self.ensure_dir()?;
         let file = SessionFile {
             session_id: session_id.to_string(),
@@ -51,10 +47,7 @@ impl SessionHistory {
     }
 
     /// Load a session transcript from disk. Returns `None` if the file doesn't exist.
-    pub fn load(
-        &self,
-        session_id: &str,
-    ) -> crab_common::Result<Option<Vec<Message>>> {
+    pub fn load(&self, session_id: &str) -> crab_common::Result<Option<Vec<Message>>> {
         let path = self.session_path(session_id);
         if !path.exists() {
             return Ok(None);
@@ -103,10 +96,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
 
-        let messages = vec![
-            Message::user("Hello"),
-            Message::assistant("Hi there!"),
-        ];
+        let messages = vec![Message::user("Hello"), Message::assistant("Hi there!")];
         history.save("test-session", &messages).unwrap();
 
         let loaded = history.load("test-session").unwrap().unwrap();
@@ -158,5 +148,86 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
         history.delete("nope").unwrap(); // should not error
+    }
+
+    #[test]
+    fn save_overwrites_existing_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history.save("sess", &[Message::user("original")]).unwrap();
+        history
+            .save(
+                "sess",
+                &[Message::user("updated"), Message::assistant("ok")],
+            )
+            .unwrap();
+
+        let loaded = history.load("sess").unwrap().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text(), "updated");
+    }
+
+    #[test]
+    fn save_empty_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.save("empty-session", &[]).unwrap();
+        let loaded = history.load("empty-session").unwrap().unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn list_sessions_ignores_non_json_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history
+            .save("valid-session", &[Message::user("hi")])
+            .unwrap();
+        // Create non-json file
+        std::fs::write(dir.path().join("notes.txt"), "not a session").unwrap();
+
+        let sessions = history.list_sessions().unwrap();
+        assert_eq!(sessions, vec!["valid-session"]);
+    }
+
+    #[test]
+    fn list_sessions_nonexistent_dir_returns_empty() {
+        let history = SessionHistory::new(std::path::PathBuf::from("/nonexistent/sessions"));
+        let sessions = history.list_sessions().unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn save_creates_directory_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("deep").join("sessions");
+        let history = SessionHistory::new(nested.clone());
+
+        history.save("sess", &[Message::user("test")]).unwrap();
+        assert!(nested.join("sess.json").exists());
+    }
+
+    #[test]
+    fn load_corrupt_json_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bad.json"), "not valid json").unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        let result = history.load("bad");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn multiple_sessions_sorted_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history.save("z-session", &[Message::user("z")]).unwrap();
+        history.save("a-session", &[Message::user("a")]).unwrap();
+        history.save("m-session", &[Message::user("m")]).unwrap();
+
+        let sessions = history.list_sessions().unwrap();
+        assert_eq!(sessions, vec!["a-session", "m-session", "z-session"]);
     }
 }

@@ -205,10 +205,7 @@ mod tests {
     fn enter_selects() {
         let mut list = SelectList::new(items());
         list.handle_key(KeyCode::Down);
-        assert_eq!(
-            list.handle_key(KeyCode::Enter),
-            SelectAction::Selected(1)
-        );
+        assert_eq!(list.handle_key(KeyCode::Enter), SelectAction::Selected(1));
     }
 
     #[test]
@@ -239,10 +236,7 @@ mod tests {
     fn empty_list() {
         let mut list = SelectList::new(vec![]);
         assert!(list.is_empty());
-        assert_eq!(
-            list.handle_key(KeyCode::Enter),
-            SelectAction::Ignored
-        );
+        assert_eq!(list.handle_key(KeyCode::Enter), SelectAction::Ignored);
     }
 
     #[test]

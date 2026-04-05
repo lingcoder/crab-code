@@ -5,7 +5,7 @@ pub mod cost;
 pub mod history;
 pub mod memory;
 
-pub use compaction::{compact, CompactionClient, CompactionStrategy};
+pub use compaction::{CompactionClient, CompactionStrategy, compact};
 pub use context::{ContextAction, ContextManager};
 pub use conversation::Conversation;
 pub use cost::CostAccumulator;

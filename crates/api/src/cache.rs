@@ -35,3 +35,35 @@ impl CacheStats {
         self.cache_creation_tokens += tokens;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_control_ephemeral_type_str() {
+        assert_eq!(CacheControl::Ephemeral.as_type_str(), "ephemeral");
+    }
+
+    #[test]
+    fn cache_stats_default() {
+        let stats = CacheStats::default();
+        assert_eq!(stats.cache_read_tokens, 0);
+        assert_eq!(stats.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn cache_stats_record_read() {
+        let mut stats = CacheStats::default();
+        stats.record_read(100);
+        stats.record_read(50);
+        assert_eq!(stats.cache_read_tokens, 150);
+    }
+
+    #[test]
+    fn cache_stats_record_creation() {
+        let mut stats = CacheStats::default();
+        stats.record_creation(200);
+        assert_eq!(stats.cache_creation_tokens, 200);
+    }
+}

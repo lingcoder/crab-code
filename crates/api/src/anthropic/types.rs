@@ -208,9 +208,11 @@ mod tests {
             "content_block": {"type": "text"}
         });
         let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
-        assert!(matches!(event, AnthropicSseEvent::ContentBlockStart { index: 0, content_block }
-            if content_block.block_type == "text"
-        ));
+        assert!(
+            matches!(event, AnthropicSseEvent::ContentBlockStart { index: 0, content_block }
+                if content_block.block_type == "text"
+            )
+        );
     }
 
     #[test]
@@ -221,9 +223,11 @@ mod tests {
             "delta": {"type": "text_delta", "text": "Hello"}
         });
         let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
-        assert!(matches!(event, AnthropicSseEvent::ContentBlockDelta { index: 0, delta: AnthropicDelta::TextDelta { text } }
-            if text == "Hello"
-        ));
+        assert!(
+            matches!(event, AnthropicSseEvent::ContentBlockDelta { index: 0, delta: AnthropicDelta::TextDelta { text } }
+                if text == "Hello"
+            )
+        );
     }
 
     #[test]
@@ -234,16 +238,21 @@ mod tests {
             "delta": {"type": "input_json_delta", "partial_json": "{\"path\":\"/tmp"}
         });
         let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
-        assert!(matches!(event, AnthropicSseEvent::ContentBlockDelta { index: 1, delta: AnthropicDelta::InputJsonDelta { partial_json } }
-            if partial_json.contains("path")
-        ));
+        assert!(
+            matches!(event, AnthropicSseEvent::ContentBlockDelta { index: 1, delta: AnthropicDelta::InputJsonDelta { partial_json } }
+                if partial_json.contains("path")
+            )
+        );
     }
 
     #[test]
     fn content_block_stop_event_deserde() {
         let json = json!({"type": "content_block_stop", "index": 0});
         let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
-        assert!(matches!(event, AnthropicSseEvent::ContentBlockStop { index: 0 }));
+        assert!(matches!(
+            event,
+            AnthropicSseEvent::ContentBlockStop { index: 0 }
+        ));
     }
 
     #[test]
@@ -254,9 +263,11 @@ mod tests {
             "usage": {"output_tokens": 15}
         });
         let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
-        assert!(matches!(event, AnthropicSseEvent::MessageDelta { delta, usage }
-            if delta.stop_reason.as_deref() == Some("end_turn") && usage.output_tokens == 15
-        ));
+        assert!(
+            matches!(event, AnthropicSseEvent::MessageDelta { delta, usage }
+                if delta.stop_reason.as_deref() == Some("end_turn") && usage.output_tokens == 15
+            )
+        );
     }
 
     #[test]
@@ -325,7 +336,10 @@ mod tests {
         assert_eq!(json["type"], "tool_result");
         assert_eq!(json["is_error"], true);
         let parsed: AnthropicContentBlock = serde_json::from_value(json).unwrap();
-        assert!(matches!(parsed, AnthropicContentBlock::ToolResult { is_error: true, .. }));
+        assert!(matches!(
+            parsed,
+            AnthropicContentBlock::ToolResult { is_error: true, .. }
+        ));
     }
 
     #[test]
@@ -336,7 +350,13 @@ mod tests {
             "content": "ok"
         });
         let block: AnthropicContentBlock = serde_json::from_value(json).unwrap();
-        assert!(matches!(block, AnthropicContentBlock::ToolResult { is_error: false, .. }));
+        assert!(matches!(
+            block,
+            AnthropicContentBlock::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -62,9 +62,6 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "function");
         assert_eq!(result[0]["function"]["name"], "read");
-        assert_eq!(
-            result[0]["function"]["parameters"]["type"],
-            "object"
-        );
+        assert_eq!(result[0]["function"]["parameters"]["type"], "object");
     }
 }

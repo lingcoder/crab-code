@@ -87,18 +87,10 @@ impl PermissionDialog {
                 }
                 None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                Some(self.options[self.selected].1)
-            }
-            KeyCode::Char('y' | 'Y') => {
-                Some(PermissionResponse::Allow)
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                Some(PermissionResponse::Deny)
-            }
-            KeyCode::Char('a' | 'A') => {
-                Some(PermissionResponse::AlwaysAllow)
-            }
+            KeyCode::Enter | KeyCode::Char(' ') => Some(self.options[self.selected].1),
+            KeyCode::Char('y' | 'Y') => Some(PermissionResponse::Allow),
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(PermissionResponse::Deny),
+            KeyCode::Char('a' | 'A') => Some(PermissionResponse::AlwaysAllow),
             _ => None,
         }
     }
@@ -147,7 +139,7 @@ impl Widget for &PermissionDialog {
         let chunks = Layout::vertical([
             Constraint::Length(1), // tool name + risk
             Constraint::Length(1), // spacer
-            Constraint::Min(1),   // input summary
+            Constraint::Min(1),    // input summary
             Constraint::Length(1), // spacer
             Constraint::Length(1), // buttons
         ])
@@ -200,8 +192,7 @@ impl Widget for &PermissionDialog {
             })
             .collect();
 
-        let buttons = Paragraph::new(Line::from(button_spans))
-            .alignment(Alignment::Center);
+        let buttons = Paragraph::new(Line::from(button_spans)).alignment(Alignment::Center);
         Widget::render(buttons, chunks[4], buf);
     }
 }
@@ -250,7 +241,10 @@ mod tests {
     #[test]
     fn enter_confirms_selection() {
         let mut d = dialog();
-        assert_eq!(d.handle_key(KeyCode::Enter), Some(PermissionResponse::Allow));
+        assert_eq!(
+            d.handle_key(KeyCode::Enter),
+            Some(PermissionResponse::Allow)
+        );
 
         d.handle_key(KeyCode::Right);
         assert_eq!(d.handle_key(KeyCode::Enter), Some(PermissionResponse::Deny));
@@ -265,8 +259,14 @@ mod tests {
     #[test]
     fn shortcut_keys() {
         let mut d = dialog();
-        assert_eq!(d.handle_key(KeyCode::Char('y')), Some(PermissionResponse::Allow));
-        assert_eq!(d.handle_key(KeyCode::Char('n')), Some(PermissionResponse::Deny));
+        assert_eq!(
+            d.handle_key(KeyCode::Char('y')),
+            Some(PermissionResponse::Allow)
+        );
+        assert_eq!(
+            d.handle_key(KeyCode::Char('n')),
+            Some(PermissionResponse::Deny)
+        );
         assert_eq!(
             d.handle_key(KeyCode::Char('a')),
             Some(PermissionResponse::AlwaysAllow)

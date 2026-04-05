@@ -320,7 +320,10 @@ impl Widget for &InputBox {
         {
             let y = area.y + i as u16;
             let display = if line.is_empty() && i == 0 && scroll_offset == 0 && self.is_empty() {
-                Line::from(Span::styled("Type a message...", Style::default().fg(Color::DarkGray)))
+                Line::from(Span::styled(
+                    "Type a message...",
+                    Style::default().fg(Color::DarkGray),
+                ))
             } else {
                 Line::from(line.as_str())
             };

@@ -5,8 +5,8 @@ use crab_core::model::TokenUsage;
 
 use super::types::{
     AnthropicContentBlock, AnthropicDelta, AnthropicImageSource, AnthropicMessage,
-    AnthropicRequest, AnthropicResponse, AnthropicSseEvent, AnthropicUsage,
-    CacheControlDirective, SystemBlock,
+    AnthropicRequest, AnthropicResponse, AnthropicSseEvent, AnthropicUsage, CacheControlDirective,
+    SystemBlock,
 };
 use crate::cache::CacheControl;
 use crate::error::Result;
@@ -21,9 +21,7 @@ pub fn to_anthropic_request(req: &MessageRequest<'_>, stream: bool) -> Anthropic
         .map(message_to_anthropic)
         .collect();
 
-    let cache_system = req
-        .cache_breakpoints
-        .contains(&CacheBreakpoint::System);
+    let cache_system = req.cache_breakpoints.contains(&CacheBreakpoint::System);
 
     let system = req.system.as_ref().map(|s| {
         vec![SystemBlock {
@@ -308,8 +306,12 @@ mod tests {
         let api_req = to_anthropic_request(&req, false);
         let blocks = &api_req.messages[0].content;
         assert_eq!(blocks.len(), 2);
-        assert!(matches!(&blocks[0], AnthropicContentBlock::Text { text } if text == "Let me check."));
-        assert!(matches!(&blocks[1], AnthropicContentBlock::ToolUse { id, name, .. } if id == "toolu_01" && name == "bash"));
+        assert!(
+            matches!(&blocks[0], AnthropicContentBlock::Text { text } if text == "Let me check.")
+        );
+        assert!(
+            matches!(&blocks[1], AnthropicContentBlock::ToolUse { id, name, .. } if id == "toolu_01" && name == "bash")
+        );
     }
 
     #[test]
@@ -326,9 +328,11 @@ mod tests {
         };
         let api_req = to_anthropic_request(&req, false);
         let blocks = &api_req.messages[0].content;
-        assert!(matches!(&blocks[0], AnthropicContentBlock::ToolResult { tool_use_id, is_error, .. }
-            if tool_use_id == "toolu_01" && !is_error
-        ));
+        assert!(
+            matches!(&blocks[0], AnthropicContentBlock::ToolResult { tool_use_id, is_error, .. }
+                if tool_use_id == "toolu_01" && !is_error
+            )
+        );
     }
 
     #[test]
@@ -486,7 +490,9 @@ mod tests {
             },
         };
         let se = sse_event_to_stream_event(event).unwrap();
-        assert!(matches!(se, StreamEvent::ContentBlockStart { index: 0, content_type } if content_type == "text"));
+        assert!(
+            matches!(se, StreamEvent::ContentBlockStart { index: 0, content_type } if content_type == "text")
+        );
     }
 
     #[test]
@@ -510,7 +516,9 @@ mod tests {
             },
         };
         let se = sse_event_to_stream_event(event).unwrap();
-        assert!(matches!(se, StreamEvent::ContentDelta { index: 1, delta } if delta.contains("path")));
+        assert!(
+            matches!(se, StreamEvent::ContentDelta { index: 1, delta } if delta.contains("path"))
+        );
     }
 
     #[test]
@@ -526,14 +534,14 @@ mod tests {
             delta: super::super::types::AnthropicMessageDeltaBody {
                 stop_reason: Some("end_turn".into()),
             },
-            usage: super::super::types::AnthropicDeltaUsage {
-                output_tokens: 42,
-            },
+            usage: super::super::types::AnthropicDeltaUsage { output_tokens: 42 },
         };
         let se = sse_event_to_stream_event(event).unwrap();
-        assert!(matches!(se, StreamEvent::MessageDelta { usage, stop_reason }
-            if usage.output_tokens == 42 && stop_reason.as_deref() == Some("end_turn")
-        ));
+        assert!(
+            matches!(se, StreamEvent::MessageDelta { usage, stop_reason }
+                if usage.output_tokens == 42 && stop_reason.as_deref() == Some("end_turn")
+            )
+        );
     }
 
     #[test]

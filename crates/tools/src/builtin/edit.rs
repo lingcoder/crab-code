@@ -86,9 +86,7 @@ impl Tool for EditTool {
 
             // Check file exists
             if !path.exists() {
-                return Ok(ToolOutput::error(format!(
-                    "file not found: {file_path}"
-                )));
+                return Ok(ToolOutput::error(format!("file not found: {file_path}")));
             }
 
             // Validate old_string != new_string

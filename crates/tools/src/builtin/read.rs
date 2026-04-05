@@ -12,20 +12,16 @@ pub struct ReadTool;
 
 /// Extensions treated as binary/non-text — return type info instead of content.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "svg",
-    "pdf",
-    "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-    "exe", "dll", "so", "dylib",
-    "mp3", "mp4", "wav", "ogg", "avi", "mov", "mkv",
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "svg", "pdf", "zip", "tar", "gz", "bz2",
+    "xz", "7z", "rar", "exe", "dll", "so", "dylib", "mp3", "mp4", "wav", "ogg", "avi", "mov",
+    "mkv",
 ];
 
 /// Notebook extensions — return type info (full notebook reading handled separately).
 const NOTEBOOK_EXTENSIONS: &[&str] = &["ipynb"];
 
 fn extension_of(path: &Path) -> &str {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
+    path.extension().and_then(|e| e.to_str()).unwrap_or("")
 }
 
 impl Tool for ReadTool {
@@ -65,10 +61,7 @@ impl Tool for ReadTool {
         input: Value,
         _ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
-        let file_path = input["file_path"]
-            .as_str()
-            .unwrap_or("")
-            .to_owned();
+        let file_path = input["file_path"].as_str().unwrap_or("").to_owned();
         // offset is 1-based line number; default 1
         #[allow(clippy::cast_possible_truncation)]
         let offset = input["offset"].as_u64().map_or(1, |v| v as usize);

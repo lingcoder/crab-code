@@ -15,5 +15,8 @@ serde_json.workspace = true
 jsonc-parser.workspace = true
 directories.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

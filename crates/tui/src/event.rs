@@ -144,11 +144,8 @@ mod tests {
         let mut found_agent = matches!(event, Some(TuiEvent::Agent(_)));
         if !found_agent {
             for _ in 0..10 {
-                if let Ok(Some(e)) = tokio::time::timeout(
-                    std::time::Duration::from_millis(100),
-                    tui_rx.recv(),
-                )
-                .await
+                if let Ok(Some(e)) =
+                    tokio::time::timeout(std::time::Duration::from_millis(100), tui_rx.recv()).await
                 {
                     if matches!(e, TuiEvent::Agent(_)) {
                         found_agent = true;

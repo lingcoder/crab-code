@@ -105,9 +105,7 @@ mod inner {
                         "message" => {
                             // Parse as JSON-RPC response.
                             let data = event.data.trim();
-                            if let Ok(resp) =
-                                serde_json::from_str::<JsonRpcResponse>(data)
-                            {
+                            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(data) {
                                 let mut map = pending_clone.lock().await;
                                 if let Some(tx) = map.remove(&resp.id) {
                                     let _ = tx.send(resp);
@@ -126,21 +124,19 @@ mod inner {
             });
 
             // Wait for the endpoint URL (with timeout).
-            let post_endpoint = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                endpoint_rx,
-            )
-            .await
-            .map_err(|_| {
-                crab_common::Error::Other(
-                    "timeout waiting for MCP SSE endpoint event".into(),
-                )
-            })?
-            .map_err(|_| {
-                crab_common::Error::Other(
-                    "SSE stream closed before sending endpoint".into(),
-                )
-            })?;
+            let post_endpoint =
+                tokio::time::timeout(std::time::Duration::from_secs(30), endpoint_rx)
+                    .await
+                    .map_err(|_| {
+                        crab_common::Error::Other(
+                            "timeout waiting for MCP SSE endpoint event".into(),
+                        )
+                    })?
+                    .map_err(|_| {
+                        crab_common::Error::Other(
+                            "SSE stream closed before sending endpoint".into(),
+                        )
+                    })?;
 
             tracing::info!(
                 url = url,
@@ -159,16 +155,9 @@ mod inner {
 
         /// POST a JSON message to the server's endpoint.
         async fn post_message(&self, json: &str) -> crab_common::Result<()> {
-            let url = self
-                .post_url
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| {
-                    crab_common::Error::Other(
-                        "MCP SSE endpoint URL not yet received".into(),
-                    )
-                })?;
+            let url = self.post_url.lock().await.clone().ok_or_else(|| {
+                crab_common::Error::Other("MCP SSE endpoint URL not yet received".into())
+            })?;
 
             let resp = self
                 .http_client
@@ -178,9 +167,7 @@ mod inner {
                 .send()
                 .await
                 .map_err(|e| {
-                    crab_common::Error::Other(format!(
-                        "failed to POST to MCP SSE endpoint: {e}"
-                    ))
+                    crab_common::Error::Other(format!("failed to POST to MCP SSE endpoint: {e}"))
                 })?;
 
             if !resp.status().is_success() {
@@ -212,9 +199,7 @@ mod inner {
 
                 // Serialize and POST the request.
                 let json = serde_json::to_string(&req).map_err(|e| {
-                    crab_common::Error::Other(format!(
-                        "failed to serialize request: {e}"
-                    ))
+                    crab_common::Error::Other(format!("failed to serialize request: {e}"))
                 })?;
 
                 tracing::debug!(method = %req.method, id, "sending MCP SSE request");
@@ -222,9 +207,7 @@ mod inner {
 
                 // Wait for the response from the SSE stream.
                 rx.await.map_err(|_| {
-                    crab_common::Error::Other(
-                        "MCP SSE stream closed before responding".into(),
-                    )
+                    crab_common::Error::Other("MCP SSE stream closed before responding".into())
                 })
             })
         }
@@ -236,26 +219,18 @@ mod inner {
         ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
             let notif = JsonRpcNotification::new(
                 method.to_string(),
-                if params.is_null() {
-                    None
-                } else {
-                    Some(params)
-                },
+                if params.is_null() { None } else { Some(params) },
             );
             Box::pin(async move {
                 let json = serde_json::to_string(&notif).map_err(|e| {
-                    crab_common::Error::Other(format!(
-                        "failed to serialize notification: {e}"
-                    ))
+                    crab_common::Error::Other(format!("failed to serialize notification: {e}"))
                 })?;
                 tracing::debug!(method = notif.method, "sending MCP SSE notification");
                 self.post_message(&json).await
             })
         }
 
-        fn close(
-            &self,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
             Box::pin(async move {
                 let handle = self.reader_handle.lock().await.take();
                 if let Some(h) = handle {
@@ -368,9 +343,8 @@ impl crate::transport::Transport for SseTransport {
         _req: crate::protocol::JsonRpcRequest,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = crab_common::Result<crate::protocol::JsonRpcResponse>,
-                > + Send
+            dyn std::future::Future<Output = crab_common::Result<crate::protocol::JsonRpcResponse>>
+                + Send
                 + '_,
         >,
     > {
@@ -385,9 +359,8 @@ impl crate::transport::Transport for SseTransport {
         &self,
         _method: &str,
         _params: serde_json::Value,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = crab_common::Result<()>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crab_common::Result<()>> + Send + '_>>
+    {
         Box::pin(async move {
             Err(crab_common::Error::Other(
                 "SSE transport requires the 'sse' feature".into(),
@@ -397,9 +370,8 @@ impl crate::transport::Transport for SseTransport {
 
     fn close(
         &self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = crab_common::Result<()>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crab_common::Result<()>> + Send + '_>>
+    {
         Box::pin(async move { Ok(()) })
     }
 }

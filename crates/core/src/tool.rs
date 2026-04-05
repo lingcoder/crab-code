@@ -254,9 +254,11 @@ mod tests {
         };
         let json = serde_json::to_string(&content).unwrap();
         let parsed: ToolOutputContent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, ToolOutputContent::Image { media_type, data }
-            if media_type == "image/png" && data == "base64data"
-        ));
+        assert!(
+            matches!(parsed, ToolOutputContent::Image { media_type, data }
+                if media_type == "image/png" && data == "base64data"
+            )
+        );
     }
 
     #[test]

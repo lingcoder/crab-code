@@ -71,7 +71,9 @@ mod tests {
     use std::collections::HashMap;
 
     /// Build a fake env lookup from a map.
-    fn fake_env(map: HashMap<&'static str, &'static str>) -> impl Fn(&str) -> std::result::Result<String, std::env::VarError> {
+    fn fake_env(
+        map: HashMap<&'static str, &'static str>,
+    ) -> impl Fn(&str) -> std::result::Result<String, std::env::VarError> {
         move |key: &str| {
             map.get(key)
                 .map(|v| (*v).to_string())
@@ -141,7 +143,10 @@ mod tests {
     #[test]
     fn env_vars_for_provider_routing() {
         assert_eq!(env_vars_for_provider(None), &["ANTHROPIC_API_KEY"]);
-        assert_eq!(env_vars_for_provider(Some("anthropic")), &["ANTHROPIC_API_KEY"]);
+        assert_eq!(
+            env_vars_for_provider(Some("anthropic")),
+            &["ANTHROPIC_API_KEY"]
+        );
         assert_eq!(env_vars_for_provider(Some("openai")), &["OPENAI_API_KEY"]);
         assert_eq!(env_vars_for_provider(Some("ollama")), &["OPENAI_API_KEY"]);
         assert_eq!(env_vars_for_provider(Some("deepseek")), &["OPENAI_API_KEY"]);

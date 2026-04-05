@@ -170,11 +170,7 @@ mod tests {
     #[test]
     fn negation() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(
-            tmp.path().join(".gitignore"),
-            "*.log\n!important.log\n",
-        )
-        .unwrap();
+        fs::write(tmp.path().join(".gitignore"), "*.log\n!important.log\n").unwrap();
         fs::write(tmp.path().join("debug.log"), "").unwrap();
         fs::write(tmp.path().join("important.log"), "").unwrap();
 

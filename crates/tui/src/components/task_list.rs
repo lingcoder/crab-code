@@ -149,21 +149,18 @@ impl Widget for &TaskListView {
                 break;
             }
 
-            let status_style = Style::default()
-                .fg(task.status.color())
-                .add_modifier(if task.status == TaskStatus::Running {
+            let status_style = Style::default().fg(task.status.color()).add_modifier(
+                if task.status == TaskStatus::Running {
                     Modifier::BOLD
                 } else {
                     Modifier::empty()
-                });
+                },
+            );
 
             let mut spans = vec![
                 Span::styled(task.status.symbol(), status_style),
                 Span::raw(" "),
-                Span::styled(
-                    &task.tool_name,
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(&task.tool_name, Style::default().fg(Color::White)),
             ];
 
             let elapsed = task.elapsed_str();

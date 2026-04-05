@@ -14,10 +14,14 @@ crab-config.workspace = true
 crab-session.workspace = true
 crab-tools.workspace = true
 crab-api.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

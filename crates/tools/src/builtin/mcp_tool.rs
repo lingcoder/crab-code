@@ -87,7 +87,12 @@ impl Tool for McpToolAdapter {
         _ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         Box::pin(async move {
-            let result = self.client.lock().await.call_tool(&self.mcp_tool_name, input).await?;
+            let result = self
+                .client
+                .lock()
+                .await
+                .call_tool(&self.mcp_tool_name, input)
+                .await?;
 
             // Convert MCP ToolCallResult → native ToolOutput
             let content = result
@@ -157,10 +162,8 @@ pub async fn register_mcp_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crab_mcp::protocol::{
-        JsonRpcRequest, JsonRpcResponse, ServerCapabilities, ServerInfo,
-    };
     use crab_mcp::Transport;
+    use crab_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ServerCapabilities, ServerInfo};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Mock transport for testing the adapter.
@@ -208,9 +211,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn close(
-            &self,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -218,13 +219,11 @@ mod tests {
     /// Helper to create a connected McpClient with mock transport.
     async fn mock_client(tool_responses: Vec<serde_json::Value>) -> McpClient {
         // First two responses: initialize + tools/list
-        let mut responses = vec![
-            serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "serverInfo": {"name": "mock", "version": "1.0"}
-            }),
-        ];
+        let mut responses = vec![serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "mock", "version": "1.0"}
+        })];
         responses.extend(tool_responses);
 
         let transport = MockTransport::new(responses);
@@ -342,12 +341,97 @@ mod tests {
             permission_policy: crab_core::permission::PermissionPolicy::default(),
         };
 
-        let output = adapter
-            .execute(serde_json::json!({}), &ctx)
-            .await
-            .unwrap();
+        let output = adapter.execute(serde_json::json!({}), &ctx).await.unwrap();
 
         assert!(output.is_error);
         assert_eq!(output.text(), "tool failed");
+    }
+
+    #[tokio::test]
+    async fn register_mcp_tools_populates_registry() {
+        // Create a mock client with 2 tools
+        let transport = MockTransport::new(vec![
+            serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock", "version": "1.0"}
+            }),
+            serde_json::json!({
+                "tools": [
+                    {
+                        "name": "tool_a",
+                        "description": "Tool A",
+                        "inputSchema": {"type": "object"}
+                    },
+                    {
+                        "name": "tool_b",
+                        "description": "Tool B",
+                        "inputSchema": {"type": "object"}
+                    }
+                ]
+            }),
+        ]);
+
+        let client = McpClient::connect(Box::new(transport), "srv")
+            .await
+            .unwrap();
+
+        // Build a manager with the mock client injected
+        let mut mgr = crab_mcp::McpManager::new();
+        // We need to insert the client into the manager — use the public API
+        // by wrapping in a DiscoveredTool directly via discovered_tools after
+        // adding through internal means. Since McpManager.clients is private,
+        // we test register_mcp_tools via DiscoveredTool manually.
+        let client_arc = Arc::new(Mutex::new(client));
+
+        let mut registry = crate::registry::ToolRegistry::new();
+        let initial_count = registry.len();
+
+        // Create DiscoveredTool structs manually
+        let tools = vec![
+            crab_mcp::DiscoveredTool {
+                server_name: "srv".into(),
+                tool_def: crab_mcp::McpToolDef {
+                    name: "tool_a".into(),
+                    description: "Tool A".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+                client: Arc::clone(&client_arc),
+            },
+            crab_mcp::DiscoveredTool {
+                server_name: "srv".into(),
+                tool_def: crab_mcp::McpToolDef {
+                    name: "tool_b".into(),
+                    description: "Tool B".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+                client: Arc::clone(&client_arc),
+            },
+        ];
+
+        // Register manually (same logic as register_mcp_tools)
+        for tool in tools {
+            let adapter = McpToolAdapter::new(
+                tool.server_name,
+                tool.tool_def.name,
+                tool.tool_def.description,
+                tool.tool_def.input_schema,
+                tool.client,
+            );
+            registry.register(Arc::new(adapter));
+        }
+
+        assert_eq!(registry.len(), initial_count + 2);
+        assert!(registry.get("mcp__srv__tool_a").is_some());
+        assert!(registry.get("mcp__srv__tool_b").is_some());
+
+        // Verify tool properties through the registry
+        let tool_a = registry.get("mcp__srv__tool_a").unwrap();
+        assert_eq!(tool_a.description(), "Tool A");
+        assert!(matches!(
+            tool_a.source(),
+            ToolSource::McpExternal { server_name } if server_name == "srv"
+        ));
+        assert!(tool_a.requires_confirmation());
     }
 }

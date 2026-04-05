@@ -82,7 +82,8 @@ pub fn apply_edit(opts: &EditOptions<'_>) -> crab_common::Result<EditResult> {
         opts.file_content.replace(opts.old_string, opts.new_string)
     } else {
         // Replace first (and only) occurrence
-        opts.file_content.replacen(opts.old_string, opts.new_string, 1)
+        opts.file_content
+            .replacen(opts.old_string, opts.new_string, 1)
     };
 
     let old_label = opts.file_label.unwrap_or("a");
