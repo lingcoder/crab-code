@@ -54,6 +54,7 @@ impl Tool for EditTool {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn execute(
         &self,
         input: Value,
@@ -130,9 +131,7 @@ impl Tool for EditTool {
             })?;
 
             // Resolve match: exact or fuzzy
-            let resolved = resolve_match(
-                &content, old_string, fuzzy_match, replace_all, file_path,
-            );
+            let resolved = resolve_match(&content, old_string, fuzzy_match, replace_all, file_path);
             let (effective_old, used_fuzzy, new_content) = match resolved {
                 Ok((eff, fuzzy)) => {
                     let replacement = if replace_all {
@@ -149,9 +148,8 @@ impl Tool for EditTool {
 
             // Dry-run mode: return diff preview without writing
             if dry_run {
-                let diff = crab_fs::diff::unified_diff(
-                    &content, &new_content, file_path, file_path,
-                );
+                let diff =
+                    crab_fs::diff::unified_diff(&content, &new_content, file_path, file_path);
                 let mut out = String::from("[dry-run] Preview of changes:\n");
                 if used_fuzzy {
                     let _ = writeln!(out, "(fuzzy match used)");
@@ -181,6 +179,52 @@ impl Tool for EditTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+}
+
+/// Resolve the match target: try exact match first, then fuzzy if enabled.
+/// Returns `Ok((effective_old_string, used_fuzzy))` or `Err(ToolOutput)` on failure.
+fn resolve_match(
+    content: &str,
+    old_string: &str,
+    fuzzy: bool,
+    replace_all: bool,
+    file_path: &str,
+) -> std::result::Result<(String, bool), ToolOutput> {
+    let match_count = content.matches(old_string).count();
+
+    let (effective_old, used_fuzzy) = if match_count == 0 && fuzzy {
+        match find_fuzzy_match(content, old_string) {
+            Some(matched) => (matched, true),
+            None => {
+                return Err(ToolOutput::error(format!(
+                    "old_string not found in {file_path} (exact and fuzzy match both failed)"
+                )));
+            }
+        }
+    } else if match_count == 0 {
+        return Err(ToolOutput::error(format!(
+            "old_string not found in {file_path}"
+        )));
+    } else {
+        (old_string.to_owned(), false)
+    };
+
+    let effective_count = content.matches(effective_old.as_str()).count();
+
+    if !replace_all && effective_count > 1 {
+        let locations = find_match_locations(content, &effective_old);
+        let mut msg = format!(
+            "old_string appears {effective_count} times in {file_path}. \
+             Use replace_all: true to replace all occurrences, \
+             or provide more context to make the match unique.\n\nMatch locations:"
+        );
+        for (line_num, context_line) in &locations {
+            let _ = write!(msg, "\n  line {line_num}: {context_line}");
+        }
+        return Err(ToolOutput::error(msg));
+    }
+
+    Ok((effective_old, used_fuzzy))
 }
 
 /// Normalize whitespace in a string: collapse runs of whitespace into single spaces.
@@ -227,7 +271,9 @@ fn find_match_locations(content: &str, needle: &str) -> Vec<(usize, String)> {
         let line_num = content[..abs_pos].chars().filter(|&c| c == '\n').count() + 1;
         // Get the line containing the start of the match
         let line_start = content[..abs_pos].rfind('\n').map_or(0, |p| p + 1);
-        let line_end = content[abs_pos..].find('\n').map_or(content.len(), |p| abs_pos + p);
+        let line_end = content[abs_pos..]
+            .find('\n')
+            .map_or(content.len(), |p| abs_pos + p);
         let context_line = content[line_start..line_end].trim();
         // Truncate long context lines
         let display = if context_line.len() > 80 {
