@@ -4,6 +4,7 @@ pub mod code_block;
 pub mod cost_bar;
 pub mod dialog;
 pub mod diff;
+pub mod diff_view;
 pub mod input;
 pub mod input_history;
 pub mod markdown;
