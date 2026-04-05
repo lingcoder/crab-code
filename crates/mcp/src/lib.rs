@@ -7,6 +7,8 @@ pub mod protocol;
 pub mod resource;
 pub mod server;
 pub mod sse_server;
+pub mod tool_group;
+pub mod tool_version;
 pub mod transport;
 
 pub use client::McpClient;
@@ -23,4 +25,6 @@ pub use server::{
     ToolHandler, ToolRegistryHandler,
 };
 pub use sse_server::run_sse;
+pub use tool_group::{IndexedTool, ToolGroup, ToolIndex};
+pub use tool_version::{ToolVersion, ToolVersionRegistry, VersionedTool};
 pub use transport::Transport;
