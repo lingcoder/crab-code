@@ -172,8 +172,9 @@ impl ProfileManager {
 
         let settings_path = dir.join("settings.json");
         if !settings_path.exists() {
-            std::fs::write(&settings_path, "{}\n")
-                .map_err(|e| crab_common::Error::Config(format!("creating profile settings: {e}")))?;
+            std::fs::write(&settings_path, "{}\n").map_err(|e| {
+                crab_common::Error::Config(format!("creating profile settings: {e}"))
+            })?;
         }
 
         Ok(dir)
@@ -208,12 +209,11 @@ where
 fn load_profile_settings_from_path(path: &Path) -> crab_common::Result<Settings> {
     match std::fs::read_to_string(path) {
         Ok(content) => {
-            let parsed =
-                jsonc_parser::parse_to_serde_value::<serde_json::Value>(
-                    &content,
-                    &jsonc_parser::ParseOptions::default(),
-                )
-                .map_err(|e| crab_common::Error::Config(format!("profile JSONC parse error: {e}")))?;
+            let parsed = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
+                &content,
+                &jsonc_parser::ParseOptions::default(),
+            )
+            .map_err(|e| crab_common::Error::Config(format!("profile JSONC parse error: {e}")))?;
             serde_json::from_value(parsed)
                 .map_err(|e| crab_common::Error::Config(format!("profile settings error: {e}")))
         }
@@ -297,14 +297,8 @@ mod tests {
     fn profile_eq() {
         assert_eq!(Profile::Dev, Profile::Dev);
         assert_ne!(Profile::Dev, Profile::Staging);
-        assert_eq!(
-            Profile::Custom("a".into()),
-            Profile::Custom("a".into())
-        );
-        assert_ne!(
-            Profile::Custom("a".into()),
-            Profile::Custom("b".into())
-        );
+        assert_eq!(Profile::Custom("a".into()), Profile::Custom("a".into()));
+        assert_ne!(Profile::Custom("a".into()), Profile::Custom("b".into()));
     }
 
     // ── resolve_profile ────────────────────────────────────────────────
@@ -361,8 +355,7 @@ mod tests {
     #[test]
     fn manager_resolve_with_env() {
         let env = fake_env(HashMap::from([("CRAB_PROFILE", "prod")]));
-        let mgr = ProfileManager::new(PathBuf::from("/tmp/crab"))
-            .resolve_with_env(None, env);
+        let mgr = ProfileManager::new(PathBuf::from("/tmp/crab")).resolve_with_env(None, env);
         assert_eq!(mgr.active_profile(), Some(&Profile::Production));
     }
 
@@ -442,11 +435,7 @@ mod tests {
 
         // Write profile-specific settings
         let settings_path = mgr.profile_settings_path(&Profile::Dev);
-        std::fs::write(
-            &settings_path,
-            r#"{"model": "dev-model", "theme": "dark"}"#,
-        )
-        .unwrap();
+        std::fs::write(&settings_path, r#"{"model": "dev-model", "theme": "dark"}"#).unwrap();
 
         let mgr = mgr.resolve_with_env(Some("dev"), no_env);
         let settings = mgr.load_profile_settings().unwrap();
@@ -475,7 +464,8 @@ mod tests {
         let mgr = ProfileManager::new(dir.clone());
         mgr.create_profile(&Profile::Dev).unwrap();
         mgr.create_profile(&Profile::Production).unwrap();
-        mgr.create_profile(&Profile::Custom("team-a".into())).unwrap();
+        mgr.create_profile(&Profile::Custom("team-a".into()))
+            .unwrap();
 
         let profiles = mgr.list_profiles();
         let names: Vec<&str> = profiles.iter().map(|p| p.name()).collect();
@@ -540,10 +530,14 @@ mod tests {
         let dir = std::env::temp_dir().join("crab-profile-test-jsonc");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("settings.json");
-        std::fs::write(&path, r#"{
+        std::fs::write(
+            &path,
+            r#"{
             // Profile comment
             "model": "test-model"
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let settings = load_profile_settings_from_path(&path).unwrap();
         assert_eq!(settings.model.as_deref(), Some("test-model"));
