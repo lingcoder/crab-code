@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -33,7 +33,7 @@ pub struct FileNode {
     /// Type of node.
     pub node_type: NodeType,
     /// Child nodes (only meaningful for directories).
-    pub children: Vec<FileNode>,
+    pub children: Vec<Self>,
     /// Whether this directory is expanded in the tree view.
     pub expanded: bool,
     /// Whether this node is currently selected/highlighted.
@@ -79,14 +79,14 @@ impl FileNode {
 
     /// Add a child node (for directories).
     #[must_use]
-    pub fn with_child(mut self, child: FileNode) -> Self {
+    pub fn with_child(mut self, child: Self) -> Self {
         self.children.push(child);
         self
     }
 
     /// Add multiple children.
     #[must_use]
-    pub fn with_children(mut self, children: Vec<FileNode>) -> Self {
+    pub fn with_children(mut self, children: Vec<Self>) -> Self {
         self.children = children;
         self
     }
@@ -118,8 +118,8 @@ impl FileNode {
 
     /// Sort children: directories first, then files, alphabetically within each group.
     pub fn sort_children(&mut self) {
-        self.children.sort_by(|a, b| {
-            match (a.node_type, b.node_type) {
+        self.children
+            .sort_by(|a, b| match (a.node_type, b.node_type) {
                 (NodeType::Directory, NodeType::Directory)
                 | (NodeType::File, NodeType::File)
                 | (NodeType::Symlink, NodeType::Symlink) => {
@@ -129,8 +129,7 @@ impl FileNode {
                 (_, NodeType::Directory) => std::cmp::Ordering::Greater,
                 (NodeType::Symlink, NodeType::File) => std::cmp::Ordering::Less,
                 (NodeType::File, NodeType::Symlink) => std::cmp::Ordering::Greater,
-            }
-        });
+            });
         for child in &mut self.children {
             child.sort_children();
         }
@@ -142,25 +141,25 @@ impl FileNode {
 pub fn file_icon(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("");
     match ext.to_lowercase().as_str() {
-        "rs" => "\u{e7a8} ",     // Rust
-        "ts" | "tsx" => "\u{e628} ", // TypeScript
-        "js" | "jsx" => "\u{e74e} ", // JavaScript
-        "py" => "\u{e73c} ",     // Python
-        "go" => "\u{e627} ",     // Go
-        "java" => "\u{e738} ",   // Java
-        "c" | "h" => "\u{e61e} ", // C
-        "cpp" | "hpp" | "cc" => "\u{e61d} ", // C++
-        "md" => "\u{e73e} ",     // Markdown
-        "json" => "\u{e60b} ",   // JSON
-        "toml" => "\u{e615} ",   // TOML
-        "yaml" | "yml" => "\u{e6a8} ", // YAML
-        "html" => "\u{e736} ",   // HTML
-        "css" | "scss" => "\u{e749} ", // CSS
-        "sh" | "bash" => "\u{e795} ", // Shell
-        "lock" => "\u{f023} ",   // Lock file
-        "txt" => "\u{f0f6} ",    // Text
+        "rs" => "\u{e7a8} ",                                   // Rust
+        "ts" | "tsx" => "\u{e628} ",                           // TypeScript
+        "js" | "jsx" => "\u{e74e} ",                           // JavaScript
+        "py" => "\u{e73c} ",                                   // Python
+        "go" => "\u{e627} ",                                   // Go
+        "java" => "\u{e738} ",                                 // Java
+        "c" | "h" => "\u{e61e} ",                              // C
+        "cpp" | "hpp" | "cc" => "\u{e61d} ",                   // C++
+        "md" => "\u{e73e} ",                                   // Markdown
+        "json" => "\u{e60b} ",                                 // JSON
+        "toml" => "\u{e615} ",                                 // TOML
+        "yaml" | "yml" => "\u{e6a8} ",                         // YAML
+        "html" => "\u{e736} ",                                 // HTML
+        "css" | "scss" => "\u{e749} ",                         // CSS
+        "sh" | "bash" => "\u{e795} ",                          // Shell
+        "lock" => "\u{f023} ",                                 // Lock file
+        "txt" => "\u{f0f6} ",                                  // Text
         "png" | "jpg" | "jpeg" | "gif" | "svg" => "\u{f1c5} ", // Image
-        _ => "\u{f016} ",        // Default file
+        _ => "\u{f016} ",                                      // Default file
     }
 }
 
@@ -375,34 +374,36 @@ impl FileTree {
 
     /// Toggle expand/collapse on the selected node (if it's a directory).
     pub fn toggle_expand(&mut self) {
-        if let Some(row) = self.flattened.get(self.selected) {
-            if row.node_type == NodeType::Directory {
-                let path = row.path.clone();
-                toggle_node_expanded(&mut self.roots, &path);
-                self.rebuild_flat();
-            }
+        if let Some(row) = self.flattened.get(self.selected)
+            && row.node_type == NodeType::Directory
+        {
+            let path = row.path.clone();
+            toggle_node_expanded(&mut self.roots, &path);
+            self.rebuild_flat();
         }
     }
 
     /// Expand the selected directory. No-op if already expanded or if it's a file.
     pub fn expand_selected(&mut self) {
-        if let Some(row) = self.flattened.get(self.selected) {
-            if row.node_type == NodeType::Directory && !row.expanded {
-                let path = row.path.clone();
-                toggle_node_expanded(&mut self.roots, &path);
-                self.rebuild_flat();
-            }
+        if let Some(row) = self.flattened.get(self.selected)
+            && row.node_type == NodeType::Directory
+            && !row.expanded
+        {
+            let path = row.path.clone();
+            toggle_node_expanded(&mut self.roots, &path);
+            self.rebuild_flat();
         }
     }
 
     /// Collapse the selected directory. No-op if already collapsed or if it's a file.
     pub fn collapse_selected(&mut self) {
-        if let Some(row) = self.flattened.get(self.selected) {
-            if row.node_type == NodeType::Directory && row.expanded {
-                let path = row.path.clone();
-                toggle_node_expanded(&mut self.roots, &path);
-                self.rebuild_flat();
-            }
+        if let Some(row) = self.flattened.get(self.selected)
+            && row.node_type == NodeType::Directory
+            && row.expanded
+        {
+            let path = row.path.clone();
+            toggle_node_expanded(&mut self.roots, &path);
+            self.rebuild_flat();
         }
     }
 
@@ -567,9 +568,8 @@ mod tests {
                 .with_children(vec![
                     FileNode::file("main.rs", "src/main.rs"),
                     FileNode::file("lib.rs", "src/lib.rs"),
-                    FileNode::directory("utils", "src/utils").with_children(vec![
-                        FileNode::file("helpers.rs", "src/utils/helpers.rs"),
-                    ]),
+                    FileNode::directory("utils", "src/utils")
+                        .with_children(vec![FileNode::file("helpers.rs", "src/utils/helpers.rs")]),
                 ]),
             FileNode::file("Cargo.toml", "Cargo.toml"),
             FileNode::file("README.md", "README.md"),
@@ -611,11 +611,10 @@ mod tests {
 
     #[test]
     fn visible_count_collapsed() {
-        let d = FileNode::directory("src", "src")
-            .with_children(vec![
-                FileNode::file("a.rs", "src/a.rs"),
-                FileNode::file("b.rs", "src/b.rs"),
-            ]);
+        let d = FileNode::directory("src", "src").with_children(vec![
+            FileNode::file("a.rs", "src/a.rs"),
+            FileNode::file("b.rs", "src/b.rs"),
+        ]);
         // collapsed: only the directory itself is visible
         assert_eq!(d.visible_count(), 1);
     }
@@ -648,13 +647,12 @@ mod tests {
 
     #[test]
     fn sort_children_dirs_first() {
-        let mut d = FileNode::directory("root", "root")
-            .with_children(vec![
-                FileNode::file("zebra.rs", "root/zebra.rs"),
-                FileNode::directory("alpha", "root/alpha"),
-                FileNode::file("apple.rs", "root/apple.rs"),
-                FileNode::directory("beta", "root/beta"),
-            ]);
+        let mut d = FileNode::directory("root", "root").with_children(vec![
+            FileNode::file("zebra.rs", "root/zebra.rs"),
+            FileNode::directory("alpha", "root/alpha"),
+            FileNode::file("apple.rs", "root/apple.rs"),
+            FileNode::directory("beta", "root/beta"),
+        ]);
         d.sort_children();
         assert_eq!(d.children[0].name, "alpha");
         assert_eq!(d.children[1].name, "beta");
