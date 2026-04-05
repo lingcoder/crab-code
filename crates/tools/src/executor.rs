@@ -53,6 +53,12 @@ impl ToolExecutor {
         &self.registry
     }
 
+    /// Returns a clone of the `Arc<ToolRegistry>` for sharing with sub-agents.
+    #[must_use]
+    pub fn registry_arc(&self) -> Arc<ToolRegistry> {
+        Arc::clone(&self.registry)
+    }
+
     /// Execute a tool by name with full permission checks.
     ///
     /// Permission decision matrix (mode x `tool_type` x `path_scope`):

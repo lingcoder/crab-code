@@ -535,9 +535,9 @@ async fn execute_unchecked_skips_permission() {
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn register_all_builtins_produces_14_tools() {
+fn register_all_builtins_produces_29_tools() {
     let registry = create_default_registry();
-    assert_eq!(registry.len(), 14);
+    assert_eq!(registry.len(), 29);
 }
 
 #[test]
@@ -551,13 +551,28 @@ fn all_expected_tools_registered() {
         "glob",
         "grep",
         "notebook_edit",
+        "notebook_read",
+        "lsp",
         "agent",
         "web_search",
         "web_fetch",
+        "ask_user",
+        "enter_plan_mode",
+        "image_read",
         "task_create",
         "task_list",
         "task_update",
         "task_get",
+        "diff",
+        "symlink_check",
+        "file_type",
+        "cron_create",
+        "cron_delete",
+        "cron_list",
+        "scheduler_create",
+        "scheduler_list",
+        "scheduler_cancel",
+        "remote_trigger",
     ];
     for name in &expected {
         assert!(
@@ -571,7 +586,7 @@ fn all_expected_tools_registered() {
 fn all_tools_have_valid_schemas() {
     let registry = create_default_registry();
     let schemas = registry.tool_schemas();
-    assert_eq!(schemas.len(), 14);
+    assert_eq!(schemas.len(), 29);
     for schema in &schemas {
         let name = schema["name"].as_str().unwrap();
         assert!(!name.is_empty(), "tool name should not be empty");

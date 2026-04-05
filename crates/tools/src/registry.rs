@@ -43,6 +43,12 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
+    /// Get all registered tools as a list of `Arc<dyn Tool>`.
+    #[must_use]
+    pub fn all_tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools.values().cloned().collect()
+    }
+
     /// List all registered tool names (sorted for deterministic output).
     #[must_use]
     pub fn tool_names(&self) -> Vec<&str> {

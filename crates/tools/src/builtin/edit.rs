@@ -1,6 +1,7 @@
 use crab_common::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
+use std::fmt::Write;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -37,6 +38,16 @@ impl Tool for EditTool {
                     "type": "boolean",
                     "default": false,
                     "description": "Replace all occurrences (default: false, replace first only)"
+                },
+                "fuzzy_match": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, try whitespace-insensitive matching when exact match fails"
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, return a unified diff preview without modifying the file"
                 }
             },
             "required": ["file_path", "old_string", "new_string"]
@@ -75,6 +86,16 @@ impl Tool for EditTool {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
 
+            let fuzzy_match = input
+                .get("fuzzy_match")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            let dry_run = input
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
             let path = Path::new(file_path);
 
             // Validate absolute path
@@ -108,41 +129,50 @@ impl Tool for EditTool {
                 crab_common::Error::Other(format!("failed to read {file_path}: {e}"))
             })?;
 
-            // Count occurrences
-            let match_count = content.matches(old_string).count();
-
-            if match_count == 0 {
-                return Ok(ToolOutput::error(format!(
-                    "old_string not found in {file_path}"
-                )));
-            }
-
-            // Uniqueness check: when not using replace_all, old_string must appear exactly once
-            if !replace_all && match_count > 1 {
-                return Ok(ToolOutput::error(format!(
-                    "old_string appears {match_count} times in {file_path}. \
-                     Use replace_all: true to replace all occurrences, \
-                     or provide more context to make the match unique."
-                )));
-            }
-
-            // Perform replacement
-            let new_content = if replace_all {
-                content.replace(old_string, new_string)
-            } else {
-                content.replacen(old_string, new_string, 1)
+            // Resolve match: exact or fuzzy
+            let resolved = resolve_match(
+                &content, old_string, fuzzy_match, replace_all, file_path,
+            );
+            let (effective_old, used_fuzzy, new_content) = match resolved {
+                Ok((eff, fuzzy)) => {
+                    let replacement = if replace_all {
+                        content.replace(eff.as_str(), new_string)
+                    } else {
+                        content.replacen(eff.as_str(), new_string, 1)
+                    };
+                    (eff, fuzzy, replacement)
+                }
+                Err(output) => return Ok(output),
             };
+
+            let effective_count = content.matches(effective_old.as_str()).count();
+
+            // Dry-run mode: return diff preview without writing
+            if dry_run {
+                let diff = crab_fs::diff::unified_diff(
+                    &content, &new_content, file_path, file_path,
+                );
+                let mut out = String::from("[dry-run] Preview of changes:\n");
+                if used_fuzzy {
+                    let _ = writeln!(out, "(fuzzy match used)");
+                }
+                out.push_str(&diff);
+                return Ok(ToolOutput::success(out));
+            }
 
             // Write the file back
             tokio::fs::write(path, &new_content).await.map_err(|e| {
                 crab_common::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
 
-            let msg = if replace_all {
-                format!("Replaced {match_count} occurrence(s) in {file_path}")
+            let mut msg = if replace_all {
+                format!("Replaced {effective_count} occurrence(s) in {file_path}")
             } else {
                 format!("Replaced 1 occurrence in {file_path}")
             };
+            if used_fuzzy {
+                let _ = write!(msg, " (fuzzy match)");
+            }
 
             Ok(ToolOutput::success(msg))
         })
@@ -151,6 +181,65 @@ impl Tool for EditTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+}
+
+/// Normalize whitespace in a string: collapse runs of whitespace into single spaces.
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Try to find a fuzzy match in `content` for `needle` by normalizing whitespace.
+/// Returns the actual substring from `content` that matches, if found.
+fn find_fuzzy_match(content: &str, needle: &str) -> Option<String> {
+    let normalized_needle = normalize_whitespace(needle);
+    if normalized_needle.is_empty() {
+        return None;
+    }
+
+    // Split content into lines, try matching contiguous line groups
+    let needle_line_count = needle.lines().count().max(1);
+    let content_lines: Vec<&str> = content.lines().collect();
+
+    for start in 0..content_lines.len() {
+        // Try windows of needle_line_count lines, plus one extra on each side
+        for window_size in [needle_line_count, needle_line_count + 1] {
+            let end = start + window_size;
+            if end > content_lines.len() {
+                continue;
+            }
+            let candidate = content_lines[start..end].join("\n");
+            if normalize_whitespace(&candidate) == normalized_needle {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Find all locations (1-based line number + trimmed context) where `needle` appears.
+fn find_match_locations(content: &str, needle: &str) -> Vec<(usize, String)> {
+    let mut locations = Vec::new();
+    let mut search_from = 0;
+
+    while let Some(pos) = content[search_from..].find(needle) {
+        let abs_pos = search_from + pos;
+        let line_num = content[..abs_pos].chars().filter(|&c| c == '\n').count() + 1;
+        // Get the line containing the start of the match
+        let line_start = content[..abs_pos].rfind('\n').map_or(0, |p| p + 1);
+        let line_end = content[abs_pos..].find('\n').map_or(content.len(), |p| abs_pos + p);
+        let context_line = content[line_start..line_end].trim();
+        // Truncate long context lines
+        let display = if context_line.len() > 80 {
+            format!("{}...", &context_line[..77])
+        } else {
+            context_line.to_owned()
+        };
+        locations.push((line_num, display));
+        search_from = abs_pos + needle.len();
+    }
+
+    locations
 }
 
 #[cfg(test)]
@@ -371,5 +460,210 @@ mod tests {
         EditTool.execute(input, &ctx).await.unwrap();
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "line 1\nLINE TWO\nline 3\n");
+    }
+
+    // ── Fuzzy match tests ──────────────────────────────────────────
+
+    #[test]
+    fn normalize_whitespace_collapses() {
+        assert_eq!(normalize_whitespace("  hello   world  "), "hello world");
+        assert_eq!(normalize_whitespace("a\t\nb"), "a b");
+        assert_eq!(normalize_whitespace("single"), "single");
+        assert_eq!(normalize_whitespace(""), "");
+    }
+
+    #[test]
+    fn fuzzy_match_finds_whitespace_variant() {
+        let content = "fn  hello()  {\n    body\n}\n";
+        let needle = "fn hello() {\n    body\n}";
+        let result = find_fuzzy_match(content, needle);
+        assert!(result.is_some());
+        // Should match the 3-line block with original whitespace
+        assert_eq!(result.unwrap(), "fn  hello()  {\n    body\n}");
+    }
+
+    #[test]
+    fn fuzzy_match_returns_none_when_no_match() {
+        let content = "fn hello() {}\n";
+        let needle = "fn totally_different() {}";
+        assert!(find_fuzzy_match(content, needle).is_none());
+    }
+
+    #[tokio::test]
+    async fn edit_fuzzy_match_whitespace_difference() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("fuzzy.rs");
+        std::fs::write(&file, "fn  hello()  {}\nfn world() {}\n").unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn hello() {}",
+            "new_string": "fn greeting() {}",
+            "fuzzy_match": true
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error, "output: {}", output.text());
+        assert!(output.text().contains("fuzzy match"));
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert!(content.contains("fn greeting() {}"));
+    }
+
+    #[tokio::test]
+    async fn edit_fuzzy_match_disabled_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nofuzzy.rs");
+        std::fs::write(&file, "fn  hello()  {}\n").unwrap();
+        let ctx = test_ctx();
+
+        // Without fuzzy_match, should fail because exact match doesn't exist
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn hello() {}",
+            "new_string": "fn greeting() {}"
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(output.is_error);
+        assert!(output.text().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn edit_fuzzy_match_both_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nofuzzy2.rs");
+        std::fs::write(&file, "fn hello() {}\n").unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn totally_different() {}",
+            "new_string": "fn replacement() {}",
+            "fuzzy_match": true
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(output.is_error);
+        assert!(output.text().contains("fuzzy match both failed"));
+    }
+
+    // ── Conflict detection tests ───────────────────────────────────
+
+    #[test]
+    fn find_match_locations_basic() {
+        let content = "foo bar\nbaz foo\nqux\nfoo end";
+        let locs = find_match_locations(content, "foo");
+        assert_eq!(locs.len(), 3);
+        assert_eq!(locs[0].0, 1); // line 1
+        assert_eq!(locs[1].0, 2); // line 2
+        assert_eq!(locs[2].0, 4); // line 4
+    }
+
+    #[tokio::test]
+    async fn edit_conflict_shows_line_numbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("conflict.txt");
+        std::fs::write(&file, "let x = 1;\nlet y = 2;\nlet x = 3;\n").unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "let x",
+            "new_string": "let z"
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(output.is_error);
+        let text = output.text();
+        assert!(text.contains("2 times"));
+        assert!(text.contains("Match locations"));
+        assert!(text.contains("line 1"));
+        assert!(text.contains("line 3"));
+    }
+
+    // ── Dry-run tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_dry_run_shows_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("dryrun.txt");
+        let original = "line 1\nline 2\nline 3\n";
+        std::fs::write(&file, original).unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "line 2",
+            "new_string": "LINE TWO",
+            "dry_run": true
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error);
+        let text = output.text();
+        assert!(text.contains("[dry-run]"));
+        assert!(text.contains("-line 2"));
+        assert!(text.contains("+LINE TWO"));
+        // File should NOT be modified
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, original);
+    }
+
+    #[tokio::test]
+    async fn edit_dry_run_with_fuzzy() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("dryfuzzy.rs");
+        std::fs::write(&file, "fn  hello()  {}\nfn world() {}\n").unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn hello() {}",
+            "new_string": "fn greeting() {}",
+            "fuzzy_match": true,
+            "dry_run": true
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error);
+        let text = output.text();
+        assert!(text.contains("[dry-run]"));
+        assert!(text.contains("fuzzy match used"));
+        // File should NOT be modified
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert!(content.contains("fn  hello()  {}"));
+    }
+
+    #[tokio::test]
+    async fn edit_dry_run_replace_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("dryall.txt");
+        let original = "foo bar foo baz foo";
+        std::fs::write(&file, original).unwrap();
+        let ctx = test_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true,
+            "dry_run": true
+        });
+
+        let output = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error);
+        let text = output.text();
+        assert!(text.contains("[dry-run]"));
+        // File should NOT be modified
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, original);
+    }
+
+    #[test]
+    fn schema_has_new_optional_fields() {
+        let schema = EditTool.input_schema();
+        assert!(schema["properties"]["fuzzy_match"].is_object());
+        assert!(schema["properties"]["dry_run"].is_object());
     }
 }

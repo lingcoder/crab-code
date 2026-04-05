@@ -73,6 +73,8 @@ impl Tool for BashTool {
                 env: vec![],
                 timeout,
                 stdin_data: None,
+                clear_env: false,
+                kill_grace_period: None,
             };
 
             let output = run(opts).await?;
