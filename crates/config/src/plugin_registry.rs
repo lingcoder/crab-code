@@ -104,9 +104,7 @@ pub fn load_plugin_config(name: &str) -> crab_common::Result<serde_json::Value> 
     let path = plugin_config_path(name);
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).map_err(|e| {
-            crab_common::Error::Config(format!(
-                "invalid plugin config for '{name}': {e}"
-            ))
+            crab_common::Error::Config(format!("invalid plugin config for '{name}': {e}"))
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Ok(serde_json::Value::Object(serde_json::Map::new()))
@@ -128,9 +126,7 @@ pub fn save_plugin_config(name: &str, config: &serde_json::Value) -> crab_common
     })?;
     let path = plugin_config_path(name);
     let content = serde_json::to_string_pretty(config).map_err(|e| {
-        crab_common::Error::Config(format!(
-            "cannot serialize plugin config for '{name}': {e}"
-        ))
+        crab_common::Error::Config(format!("cannot serialize plugin config for '{name}': {e}"))
     })?;
     std::fs::write(&path, content).map_err(|e| {
         crab_common::Error::Config(format!(
@@ -182,11 +178,8 @@ impl PluginRegistry {
     /// Load from a specific path (useful for tests).
     pub fn load_from(path: &Path) -> crab_common::Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str(&content).map_err(|e| {
-                crab_common::Error::Config(format!(
-                    "invalid plugin registry: {e}"
-                ))
-            }),
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|e| crab_common::Error::Config(format!("invalid plugin registry: {e}"))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
             Err(e) => Err(crab_common::Error::Config(format!(
                 "cannot read plugin registry: {e}"
@@ -210,9 +203,7 @@ impl PluginRegistry {
             })?;
         }
         let content = serde_json::to_string_pretty(self).map_err(|e| {
-            crab_common::Error::Config(format!(
-                "cannot serialize plugin registry: {e}"
-            ))
+            crab_common::Error::Config(format!("cannot serialize plugin registry: {e}"))
         })?;
         std::fs::write(path, content).map_err(|e| {
             crab_common::Error::Config(format!(
@@ -313,19 +304,19 @@ impl PluginRegistry {
     /// - Any → `Disabled` (via [`disable`])
     ///
     /// Returns `Err` if the transition is invalid or the plugin is not found.
-    pub fn transition(
-        &mut self,
-        name: &str,
-        target: PluginState,
-    ) -> crab_common::Result<()> {
-        let entry = self.plugins.get_mut(name).ok_or_else(|| {
-            crab_common::Error::Config(format!("plugin '{name}' not found"))
-        })?;
+    pub fn transition(&mut self, name: &str, target: PluginState) -> crab_common::Result<()> {
+        let entry = self
+            .plugins
+            .get_mut(name)
+            .ok_or_else(|| crab_common::Error::Config(format!("plugin '{name}' not found")))?;
 
         let valid = matches!(
             (entry.state, target),
             (PluginState::Registered, PluginState::Initialized)
-                | (PluginState::Initialized | PluginState::Stopped, PluginState::Running)
+                | (
+                    PluginState::Initialized | PluginState::Stopped,
+                    PluginState::Running
+                )
                 | (PluginState::Running, PluginState::Stopped)
                 | (PluginState::Stopped, PluginState::Registered)
         );
@@ -632,10 +623,7 @@ mod tests {
         let json = serde_json::to_string(&reg).unwrap();
         let parsed: PluginRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 2);
-        assert_eq!(
-            parsed.get("alpha").unwrap().state,
-            PluginState::Initialized
-        );
+        assert_eq!(parsed.get("alpha").unwrap().state, PluginState::Initialized);
     }
 
     // ── Plugin config helpers ───────────────────────────────────────────

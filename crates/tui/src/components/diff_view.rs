@@ -37,15 +37,9 @@ pub enum DiffLine {
         text: String,
     },
     /// Line removed from the old side.
-    Removed {
-        line_num_old: usize,
-        text: String,
-    },
+    Removed { line_num_old: usize, text: String },
     /// Line added on the new side.
-    Added {
-        line_num_new: usize,
-        text: String,
-    },
+    Added { line_num_new: usize, text: String },
     /// A modified line pair — old and new with inline (char-level) diff fragments.
     Modified {
         line_num_old: usize,
@@ -160,10 +154,7 @@ pub fn compute_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
 /// Compute character-level inline diff between two strings.
 /// Returns (`old_fragments`, `new_fragments`).
 #[must_use]
-pub fn compute_inline_diff(
-    old: &str,
-    new: &str,
-) -> (Vec<InlineFragment>, Vec<InlineFragment>) {
+pub fn compute_inline_diff(old: &str, new: &str) -> (Vec<InlineFragment>, Vec<InlineFragment>) {
     let diff = TextDiff::from_chars(old, new);
     let mut old_frags = Vec::new();
     let mut new_frags = Vec::new();
@@ -204,10 +195,11 @@ fn coalesce_fragments(frags: Vec<InlineFragment>) -> Vec<InlineFragment> {
     let mut result: Vec<InlineFragment> = Vec::new();
     for f in frags {
         if let Some(last) = result.last_mut()
-            && last.kind == f.kind {
-                last.text.push_str(&f.text);
-                continue;
-            }
+            && last.kind == f.kind
+        {
+            last.text.push_str(&f.text);
+            continue;
+        }
         result.push(f);
     }
     result
@@ -231,8 +223,7 @@ pub fn detect_hunks(diff_lines: &[DiffLine]) -> Vec<DiffHunk> {
             i += 1;
         } else {
             let start = i;
-            while i < diff_lines.len() && !matches!(&diff_lines[i], DiffLine::Context { .. })
-            {
+            while i < diff_lines.len() && !matches!(&diff_lines[i], DiffLine::Context { .. }) {
                 i += 1;
             }
             hunks.push(DiffHunk {
@@ -304,9 +295,10 @@ impl DiffNavigator {
 
     /// Jump to hunk containing the given diff line index.
     pub fn jump_to_line(&mut self, line_index: usize) {
-        self.current = self.hunks.iter().position(|h| {
-            line_index >= h.start_index && line_index < h.start_index + h.length
-        });
+        self.current = self
+            .hunks
+            .iter()
+            .position(|h| line_index >= h.start_index && line_index < h.start_index + h.length);
     }
 }
 
@@ -445,10 +437,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_old:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_old:>4} "), num_style));
                 }
                 spans.push(Span::styled(format!("  {text}"), ctx_style));
                 Line::from(spans)
@@ -458,10 +447,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_old:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_old:>4} "), num_style));
                 }
                 spans.push(Span::styled(format!("- {text}"), del_style));
                 Line::from(spans)
@@ -482,10 +468,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_old:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_old:>4} "), num_style));
                 }
                 spans.push(Span::styled("- ", del_style));
                 for frag in old_fragments {
@@ -519,10 +502,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_new:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_new:>4} "), num_style));
                 }
                 spans.push(Span::styled(format!("  {text}"), ctx_style));
                 Line::from(spans)
@@ -532,10 +512,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_new:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_new:>4} "), num_style));
                 }
                 spans.push(Span::styled(format!("+ {text}"), add_style));
                 Line::from(spans)
@@ -556,10 +533,7 @@ impl<'t> SplitDiffView<'t> {
             } => {
                 let mut spans = Vec::new();
                 if self.config.line_numbers {
-                    spans.push(Span::styled(
-                        format!("{line_num_new:>4} "),
-                        num_style,
-                    ));
+                    spans.push(Span::styled(format!("{line_num_new:>4} "), num_style));
                 }
                 spans.push(Span::styled("+ ", add_style));
                 for frag in new_fragments {
@@ -592,7 +566,12 @@ impl Widget for &SplitDiffView<'_> {
 
         // Split area: left half | separator | right half
         let half_width = (area.width - 1) / 2;
-        let left_area = Rect::new(area.x, area.y + 1, half_width, area.height.saturating_sub(1));
+        let left_area = Rect::new(
+            area.x,
+            area.y + 1,
+            half_width,
+            area.height.saturating_sub(1),
+        );
         let sep_x = area.x + half_width;
         let right_area = Rect::new(
             sep_x + 1,
@@ -607,7 +586,10 @@ impl Widget for &SplitDiffView<'_> {
         if let Some(cell) = buf.cell_mut((area.x, area.y)) {
             // Write old label
             let header_line = Line::from(vec![
-                Span::styled(format!("{old_label:<width$}", width = half_width as usize), header_style),
+                Span::styled(
+                    format!("{old_label:<width$}", width = half_width as usize),
+                    header_style,
+                ),
                 Span::styled("│", border_style),
                 Span::styled(
                     format!("{new_label:<width$}", width = right_area.width as usize),
@@ -677,9 +659,7 @@ pub fn render_inline_diff_line(
         .fg(theme.diff_remove_fg)
         .bg(theme.diff_remove_bg);
     let del_bold = del_style.add_modifier(Modifier::BOLD);
-    let add_style = Style::default()
-        .fg(theme.diff_add_fg)
-        .bg(theme.diff_add_bg);
+    let add_style = Style::default().fg(theme.diff_add_fg).bg(theme.diff_add_bg);
     let add_bold = add_style.add_modifier(Modifier::BOLD);
 
     let old_spans: Vec<Span<'static>> = old_frags
@@ -808,9 +788,18 @@ mod tests {
     #[test]
     fn coalesce_merges_adjacent() {
         let frags = vec![
-            InlineFragment { kind: InlineChangeKind::Equal, text: "a".into() },
-            InlineFragment { kind: InlineChangeKind::Equal, text: "b".into() },
-            InlineFragment { kind: InlineChangeKind::Delete, text: "c".into() },
+            InlineFragment {
+                kind: InlineChangeKind::Equal,
+                text: "a".into(),
+            },
+            InlineFragment {
+                kind: InlineChangeKind::Equal,
+                text: "b".into(),
+            },
+            InlineFragment {
+                kind: InlineChangeKind::Delete,
+                text: "c".into(),
+            },
         ];
         let result = coalesce_fragments(frags);
         assert_eq!(result.len(), 2);
@@ -939,8 +928,7 @@ mod tests {
     #[test]
     fn split_view_with_labels() {
         let theme = Theme::dark();
-        let view =
-            SplitDiffView::with_labels(&theme, OLD, NEW, "file_a.rs", "file_b.rs");
+        let view = SplitDiffView::with_labels(&theme, OLD, NEW, "file_a.rs", "file_b.rs");
         assert_eq!(view.old_label, "file_a.rs");
         assert_eq!(view.new_label, "file_b.rs");
     }
@@ -985,8 +973,7 @@ mod tests {
     #[test]
     fn inline_diff_line_produces_spans() {
         let theme = Theme::dark();
-        let (old_spans, new_spans) =
-            render_inline_diff_line("hello world", "hello WORLD", &theme);
+        let (old_spans, new_spans) = render_inline_diff_line("hello world", "hello WORLD", &theme);
         assert!(!old_spans.is_empty());
         assert!(!new_spans.is_empty());
     }
@@ -996,13 +983,9 @@ mod tests {
         let theme = Theme::dark();
         let (old_spans, new_spans) = render_inline_diff_line("abc", "xyz", &theme);
         // Old spans should use remove color
-        assert!(old_spans
-            .iter()
-            .any(|s| s.style.fg == Some(Color::Red)));
+        assert!(old_spans.iter().any(|s| s.style.fg == Some(Color::Red)));
         // New spans should use add color
-        assert!(new_spans
-            .iter()
-            .any(|s| s.style.fg == Some(Color::Green)));
+        assert!(new_spans.iter().any(|s| s.style.fg == Some(Color::Green)));
     }
 
     // ── SplitViewConfig ──
@@ -1024,11 +1007,7 @@ mod tests {
         });
         let left = view.render_left_pane();
         // Lines should not start with line numbers
-        let first_text: String = left[0]
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
+        let first_text: String = left[0].spans.iter().map(|s| s.content.as_ref()).collect();
         // Without line numbers, first span shouldn't be "   1 "
         assert!(!first_text.starts_with("   1"));
     }
@@ -1085,10 +1064,18 @@ mod tests {
         }
         // Line numbers should be monotonically increasing
         for w in seen_old.windows(2) {
-            assert!(w[1] >= w[0], "Old line numbers not increasing: {:?}", seen_old);
+            assert!(
+                w[1] >= w[0],
+                "Old line numbers not increasing: {:?}",
+                seen_old
+            );
         }
         for w in seen_new.windows(2) {
-            assert!(w[1] >= w[0], "New line numbers not increasing: {:?}", seen_new);
+            assert!(
+                w[1] >= w[0],
+                "New line numbers not increasing: {:?}",
+                seen_new
+            );
         }
     }
 
@@ -1105,8 +1092,14 @@ mod tests {
         let first_row: String = (0..area.width)
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
-        assert!(first_row.contains("old.rs"), "Missing old label: {first_row}");
-        assert!(first_row.contains("new.rs"), "Missing new label: {first_row}");
+        assert!(
+            first_row.contains("old.rs"),
+            "Missing old label: {first_row}"
+        );
+        assert!(
+            first_row.contains("new.rs"),
+            "Missing new label: {first_row}"
+        );
     }
 
     #[test]

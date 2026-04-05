@@ -3,7 +3,7 @@
 //! Produces a JSON Schema (draft-07) that describes all known configuration
 //! fields so editors can provide validation and autocomplete.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Generate a complete JSON Schema for `settings.json`.
 #[must_use]
@@ -265,9 +265,7 @@ mod tests {
     #[test]
     fn schema_theme_enum() {
         let schema = generate_settings_schema();
-        let themes = schema["properties"]["theme"]["enum"]
-            .as_array()
-            .unwrap();
+        let themes = schema["properties"]["theme"]["enum"].as_array().unwrap();
         assert!(themes.contains(&json!("auto")));
         assert!(themes.contains(&json!("dark")));
         assert!(themes.contains(&json!("light")));

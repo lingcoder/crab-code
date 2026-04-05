@@ -190,7 +190,10 @@ impl ShortcutHintBar {
                 spans.push(Span::styled(" | ", sep_style));
             }
             spans.push(Span::styled(binding.key.clone(), key_style));
-            spans.push(Span::styled(format!(":{}", binding.description), desc_style));
+            spans.push(Span::styled(
+                format!(":{}", binding.description),
+                desc_style,
+            ));
         }
 
         Line::from(spans)
@@ -254,48 +257,58 @@ impl ShortcutHintBar {
         // Insert mode
         self.set_bindings(
             HintMode::Insert,
-            vec![BindingGroup::new("Editing")
-                .with("Esc", "Normal mode")
-                .with("Enter", "Submit")
-                .with("Shift+Enter", "New line")
-                .with("Tab", "Autocomplete")
-                .with("Ctrl+C", "Quit")],
+            vec![
+                BindingGroup::new("Editing")
+                    .with("Esc", "Normal mode")
+                    .with("Enter", "Submit")
+                    .with("Shift+Enter", "New line")
+                    .with("Tab", "Autocomplete")
+                    .with("Ctrl+C", "Quit"),
+            ],
         );
 
         // Visual mode
         self.set_bindings(
             HintMode::Visual,
-            vec![BindingGroup::new("Selection")
-                .with("Esc", "Normal mode")
-                .with("j/k", "Extend selection")
-                .with("y", "Copy")],
+            vec![
+                BindingGroup::new("Selection")
+                    .with("Esc", "Normal mode")
+                    .with("j/k", "Extend selection")
+                    .with("y", "Copy"),
+            ],
         );
 
         // Command mode
         self.set_bindings(
             HintMode::Command,
-            vec![BindingGroup::new("Command")
-                .with("Esc", "Cancel")
-                .with("Enter", "Execute")
-                .with("Tab", "Autocomplete")],
+            vec![
+                BindingGroup::new("Command")
+                    .with("Esc", "Cancel")
+                    .with("Enter", "Execute")
+                    .with("Tab", "Autocomplete"),
+            ],
         );
 
         // Search mode
         self.set_bindings(
             HintMode::Search,
-            vec![BindingGroup::new("Search")
-                .with("Esc", "Cancel")
-                .with("Enter", "Confirm")
-                .with("n/N", "Next/Prev match")],
+            vec![
+                BindingGroup::new("Search")
+                    .with("Esc", "Cancel")
+                    .with("Enter", "Confirm")
+                    .with("n/N", "Next/Prev match"),
+            ],
         );
 
         // Dialog mode
         self.set_bindings(
             HintMode::Dialog,
-            vec![BindingGroup::new("Dialog")
-                .with("y", "Accept")
-                .with("n", "Deny")
-                .with("Esc", "Dismiss")],
+            vec![
+                BindingGroup::new("Dialog")
+                    .with("y", "Accept")
+                    .with("n", "Deny")
+                    .with("Esc", "Dismiss"),
+            ],
         );
     }
 }

@@ -201,9 +201,10 @@ impl ContextMenu {
     pub fn select_next(&mut self) {
         if self.submenu_open {
             if let Some(item) = self.items.get(self.selected)
-                && !item.submenu.is_empty() {
-                    self.submenu_selected = (self.submenu_selected + 1) % item.submenu.len();
-                }
+                && !item.submenu.is_empty()
+            {
+                self.submenu_selected = (self.submenu_selected + 1) % item.submenu.len();
+            }
         } else if !self.items.is_empty() {
             self.selected = (self.selected + 1) % self.items.len();
             self.skip_to_selectable(true);
@@ -214,13 +215,14 @@ impl ContextMenu {
     pub fn select_prev(&mut self) {
         if self.submenu_open {
             if let Some(item) = self.items.get(self.selected)
-                && !item.submenu.is_empty() {
-                    self.submenu_selected = if self.submenu_selected == 0 {
-                        item.submenu.len() - 1
-                    } else {
-                        self.submenu_selected - 1
-                    };
-                }
+                && !item.submenu.is_empty()
+            {
+                self.submenu_selected = if self.submenu_selected == 0 {
+                    item.submenu.len() - 1
+                } else {
+                    self.submenu_selected - 1
+                };
+            }
         } else if !self.items.is_empty() {
             self.selected = if self.selected == 0 {
                 self.items.len() - 1
@@ -237,9 +239,10 @@ impl ContextMenu {
         if self.submenu_open {
             if let Some(item) = self.items.get(self.selected)
                 && let Some(sub_item) = item.submenu.get(self.submenu_selected)
-                    && sub_item.enabled {
-                        return Some(MenuAction::Selected(sub_item.action.clone()));
-                    }
+                && sub_item.enabled
+            {
+                return Some(MenuAction::Selected(sub_item.action.clone()));
+            }
             return None;
         }
 
@@ -273,9 +276,10 @@ impl ContextMenu {
         let len = self.items.len();
         for _ in 0..len {
             if let Some(item) = self.items.get(self.selected)
-                && !item.is_separator() {
-                    return;
-                }
+                && !item.is_separator()
+            {
+                return;
+            }
             if forward {
                 self.selected = (self.selected + 1) % len;
             } else {
@@ -377,7 +381,11 @@ impl Widget for ContextMenuWidget<'_> {
         // Top border
         let top = format!("┌{}┐", "─".repeat(inner_width));
         let top_line = Line::from(Span::styled(top, border_style));
-        Widget::render(top_line, Rect::new(menu_rect.x, menu_rect.y, menu_rect.width, 1), buf);
+        Widget::render(
+            top_line,
+            Rect::new(menu_rect.x, menu_rect.y, menu_rect.width, 1),
+            buf,
+        );
 
         // Items
         let mut row = 1u16;
@@ -423,8 +431,7 @@ impl Widget for ContextMenuWidget<'_> {
             } else {
                 item.label.clone()
             };
-            let padding =
-                label_budget.saturating_sub(label.len());
+            let padding = label_budget.saturating_sub(label.len());
 
             spans.push(Span::styled(label, style));
             spans.push(Span::styled(" ".repeat(padding), style));
@@ -461,19 +468,20 @@ impl Widget for ContextMenuWidget<'_> {
         // Submenu rendering
         if self.menu.is_submenu_open()
             && let Some(parent) = self.menu.items.get(self.menu.selected())
-                && !parent.submenu.is_empty() {
-                    let sub_x = menu_rect.x + menu_rect.width;
-                    let sub_y = menu_rect.y + self.menu.selected() as u16 + 1;
-                    render_submenu(
-                        &parent.submenu,
-                        self.menu.submenu_selected(),
-                        sub_x,
-                        sub_y,
-                        area,
-                        self.theme,
-                        buf,
-                    );
-                }
+            && !parent.submenu.is_empty()
+        {
+            let sub_x = menu_rect.x + menu_rect.width;
+            let sub_y = menu_rect.y + self.menu.selected() as u16 + 1;
+            render_submenu(
+                &parent.submenu,
+                self.menu.submenu_selected(),
+                sub_x,
+                sub_y,
+                area,
+                self.theme,
+                buf,
+            );
+        }
     }
 }
 
@@ -624,10 +632,8 @@ mod tests {
 
     #[test]
     fn menu_item_with_submenu() {
-        let item = MenuItem::new("More", "more").with_submenu(vec![
-            MenuItem::new("A", "a"),
-            MenuItem::new("B", "b"),
-        ]);
+        let item = MenuItem::new("More", "more")
+            .with_submenu(vec![MenuItem::new("A", "a"), MenuItem::new("B", "b")]);
         assert!(item.has_submenu());
         assert_eq!(item.submenu.len(), 2);
     }
@@ -663,10 +669,11 @@ mod tests {
     fn menu_skips_separator_on_show() {
         let mut menu = ContextMenu::new();
         // First item is a separator — should skip to next
-        menu.show(0, 0, vec![
-            MenuItem::separator(),
-            MenuItem::new("First", "first"),
-        ]);
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::separator(), MenuItem::new("First", "first")],
+        );
         assert_eq!(menu.selected(), 1);
     }
 
@@ -691,10 +698,7 @@ mod tests {
     #[test]
     fn menu_select_wraps() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("A", "a"),
-            MenuItem::new("B", "b"),
-        ]);
+        menu.show(0, 0, vec![MenuItem::new("A", "a"), MenuItem::new("B", "b")]);
         assert_eq!(menu.selected(), 0);
 
         menu.select_prev(); // wraps to end
@@ -715,9 +719,11 @@ mod tests {
     #[test]
     fn menu_confirm_disabled_returns_none() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("Disabled", "dis").with_enabled(false),
-        ]);
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::new("Disabled", "dis").with_enabled(false)],
+        );
         let result = menu.confirm();
         assert!(result.is_none());
     }
@@ -725,11 +731,11 @@ mod tests {
     #[test]
     fn menu_confirm_submenu_opens() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("More", "more").with_submenu(vec![
-                MenuItem::new("Sub", "sub"),
-            ]),
-        ]);
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::new("More", "more").with_submenu(vec![MenuItem::new("Sub", "sub")])],
+        );
         let result = menu.confirm();
         assert_eq!(result, Some(MenuAction::Consumed));
         assert!(menu.is_submenu_open());
@@ -738,12 +744,14 @@ mod tests {
     #[test]
     fn menu_submenu_navigation() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("More", "more").with_submenu(vec![
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::new("More", "more").with_submenu(vec![
                 MenuItem::new("Sub A", "sub_a"),
                 MenuItem::new("Sub B", "sub_b"),
-            ]),
-        ]);
+            ])],
+        );
         menu.confirm(); // open submenu
         assert!(menu.is_submenu_open());
         assert_eq!(menu.submenu_selected(), 0);
@@ -758,11 +766,11 @@ mod tests {
     #[test]
     fn menu_submenu_confirm() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("More", "more").with_submenu(vec![
-                MenuItem::new("Sub A", "sub_a"),
-            ]),
-        ]);
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::new("More", "more").with_submenu(vec![MenuItem::new("Sub A", "sub_a")])],
+        );
         menu.confirm(); // open submenu
         let result = menu.confirm(); // select Sub A
         assert_eq!(result, Some(MenuAction::Selected("sub_a".into())));
@@ -771,11 +779,11 @@ mod tests {
     #[test]
     fn menu_back_closes_submenu() {
         let mut menu = ContextMenu::new();
-        menu.show(0, 0, vec![
-            MenuItem::new("More", "more").with_submenu(vec![
-                MenuItem::new("Sub", "sub"),
-            ]),
-        ]);
+        menu.show(
+            0,
+            0,
+            vec![MenuItem::new("More", "more").with_submenu(vec![MenuItem::new("Sub", "sub")])],
+        );
         menu.confirm(); // open submenu
         assert!(menu.is_submenu_open());
 
@@ -855,11 +863,11 @@ mod tests {
     #[test]
     fn widget_renders_submenu() {
         let mut menu = ContextMenu::new();
-        menu.show(2, 2, vec![
-            MenuItem::new("More", "more").with_submenu(vec![
-                MenuItem::new("Sub A", "sub_a"),
-            ]),
-        ]);
+        menu.show(
+            2,
+            2,
+            vec![MenuItem::new("More", "more").with_submenu(vec![MenuItem::new("Sub A", "sub_a")])],
+        );
         menu.confirm(); // open submenu
         let theme = Theme::dark();
         let widget = ContextMenuWidget::new(&menu, &theme);

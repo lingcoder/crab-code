@@ -228,11 +228,7 @@ impl BatchAggregator {
         if Instant::now().duration_since(start) >= self.window {
             self.batch_start = None;
             let batch = std::mem::take(&mut self.buffer);
-            if batch.is_empty() {
-                None
-            } else {
-                Some(batch)
-            }
+            if batch.is_empty() { None } else { Some(batch) }
         } else {
             None
         }

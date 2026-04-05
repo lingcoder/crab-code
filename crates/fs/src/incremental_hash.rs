@@ -89,21 +89,19 @@ impl FileHashCache {
     /// Returns an error if the file cannot be read or its metadata is unavailable.
     pub fn get_hash(&mut self, path: &Path) -> crab_common::Result<FileHash> {
         let meta = std::fs::metadata(path)?;
-        let mtime = meta
-            .modified()
-            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let size = meta.len();
 
         if let Some(entry) = self.entries.get(path)
-            && entry.mtime == mtime && entry.size == size {
-                return Ok(entry.hash);
-            }
+            && entry.mtime == mtime
+            && entry.size == size
+        {
+            return Ok(entry.hash);
+        }
 
         let hash = hash_file(path)?;
-        self.entries.insert(
-            path.to_path_buf(),
-            CacheEntry { hash, mtime, size },
-        );
+        self.entries
+            .insert(path.to_path_buf(), CacheEntry { hash, mtime, size });
         Ok(hash)
     }
 

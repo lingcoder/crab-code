@@ -97,11 +97,7 @@ impl SettingsValidator for RequiredFieldValidator {
     fn validate(&self, settings: &Value) -> Vec<ValidationError> {
         self.fields
             .iter()
-            .filter(|field| {
-                settings
-                    .get(**field)
-                    .is_none_or(Value::is_null)
-            })
+            .filter(|field| settings.get(**field).is_none_or(Value::is_null))
             .map(|field| ValidationError {
                 path: (*field).to_string(),
                 message: "required field is missing or null".to_string(),
@@ -201,21 +197,23 @@ impl SettingsValidator for RangeValidator {
         };
         let mut errs = Vec::new();
         if let Some(min) = self.min
-            && num < min {
-                errs.push(ValidationError {
-                    path: self.field.to_string(),
-                    message: format!("value {num} is below minimum {min}"),
-                    severity: Severity::Error,
-                });
-            }
+            && num < min
+        {
+            errs.push(ValidationError {
+                path: self.field.to_string(),
+                message: format!("value {num} is below minimum {min}"),
+                severity: Severity::Error,
+            });
+        }
         if let Some(max) = self.max
-            && num > max {
-                errs.push(ValidationError {
-                    path: self.field.to_string(),
-                    message: format!("value {num} exceeds maximum {max}"),
-                    severity: Severity::Error,
-                });
-            }
+            && num > max
+        {
+            errs.push(ValidationError {
+                path: self.field.to_string(),
+                message: format!("value {num} exceeds maximum {max}"),
+                severity: Severity::Error,
+            });
+        }
         errs
     }
 }
@@ -348,14 +346,26 @@ pub fn default_validator() -> CompositeValidator {
             ("hooks", ExpectedType::Object),
             ("theme", ExpectedType::String),
         ])))
-        .with(Box::new(RangeValidator::new("maxTokens", Some(1.0), Some(1_000_000.0))))
+        .with(Box::new(RangeValidator::new(
+            "maxTokens",
+            Some(1.0),
+            Some(1_000_000.0),
+        )))
         .with(Box::new(EnumValidator::new(
             "permissionMode",
             vec!["default", "trustProject", "dangerously"],
         )))
         .with(Box::new(EnumValidator::new(
             "apiProvider",
-            vec!["anthropic", "openai", "deepseek", "ollama", "vllm", "bedrock", "vertex"],
+            vec![
+                "anthropic",
+                "openai",
+                "deepseek",
+                "ollama",
+                "vllm",
+                "bedrock",
+                "vertex",
+            ],
         )))
         .with(Box::new(UrlValidator::new("apiBaseUrl")))
 }

@@ -54,11 +54,7 @@ pub struct Command {
 
 impl Command {
     /// Create a new command.
-    pub fn new(
-        id: impl Into<String>,
-        label: impl Into<String>,
-        category: CommandCategory,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, label: impl Into<String>, category: CommandCategory) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
@@ -398,10 +394,7 @@ impl Widget for CommandPaletteWidget<'_> {
         let category_style = Style::default().fg(self.theme.syntax_type);
 
         // Top border
-        let top = format!(
-            "┌{}┐",
-            "─".repeat(width.saturating_sub(2) as usize)
-        );
+        let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2) as usize));
         let top_line = Line::from(Span::styled(top, border_style));
         let top_area = Rect::new(x, y, width, 1);
         Widget::render(top_line, top_area, buf);
@@ -417,10 +410,7 @@ impl Widget for CommandPaletteWidget<'_> {
         Widget::render(query_line, query_area, buf);
 
         // Separator
-        let sep = format!(
-            "├{}┤",
-            "─".repeat(width.saturating_sub(2) as usize)
-        );
+        let sep = format!("├{}┤", "─".repeat(width.saturating_sub(2) as usize));
         let sep_line = Line::from(Span::styled(sep, border_style));
         let sep_area = Rect::new(x, y + 2, width, 1);
         Widget::render(sep_line, sep_area, buf);
@@ -475,31 +465,27 @@ impl Widget for CommandPaletteWidget<'_> {
             Widget::render(line, line_area, buf);
 
             // Description on next line if selected and has description
-            if is_selected
-                && let Some(ref desc) = cmd.description {
-                    let desc_y = row_y + 1;
-                    if desc_y < y + height {
-                        let desc_text = truncate(desc, inner_width);
-                        let desc_pad = inner_width.saturating_sub(desc_text.len());
-                        let desc_line = Line::from(vec![
-                            Span::styled("│ ", border_style),
-                            Span::styled(format!("  {desc_text}"), desc_style),
-                            Span::styled(" ".repeat(desc_pad), desc_style),
-                            Span::styled(" │", border_style),
-                        ]);
-                        let desc_area = Rect::new(x, desc_y, width, 1);
-                        Widget::render(desc_line, desc_area, buf);
-                    }
+            if is_selected && let Some(ref desc) = cmd.description {
+                let desc_y = row_y + 1;
+                if desc_y < y + height {
+                    let desc_text = truncate(desc, inner_width);
+                    let desc_pad = inner_width.saturating_sub(desc_text.len());
+                    let desc_line = Line::from(vec![
+                        Span::styled("│ ", border_style),
+                        Span::styled(format!("  {desc_text}"), desc_style),
+                        Span::styled(" ".repeat(desc_pad), desc_style),
+                        Span::styled(" │", border_style),
+                    ]);
+                    let desc_area = Rect::new(x, desc_y, width, 1);
+                    Widget::render(desc_line, desc_area, buf);
                 }
+            }
         }
 
         // Bottom border
         let bottom_y = (y + 3 + visible_count as u16).min(y + height - 1);
         if bottom_y < area.y + area.height {
-            let bottom = format!(
-                "└{}┘",
-                "─".repeat(width.saturating_sub(2) as usize)
-            );
+            let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2) as usize));
             let bottom_line = Line::from(Span::styled(bottom, border_style));
             let bottom_area = Rect::new(x, bottom_y, width, 1);
             Widget::render(bottom_line, bottom_area, buf);
@@ -531,12 +517,15 @@ mod tests {
                 .with_description("Create a new file"),
         );
         reg.register(
-            Command::new("open_file", "Open File", CommandCategory::File)
-                .with_shortcut("Ctrl+O"),
+            Command::new("open_file", "Open File", CommandCategory::File).with_shortcut("Ctrl+O"),
         );
         reg.register(Command::new("undo", "Undo", CommandCategory::Edit).with_shortcut("Ctrl+Z"));
         reg.register(Command::new("redo", "Redo", CommandCategory::Edit).with_shortcut("Ctrl+Y"));
-        reg.register(Command::new("toggle_sidebar", "Toggle Sidebar", CommandCategory::View));
+        reg.register(Command::new(
+            "toggle_sidebar",
+            "Toggle Sidebar",
+            CommandCategory::View,
+        ));
         reg.register(
             Command::new("goto_line", "Go to Line", CommandCategory::Navigation)
                 .with_shortcut("Ctrl+G"),
@@ -624,7 +613,11 @@ mod tests {
         let reg = sample_registry();
         let file_cmds = reg.by_category(CommandCategory::File);
         assert_eq!(file_cmds.len(), 2);
-        assert!(file_cmds.iter().all(|c| c.category == CommandCategory::File));
+        assert!(
+            file_cmds
+                .iter()
+                .all(|c| c.category == CommandCategory::File)
+        );
     }
 
     #[test]

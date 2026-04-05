@@ -55,10 +55,7 @@ impl SettingsCompleter {
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                let type_str = prop
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("any");
+                let type_str = prop.get("type").and_then(Value::as_str).unwrap_or("any");
                 CompletionItem {
                     label: key.clone(),
                     detail: format!("({type_str}) {description}"),
@@ -74,11 +71,7 @@ impl SettingsCompleter {
     /// Returns enum values, defaults, and examples from the schema.
     #[must_use]
     pub fn complete_value(&self, key: &str, partial: &str) -> Vec<CompletionItem> {
-        let Some(prop) = self
-            .schema
-            .get("properties")
-            .and_then(|p| p.get(key))
-        else {
+        let Some(prop) = self.schema.get("properties").and_then(|p| p.get(key)) else {
             return Vec::new();
         };
 
@@ -89,13 +82,14 @@ impl SettingsCompleter {
         if let Some(enum_vals) = prop.get("enum").and_then(Value::as_array) {
             for val in enum_vals {
                 if let Some(s) = val.as_str()
-                    && s.to_lowercase().starts_with(&lower) {
-                        items.push(CompletionItem {
-                            label: s.to_string(),
-                            detail: "enum value".to_string(),
-                            insert_text: s.to_string(),
-                        });
-                    }
+                    && s.to_lowercase().starts_with(&lower)
+                {
+                    items.push(CompletionItem {
+                        label: s.to_string(),
+                        detail: "enum value".to_string(),
+                        insert_text: s.to_string(),
+                    });
+                }
             }
         }
 
@@ -262,10 +256,7 @@ mod tests {
 
     #[test]
     fn format_value_number() {
-        assert_eq!(
-            format_value(&serde_json::json!(42)),
-            "42"
-        );
+        assert_eq!(format_value(&serde_json::json!(42)), "42");
     }
 
     #[test]
