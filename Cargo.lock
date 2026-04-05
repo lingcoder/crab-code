@@ -735,6 +735,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "similar",
  "syntect",
  "tokio",
  "tokio-util",
