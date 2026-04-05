@@ -12,6 +12,8 @@ pub mod image_read;
 pub mod lsp;
 pub mod mcp_tool;
 pub mod notebook;
+pub mod plan_approval;
+pub mod plan_file;
 pub mod plan_mode;
 pub mod read;
 pub mod read_enhanced;
