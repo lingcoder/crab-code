@@ -217,27 +217,24 @@ cargo run --bin crab                       # Run CLI
 
 ## Comparison
 
-| | Crab Code | Claude Code | Codex CLI |
-|--|-----------|-------------|-----------|
-| Open Source | Apache 2.0 | Proprietary | Apache 2.0 |
-| Language | Rust | TypeScript (Bun) | Rust |
-| Model Agnostic | Any provider | Anthropic + AWS/GCP | OpenAI only |
-| Self-hosted | Yes | No | Yes |
-| MCP Support | stdio + SSE + WS | 6 transports | 2 transports |
-| TUI | ratatui | Ink (React) | ratatui |
-| Built-in Tools | 32 | 30+ | ~10 |
-| Permission Modes | 6 | 6 | 3 |
+| | Crab Code | Claude Code | [OpenCode](https://github.com/anomalyco/opencode) | Codex CLI |
+|--|-----------|-------------|----------|-----------|
+| Open Source | Apache 2.0 | Proprietary | MIT | Apache 2.0 |
+| Language | Rust | TypeScript (Bun) | TypeScript | Rust |
+| Model Agnostic | Any provider | Anthropic + AWS/GCP | Any provider | OpenAI only |
+| Self-hosted | Yes | No | Yes | Yes |
+| MCP Support | stdio + SSE + WS | 6 transports | LSP | 2 transports |
+| TUI | ratatui | Ink (React) | Custom | ratatui |
+| Built-in Tools | 32 | 30+ | ~10 | ~10 |
+| Permission Modes | 6 | 6 | 2 | 3 |
 
 ## Contributing
 
-We'd love your help! See areas where we need contributions:
+We'd love your help! Current focus is aligning with Claude Code 2.1.88 capabilities:
 
 - End-to-end integration testing
-- OS-level sandboxing (Landlock / Seatbelt / Windows Job Object)
-- MCP WebSocket transport testing
 - Additional LLM provider testing
 - Documentation & i18n
-- WASM plugin runtime
 
 ## License
 

@@ -217,27 +217,24 @@ cargo run --bin crab                       # 运行 CLI
 
 ## 对比
 
-| | Crab Code | Claude Code | Codex CLI |
-|--|-----------|-------------|-----------|
-| 开源 | Apache 2.0 | 闭源 | Apache 2.0 |
-| 语言 | Rust | TypeScript (Bun) | Rust |
-| 模型无关 | 任意提供商 | Anthropic + AWS/GCP | 仅 OpenAI |
-| 自托管 | 支持 | 不支持 | 支持 |
-| MCP | stdio + SSE + WS | 6 种传输 | 2 种传输 |
-| TUI | ratatui | Ink (React) | ratatui |
-| 内置工具 | 32 | 30+ | ~10 |
-| 权限模式 | 6 | 6 | 3 |
+| | Crab Code | Claude Code | [OpenCode](https://github.com/anomalyco/opencode) | Codex CLI |
+|--|-----------|-------------|----------|-----------|
+| 开源 | Apache 2.0 | 闭源 | MIT | Apache 2.0 |
+| 语言 | Rust | TypeScript (Bun) | TypeScript | Rust |
+| 模型无关 | 任意提供商 | Anthropic + AWS/GCP | 任意提供商 | 仅 OpenAI |
+| 自托管 | 支持 | 不支持 | 支持 | 支持 |
+| MCP | stdio + SSE + WS | 6 种传输 | LSP | 2 种传输 |
+| TUI | ratatui | Ink (React) | Custom | ratatui |
+| 内置工具 | 32 | 30+ | ~10 | ~10 |
+| 权限模式 | 6 | 6 | 2 | 3 |
 
 ## 贡献
 
-欢迎参与！以下是需要帮助的方向：
+欢迎参与！当前重点是对齐 Claude Code 2.1.88 能力：
 
 - 端到端集成测试
-- OS 级沙箱（Landlock / Seatbelt / Windows Job Object）
-- MCP WebSocket 传输测试
 - 更多 LLM 提供商测试
 - 文档与国际化
-- WASM 插件运行时
 
 ## 许可证
 
