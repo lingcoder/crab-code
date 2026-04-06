@@ -230,9 +230,11 @@ cargo run --bin crab                       # Run CLI
 
 ## Contributing
 
-We'd love your help! Current focus is aligning with Claude Code 2.1.88 capabilities:
+We'd love your help! See areas where we need contributions:
 
 - End-to-end integration testing
+- OS-level sandboxing (Landlock / Seatbelt / Windows Job Object)
+- MCP WebSocket transport testing
 - Additional LLM provider testing
 - Documentation & i18n
 
