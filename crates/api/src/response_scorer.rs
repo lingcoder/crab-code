@@ -87,6 +87,7 @@ impl ScoringContext {
 
 /// Rule-based scorer that evaluates response quality.
 #[derive(Debug)]
+#[allow(clippy::struct_field_names)]
 pub struct ResponseScorer {
     /// Weight for relevance in overall score.
     relevance_weight: f64,
@@ -219,6 +220,7 @@ impl ResponseScorer {
     }
 
     /// Conciseness: penalize excessive length and repetition.
+    #[allow(clippy::unused_self)]
     fn score_conciseness(&self, response: &str, context: &ScoringContext) -> f64 {
         let len = response.len();
         if len == 0 {

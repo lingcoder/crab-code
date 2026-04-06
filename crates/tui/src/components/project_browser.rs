@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -320,7 +320,7 @@ impl Widget for ProjectBrowserWidget<'_> {
 
         // Layout: 1 line header + 1 line filter (if active) + tree body + 1 line footer
         let header_y = area.y;
-        let filter_lines: u16 = if self.browser.filter_active { 1 } else { 0 };
+        let filter_lines: u16 = u16::from(self.browser.filter_active);
         let filter_y = area.y + 1;
         let footer_y = area.y + area.height - 1;
         let tree_y = area.y + 1 + filter_lines;
@@ -351,7 +351,7 @@ impl Widget for ProjectBrowserWidget<'_> {
         // ─── Filter line ───
         if self.browser.filter_active {
             let filter_style = Style::default().fg(self.theme.fg).bg(self.theme.bg);
-            let filter_text = format!(" > {}", self.browser.filter_query());
+            let _filter_text = format!(" > {}", self.browser.filter_query());
             for x in area.x..area.x + area.width {
                 if let Some(cell) = buf.cell_mut((x, filter_y)) {
                     cell.set_char(' ');
