@@ -446,7 +446,6 @@ impl<'t> EnhancedMarkdownRenderer<'t> {
                     Tag::TableHead => {
                         in_table_head = true;
                     }
-                    Tag::TableRow | Tag::TableCell => {}
                     _ => {}
                 },
 

@@ -3,8 +3,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::theme::Theme;
@@ -33,7 +32,7 @@ impl ProgressStyle {
     #[must_use]
     pub fn block() -> Self {
         Self {
-            bar_char: '\u{2588}', // █
+            bar_char: '\u{2588}',   // █
             empty_char: '\u{2591}', // ░
             bracket_left: '[',
             bracket_right: ']',
@@ -59,9 +58,9 @@ impl ProgressStyle {
     #[must_use]
     pub fn thin() -> Self {
         Self {
-            bar_char: '\u{2501}', // ━
-            empty_char: '\u{2500}', // ─
-            bracket_left: '\u{2523}', // ┣
+            bar_char: '\u{2501}',      // ━
+            empty_char: '\u{2500}',    // ─
+            bracket_left: '\u{2523}',  // ┣
             bracket_right: '\u{252b}', // ┫
             show_percentage: true,
             show_eta: false,
@@ -241,7 +240,6 @@ impl Widget for ProgressBarWidget<'_> {
         let suffix_len = pct_text.len() + eta_text.len();
 
         // Bar area: remaining width minus brackets and suffix
-        let bar_start = x_offset;
         let total_remaining = (area.x + area.width).saturating_sub(x_offset) as usize;
         if total_remaining < 4 + suffix_len {
             return;
@@ -256,6 +254,7 @@ impl Widget for ProgressBarWidget<'_> {
         x_offset += 1;
 
         // Bar fill
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let filled = (self.bar.progress * bar_inner_width as f64).round() as usize;
         let bar_fg = if self.bar.is_complete() {
             self.theme.success
@@ -574,9 +573,7 @@ mod tests {
 
     #[test]
     fn progress_bar_widget_renders() {
-        let bar = ProgressBar::new()
-            .with_progress(0.5)
-            .with_label("Test");
+        let bar = ProgressBar::new().with_progress(0.5).with_label("Test");
         let theme = Theme::dark();
         let widget = ProgressBarWidget::new(&bar, &theme);
         let area = Rect::new(0, 0, 40, 1);

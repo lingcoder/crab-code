@@ -6,7 +6,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -26,8 +26,7 @@ pub struct LoadingOverlay {
 
 /// Braille spinner frames (same as the existing spinner component).
 const SPINNER_FRAMES: &[&str] = &[
-    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}",
-    "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
+    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
     "\u{2807}", "\u{280f}",
 ];
 
@@ -153,7 +152,16 @@ impl Widget for LoadingOverlayWidget<'_> {
             .add_modifier(Modifier::BOLD);
 
         // Top border
-        render_box_line(buf, box_x, box_y, box_width, '\u{250c}', '\u{2500}', '\u{2510}', border_style);
+        render_box_line(
+            buf,
+            box_x,
+            box_y,
+            box_width,
+            '\u{250c}',
+            '\u{2500}',
+            '\u{2510}',
+            border_style,
+        );
 
         // Content line
         if let Some(cell) = buf.cell_mut((box_x, box_y + 1)) {
@@ -170,11 +178,7 @@ impl Widget for LoadingOverlayWidget<'_> {
         // Write content centered
         let pad_left = box_x + 1 + (box_width - 2).saturating_sub(content_len) / 2;
         let line = Line::from(Span::styled(&content, content_style));
-        Widget::render(
-            line,
-            Rect::new(pad_left, box_y + 1, content_len, 1),
-            buf,
-        );
+        Widget::render(line, Rect::new(pad_left, box_y + 1, content_len, 1), buf);
 
         if let Some(cell) = buf.cell_mut((box_x + box_width - 1, box_y + 1)) {
             cell.set_char('\u{2502}');
@@ -182,12 +186,31 @@ impl Widget for LoadingOverlayWidget<'_> {
         }
 
         // Bottom border
-        render_box_line(buf, box_x, box_y + 2, box_width, '\u{2514}', '\u{2500}', '\u{2518}', border_style);
+        render_box_line(
+            buf,
+            box_x,
+            box_y + 2,
+            box_width,
+            '\u{2514}',
+            '\u{2500}',
+            '\u{2518}',
+            border_style,
+        );
     }
 }
 
 /// Render a horizontal box border line.
-fn render_box_line(buf: &mut Buffer, x: u16, y: u16, width: u16, left: char, fill: char, right: char, style: Style) {
+#[allow(clippy::too_many_arguments)]
+fn render_box_line(
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    width: u16,
+    left: char,
+    fill: char,
+    right: char,
+    style: Style,
+) {
     if let Some(cell) = buf.cell_mut((x, y)) {
         cell.set_char(left);
         cell.set_style(style);
@@ -395,11 +418,10 @@ impl StreamingIndicator {
         if !self.active {
             return String::new();
         }
-        let mut text = format!("{} tokens", self.token_count);
-        if let Some(tps) = self.tokens_per_second {
-            text.push_str(&format!(" ({tps:.0} tok/s)"));
-        }
-        text
+        let tps_suffix = self
+            .tokens_per_second
+            .map_or(String::new(), |tps| format!(" ({tps:.0} tok/s)"));
+        format!("{} tokens{tps_suffix}", self.token_count)
     }
 }
 
@@ -433,7 +455,12 @@ impl Widget for StreamingIndicatorWidget<'_> {
 
         let dot = "\u{25cf} "; // ● streaming dot
         let line = Line::from(vec![
-            Span::styled(dot, Style::default().fg(self.theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                dot,
+                Style::default()
+                    .fg(self.theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(text, style),
         ]);
         Widget::render(line, Rect::new(area.x, area.y, area.width, 1), buf);

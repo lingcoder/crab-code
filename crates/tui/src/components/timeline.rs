@@ -115,10 +115,10 @@ impl TimelineEntry {
     #[must_use]
     pub fn visible_lines(&self) -> usize {
         let mut lines = 1; // main line
-        if !self.folded {
-            if let Some(detail) = &self.detail {
-                lines += detail.lines().count().max(1);
-            }
+        if !self.folded
+            && let Some(detail) = &self.detail
+        {
+            lines += detail.lines().count().max(1);
         }
         lines
     }
@@ -379,7 +379,7 @@ impl Widget for TimelineWidget<'_> {
 
                 // Build the line: [time] icon label (duration)
                 let relative = format_relative_time(now.saturating_sub(entry.timestamp_ms));
-                let time_str = format!("{:>8}", relative);
+                let time_str = format!("{relative:>8}");
 
                 let fold_indicator = if entry.has_detail() {
                     if entry.folded { "+ " } else { "- " }
@@ -388,24 +388,18 @@ impl Widget for TimelineWidget<'_> {
                 };
 
                 let mut spans = vec![
-                    Span::styled(
-                        &time_str,
-                        Style::default().fg(self.theme.muted).bg(bg),
-                    ),
+                    Span::styled(&time_str, Style::default().fg(self.theme.muted).bg(bg)),
                     Span::styled(" | ", Style::default().fg(self.theme.border).bg(bg)),
                     Span::styled(
                         entry.event_type.icon(),
-                        Style::default().fg(event_color).bg(bg).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(event_color)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(" ", Style::default().bg(bg)),
-                    Span::styled(
-                        fold_indicator,
-                        Style::default().fg(self.theme.muted).bg(bg),
-                    ),
-                    Span::styled(
-                        &entry.label,
-                        Style::default().fg(self.theme.fg).bg(bg),
-                    ),
+                    Span::styled(fold_indicator, Style::default().fg(self.theme.muted).bg(bg)),
+                    Span::styled(&entry.label, Style::default().fg(self.theme.fg).bg(bg)),
                 ];
 
                 if let Some(dur) = entry.duration_ms {
@@ -420,32 +414,32 @@ impl Widget for TimelineWidget<'_> {
             }
 
             // ─── Detail lines ───
-            if !entry.folded {
-                if let Some(detail) = &entry.detail {
-                    for (di, detail_line) in detail.lines().enumerate() {
-                        let detail_vis_y = current_line + 1 + di;
-                        let detail_vis_y = detail_vis_y.saturating_sub(scroll);
-                        if detail_vis_y >= visible_height {
-                            break;
-                        }
-                        let y = area.y + detail_vis_y as u16;
-
-                        // Clear
-                        for x in area.x..area.x + area.width {
-                            if let Some(cell) = buf.cell_mut((x, y)) {
-                                cell.set_char(' ');
-                                cell.set_style(Style::default().bg(self.theme.bg));
-                            }
-                        }
-
-                        let indent = "           | ";
-                        let detail_style = Style::default().fg(self.theme.muted);
-                        let line = Line::from(vec![
-                            Span::styled(indent, Style::default().fg(self.theme.border)),
-                            Span::styled(detail_line, detail_style),
-                        ]);
-                        Widget::render(line, Rect::new(area.x, y, area.width, 1), buf);
+            if !entry.folded
+                && let Some(detail) = &entry.detail
+            {
+                for (di, detail_line) in detail.lines().enumerate() {
+                    let detail_vis_y = current_line + 1 + di;
+                    let detail_vis_y = detail_vis_y.saturating_sub(scroll);
+                    if detail_vis_y >= visible_height {
+                        break;
                     }
+                    let y = area.y + detail_vis_y as u16;
+
+                    // Clear
+                    for x in area.x..area.x + area.width {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_char(' ');
+                            cell.set_style(Style::default().bg(self.theme.bg));
+                        }
+                    }
+
+                    let indent = "           | ";
+                    let detail_style = Style::default().fg(self.theme.muted);
+                    let line = Line::from(vec![
+                        Span::styled(indent, Style::default().fg(self.theme.border)),
+                        Span::styled(detail_line, detail_style),
+                    ]);
+                    Widget::render(line, Rect::new(area.x, y, area.width, 1), buf);
                 }
             }
 
@@ -514,15 +508,14 @@ mod tests {
 
     #[test]
     fn timeline_entry_visible_lines_no_detail() {
-        let entry = TimelineEntry::new(0, EventType::UserMessage, "test")
-            .with_folded(false);
+        let entry = TimelineEntry::new(0, EventType::UserMessage, "test").with_folded(false);
         assert_eq!(entry.visible_lines(), 1);
     }
 
     #[test]
     fn timeline_entry_toggle_fold() {
-        let mut entry = TimelineEntry::new(0, EventType::ToolExecution, "test")
-            .with_detail("detail");
+        let mut entry =
+            TimelineEntry::new(0, EventType::ToolExecution, "test").with_detail("detail");
         assert!(entry.folded);
         entry.toggle_fold();
         assert!(!entry.folded);
@@ -629,10 +622,7 @@ mod tests {
     #[test]
     fn timeline_toggle_fold() {
         let mut tl = Timeline::new();
-        tl.push(
-            TimelineEntry::new(0, EventType::ToolExecution, "bash")
-                .with_detail("output"),
-        );
+        tl.push(TimelineEntry::new(0, EventType::ToolExecution, "bash").with_detail("output"));
         assert!(tl.selected_entry().unwrap().folded);
 
         tl.toggle_fold();
@@ -676,7 +666,11 @@ mod tests {
     fn timeline_adjust_scroll() {
         let mut tl = Timeline::new();
         for i in 0..20 {
-            tl.push(TimelineEntry::new(i * 1000, EventType::UserMessage, format!("msg {i}")));
+            tl.push(TimelineEntry::new(
+                i * 1000,
+                EventType::UserMessage,
+                format!("msg {i}"),
+            ));
         }
         // Select entry 15
         for _ in 0..15 {
@@ -702,10 +696,7 @@ mod tests {
         let mut tl = Timeline::new();
         tl.set_current_time(10_000);
         tl.push(TimelineEntry::new(0, EventType::UserMessage, "Hello world"));
-        tl.push(
-            TimelineEntry::new(5000, EventType::ToolExecution, "bash ls")
-                .with_duration(1200),
-        );
+        tl.push(TimelineEntry::new(5000, EventType::ToolExecution, "bash ls").with_duration(1200));
 
         let theme = Theme::dark();
         let widget = TimelineWidget::new(&tl, &theme);

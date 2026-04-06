@@ -473,9 +473,8 @@ impl<'t> SplitDiffView<'t> {
                 spans.push(Span::styled("- ", del_style));
                 for frag in old_fragments {
                     let style = match frag.kind {
-                        InlineChangeKind::Equal => del_style,
                         InlineChangeKind::Delete => del_highlight,
-                        InlineChangeKind::Insert => del_style, // shouldn't occur
+                        InlineChangeKind::Equal | InlineChangeKind::Insert => del_style,
                     };
                     spans.push(Span::styled(frag.text.clone(), style));
                 }
@@ -538,9 +537,8 @@ impl<'t> SplitDiffView<'t> {
                 spans.push(Span::styled("+ ", add_style));
                 for frag in new_fragments {
                     let style = match frag.kind {
-                        InlineChangeKind::Equal => add_style,
                         InlineChangeKind::Insert => add_highlight,
-                        InlineChangeKind::Delete => add_style, // shouldn't occur
+                        InlineChangeKind::Equal | InlineChangeKind::Delete => add_style,
                     };
                     spans.push(Span::styled(frag.text.clone(), style));
                 }
@@ -666,9 +664,8 @@ pub fn render_inline_diff_line(
         .into_iter()
         .map(|f| {
             let style = match f.kind {
-                InlineChangeKind::Equal => del_style,
                 InlineChangeKind::Delete => del_bold,
-                InlineChangeKind::Insert => del_style,
+                InlineChangeKind::Equal | InlineChangeKind::Insert => del_style,
             };
             Span::styled(f.text, style)
         })
@@ -678,9 +675,8 @@ pub fn render_inline_diff_line(
         .into_iter()
         .map(|f| {
             let style = match f.kind {
-                InlineChangeKind::Equal => add_style,
                 InlineChangeKind::Insert => add_bold,
-                InlineChangeKind::Delete => add_style,
+                InlineChangeKind::Equal | InlineChangeKind::Delete => add_style,
             };
             Span::styled(f.text, style)
         })

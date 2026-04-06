@@ -125,10 +125,12 @@ impl FileNode {
                 | (NodeType::Symlink, NodeType::Symlink) => {
                     a.name.to_lowercase().cmp(&b.name.to_lowercase())
                 }
+                #[allow(clippy::match_same_arms)]
                 (NodeType::Directory, _) => std::cmp::Ordering::Less,
-                (_, NodeType::Directory) => std::cmp::Ordering::Greater,
+                (_, NodeType::Directory) | (NodeType::File, NodeType::Symlink) => {
+                    std::cmp::Ordering::Greater
+                }
                 (NodeType::Symlink, NodeType::File) => std::cmp::Ordering::Less,
-                (NodeType::File, NodeType::Symlink) => std::cmp::Ordering::Greater,
             });
         for child in &mut self.children {
             child.sort_children();
@@ -422,7 +424,8 @@ impl FileTree {
     }
 
     /// Adjust scroll offset so the selected row is visible.
-    fn adjust_scroll(&mut self) {
+    #[allow(clippy::unused_self)]
+    fn adjust_scroll(&self) {
         // Will be applied at render time based on visible height
     }
 
@@ -501,11 +504,7 @@ impl Widget for FileTreeWidget<'_> {
             } else {
                 self.theme.bg
             };
-            let fg = if is_selected {
-                self.theme.fg
-            } else {
-                self.theme.fg
-            };
+            let fg = self.theme.fg;
 
             // Clear the line
             for x in area.x..area.x + area.width {

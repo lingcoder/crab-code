@@ -322,6 +322,7 @@ impl Default for ShortcutHintBar {
 // ─── Widget impl ────────────────────────────────────────────────────────
 
 impl Widget for &ShortcutHintBar {
+    #[allow(clippy::cast_possible_truncation)]
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,

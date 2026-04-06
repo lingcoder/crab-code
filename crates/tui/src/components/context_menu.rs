@@ -294,7 +294,7 @@ impl ContextMenu {
 
     /// Compute the menu rect, clamping to terminal bounds.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     pub fn compute_rect(&self, terminal: Rect) -> Rect {
         let width = self.menu_width().min(terminal.width as usize) as u16;
         let height = self.visible_height().min(terminal.height as usize) as u16;
@@ -355,7 +355,7 @@ impl<'a> ContextMenuWidget<'a> {
 }
 
 impl Widget for ContextMenuWidget<'_> {
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         if !self.menu.is_visible() || self.menu.items.is_empty() {
             return;
@@ -485,7 +485,7 @@ impl Widget for ContextMenuWidget<'_> {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 fn render_submenu(
     items: &[MenuItem],
     selected: usize,
