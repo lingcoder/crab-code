@@ -231,6 +231,7 @@ fn extract_pdf_text(
     bytes: &[u8],
     pages_spec: Option<&str>,
 ) -> std::result::Result<String, String> {
+    use std::fmt::Write;
     // pdf-extract provides extract_text_from_mem which extracts all pages
     let full_text = pdf_extract::extract_text_from_mem(bytes)
         .map_err(|e| format!("Failed to parse PDF: {e}"))?;
@@ -246,50 +247,46 @@ fn extract_pdf_text(
     let total_pages = all_pages.len();
 
     // Determine which pages to return
-    let selected_pages: Vec<usize> = match pages_spec {
-        Some(spec) => {
-            let requested = parse_page_ranges(spec)?;
-            if requested.len() > MAX_PDF_PAGES_PER_REQUEST {
-                return Err(format!(
-                    "Too many pages requested ({}). Maximum is {MAX_PDF_PAGES_PER_REQUEST} per request.",
-                    requested.len()
-                ));
-            }
-            // Filter to pages that exist
-            requested
-                .into_iter()
-                .filter(|&p| p <= total_pages)
-                .collect()
+    let selected_pages: Vec<usize> = if let Some(spec) = pages_spec {
+        let requested = parse_page_ranges(spec)?;
+        if requested.len() > MAX_PDF_PAGES_PER_REQUEST {
+            return Err(format!(
+                "Too many pages requested ({}). Maximum is {MAX_PDF_PAGES_PER_REQUEST} per request.",
+                requested.len()
+            ));
         }
-        None => {
-            if total_pages > PDF_LARGE_THRESHOLD {
-                return Err(format!(
-                    "PDF has {total_pages} pages. For large PDFs (>{PDF_LARGE_THRESHOLD} pages), \
-                     you must provide the 'pages' parameter (e.g. pages: \"1-5\"). \
-                     Maximum {MAX_PDF_PAGES_PER_REQUEST} pages per request."
-                ));
-            }
-            (1..=total_pages).collect()
+        // Filter to pages that exist
+        requested
+            .into_iter()
+            .filter(|&p| p <= total_pages)
+            .collect()
+    } else {
+        if total_pages > PDF_LARGE_THRESHOLD {
+            return Err(format!(
+                "PDF has {total_pages} pages. For large PDFs (>{PDF_LARGE_THRESHOLD} pages), \
+                 you must provide the 'pages' parameter (e.g. pages: \"1-5\"). \
+                 Maximum {MAX_PDF_PAGES_PER_REQUEST} pages per request."
+            ));
         }
+        (1..=total_pages).collect()
     };
 
     if selected_pages.is_empty() {
         return Err("No valid pages found in the specified range.".into());
     }
 
-    let mut output = String::new();
-    output.push_str(&format!(
-        "PDF: {total_pages} total page(s), showing {}\n\n",
-        if selected_pages.len() == total_pages {
-            "all".to_string()
-        } else {
-            format!("{} page(s)", selected_pages.len())
-        }
-    ));
+    let mut output = if selected_pages.len() == total_pages {
+        format!("PDF: {total_pages} total page(s), showing all\n\n")
+    } else {
+        format!(
+            "PDF: {total_pages} total page(s), showing {} page(s)\n\n",
+            selected_pages.len()
+        )
+    };
 
     for &page_num in &selected_pages {
         let idx = page_num - 1; // 0-based index
-        output.push_str(&format!("--- Page {page_num} ---\n"));
+        let _ = writeln!(output, "--- Page {page_num} ---");
         if idx < all_pages.len() {
             output.push_str(all_pages[idx].trim());
         }

@@ -107,8 +107,8 @@ impl SessionHistory {
         self.ensure_dir()?;
         let file = SessionFile {
             session_id: session_id.to_string(),
-            name: name.map(|s| s.to_string()),
-            working_dir: working_dir.map(|s| s.to_string()),
+            name: name.map(std::string::ToString::to_string),
+            working_dir: working_dir.map(std::string::ToString::to_string),
             messages: messages.to_vec(),
         };
         let json = serde_json::to_string_pretty(&file)
@@ -147,7 +147,7 @@ impl SessionHistory {
         Ok(sessions)
     }
 
-    /// List all sessions with metadata (name, working_dir, message count, mtime).
+    /// List all sessions with metadata (name, `working_dir`, message count, mtime).
     /// Sorted by modification time (newest first).
     pub fn list_sessions_with_metadata(&self) -> crab_common::Result<Vec<SessionMetadata>> {
         if !self.base_dir.exists() {
@@ -162,13 +162,12 @@ impl SessionHistory {
                 let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
                 // Read the file to extract metadata
                 let (session_name, working_dir, message_count) =
-                    match std::fs::read_to_string(entry.path()) {
-                        Ok(data) => match serde_json::from_str::<SessionFile>(&data) {
-                            Ok(file) => (file.name, file.working_dir, file.messages.len()),
-                            Err(_) => (None, None, 0),
-                        },
-                        Err(_) => (None, None, 0),
-                    };
+                    std::fs::read_to_string(entry.path())
+                        .ok()
+                        .and_then(|data| serde_json::from_str::<SessionFile>(&data).ok())
+                        .map_or((None, None, 0), |file| {
+                            (file.name, file.working_dir, file.messages.len())
+                        });
                 results.push(SessionMetadata {
                     session_id: id.to_string(),
                     name: session_name,
@@ -207,15 +206,12 @@ impl SessionHistory {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if let Some(id) = name.strip_suffix(".json") {
-                    if let Ok(meta) = entry.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            if best.as_ref().is_none_or(|(_, t)| mtime > *t) {
+                if let Some(id) = name.strip_suffix(".json")
+                    && let Ok(meta) = entry.metadata()
+                        && let Ok(mtime) = meta.modified()
+                            && best.as_ref().is_none_or(|(_, t)| mtime > *t) {
                                 best = Some((id.to_string(), mtime));
                             }
-                        }
-                    }
-                }
             }
         }
         best.map(|(id, _)| id)

@@ -100,11 +100,11 @@ impl CronCreateTool {
 }
 
 impl Tool for CronCreateTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cron_create"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Schedule a prompt to be enqueued on a cron schedule"
     }
 
@@ -173,12 +173,12 @@ impl Tool for CronCreateTool {
 
             let recurring = input
                 .get("recurring")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
 
             let durable = input
                 .get("durable")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
             let job = {
@@ -217,11 +217,11 @@ impl CronDeleteTool {
 }
 
 impl Tool for CronDeleteTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cron_delete"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Cancel a cron job previously scheduled with CronCreate"
     }
 
@@ -288,11 +288,11 @@ impl CronListTool {
 }
 
 impl Tool for CronListTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cron_list"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "List all cron jobs scheduled in this session"
     }
 

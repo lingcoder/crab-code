@@ -20,9 +20,9 @@ pub struct MessageRequest<'a> {
     /// Extended thinking budget in tokens. When > 0, Anthropic provider enables
     /// extended thinking mode. Other providers silently ignore this.
     pub budget_tokens: Option<u32>,
-    /// Response format constraint (OpenAI only — Anthropic ignores this).
+    /// Response format constraint (`OpenAI` only — Anthropic ignores this).
     pub response_format: Option<serde_json::Value>,
-    /// Tool choice constraint (OpenAI only — Anthropic ignores this).
+    /// Tool choice constraint (`OpenAI` only — Anthropic ignores this).
     pub tool_choice: Option<serde_json::Value>,
 }
 

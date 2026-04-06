@@ -18,6 +18,7 @@ pub struct ModelPricing {
 impl ModelPricing {
     /// Calculate total cost for a given token usage.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn calculate_cost(&self, usage: &TokenUsage) -> f64 {
         let input = usage.input_tokens as f64 * self.input_per_mtok / 1_000_000.0;
         let output = usage.output_tokens as f64 * self.output_per_mtok / 1_000_000.0;

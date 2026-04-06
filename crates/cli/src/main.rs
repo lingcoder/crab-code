@@ -437,10 +437,10 @@ fn load_settings_arg(arg: &str) -> anyhow::Result<crab_config::Settings> {
         arg.to_string()
     } else {
         std::fs::read_to_string(arg)
-            .map_err(|e| anyhow::anyhow!("failed to read settings file '{}': {}", arg, e))?
+            .map_err(|e| anyhow::anyhow!("failed to read settings file '{arg}': {e}"))?
     };
     serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("failed to parse settings: {}", e))
+        .map_err(|e| anyhow::anyhow!("failed to parse settings: {e}"))
 }
 
 /// Load MCP server configurations from one or more JSON files and merge them.
@@ -682,23 +682,21 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     );
 
     // Resolve effort level and thinking mode
-    let effort = cli.effort.as_deref().map(|e| e.to_lowercase());
-    let thinking_mode = cli.thinking.as_deref().map(|t| t.to_lowercase());
+    let effort = cli.effort.as_deref().map(str::to_lowercase);
+    let thinking_mode = cli.thinking.as_deref().map(str::to_lowercase);
 
     // Validate effort if provided
-    if let Some(ref e) = effort {
-        if !matches!(e.as_str(), "low" | "medium" | "high" | "max") {
+    if let Some(ref e) = effort
+        && !matches!(e.as_str(), "low" | "medium" | "high" | "max") {
             anyhow::bail!("invalid --effort value: '{e}'. Valid: low, medium, high, max");
         }
-    }
     // Validate thinking if provided
-    if let Some(ref t) = thinking_mode {
-        if !matches!(t.as_str(), "enabled" | "adaptive" | "disabled") {
+    if let Some(ref t) = thinking_mode
+        && !matches!(t.as_str(), "enabled" | "adaptive" | "disabled") {
             anyhow::bail!(
                 "invalid --thinking value: '{t}'. Valid: enabled, adaptive, disabled"
             );
         }
-    }
 
     // --bare skips memory
     let effective_memory_dir = if cli.bare {

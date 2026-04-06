@@ -145,35 +145,33 @@ pub fn matches_tool_filter(filter: &str, tool_name: &str, tool_input: &serde_jso
     }
 
     // Check for Name(pattern) format
-    if let Some(paren_start) = filter.find('(') {
-        if filter.ends_with(')') {
-            let name_part = &filter[..paren_start];
-            let pattern_part = &filter[paren_start + 1..filter.len() - 1];
+    if let Some(paren_start) = filter.find('(') && filter.ends_with(')') {
+        let name_part = &filter[..paren_start];
+        let pattern_part = &filter[paren_start + 1..filter.len() - 1];
 
-            // Tool name must match
-            if !glob_match(name_part, tool_name) {
-                return false;
-            }
-
-            // Parse the parameter constraint: "key:pattern"
-            if let Some(colon_pos) = pattern_part.find(':') {
-                let key = &pattern_part[..colon_pos];
-                let value_pattern = &pattern_part[colon_pos + 1..];
-
-                // Look up the key in tool_input
-                if let Some(value) = tool_input.get(key) {
-                    let value_str = match value {
-                        serde_json::Value::String(s) => s.as_str(),
-                        _ => return false,
-                    };
-                    return glob_match(value_pattern, value_str);
-                }
-                return false;
-            }
-
-            // No colon — just name match (weird format but handle gracefully)
-            return true;
+        // Tool name must match
+        if !glob_match(name_part, tool_name) {
+            return false;
         }
+
+        // Parse the parameter constraint: "key:pattern"
+        if let Some(colon_pos) = pattern_part.find(':') {
+            let key = &pattern_part[..colon_pos];
+            let value_pattern = &pattern_part[colon_pos + 1..];
+
+            // Look up the key in tool_input
+            if let Some(value) = tool_input.get(key) {
+                let value_str = match value {
+                    serde_json::Value::String(s) => s.as_str(),
+                    _ => return false,
+                };
+                return glob_match(value_pattern, value_str);
+            }
+            return false;
+        }
+
+        // No colon — just name match (weird format but handle gracefully)
+        return true;
     }
 
     // Plain name match (may contain globs)
@@ -365,7 +363,7 @@ impl AutoModeClassifier {
 /// Make a permission decision using auto-mode classification.
 ///
 /// - Safe → Allow
-/// - Risky → AskUser
+/// - Risky → `AskUser`
 /// - Dangerous → Deny
 pub fn auto_mode_decision(
     policy: &PermissionPolicy,

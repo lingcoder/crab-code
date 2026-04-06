@@ -198,7 +198,7 @@ impl PkceChallenge {
     }
 }
 
-/// Build the authorization URL for the OAuth2 PKCE flow.
+/// Build the authorization URL for the `OAuth2` PKCE flow.
 ///
 /// The URL includes `response_type=code`, `code_challenge_method=S256`,
 /// and all configured scopes. The user opens this URL in a browser.
@@ -403,7 +403,7 @@ fn url_encode(s: &str) -> String {
 
 // ── Localhost callback server ─────────────────────────────────────────
 
-/// Start a temporary localhost HTTP server that waits for the OAuth2 callback.
+/// Start a temporary localhost HTTP server that waits for the `OAuth2` callback.
 ///
 /// Binds to `127.0.0.1:0` (random port), returns the port and a future
 /// that resolves to the callback URL (containing `code` and `state` params).

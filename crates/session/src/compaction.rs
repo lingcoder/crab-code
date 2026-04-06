@@ -281,7 +281,7 @@ async fn apply_strategy(
     conversation: &mut Conversation,
     strategy: &CompactionStrategy,
     config: &CompactionConfig,
-    _client: &dyn CompactionClient,
+    client: &dyn CompactionClient,
 ) -> crab_common::Result<()> {
     match strategy {
         CompactionStrategy::Snip => {
@@ -300,19 +300,19 @@ async fn apply_strategy(
         CompactionStrategy::Microcompact => {
             // Level 2: Summarize large tool results (>500 tokens) via LLM,
             // then snip anything remaining that is still large.
-            summarize_large_tool_results(conversation, config, _client).await?;
+            summarize_large_tool_results(conversation, config, client).await?;
             snip_large_tool_results(conversation, config);
             Ok(())
         }
         CompactionStrategy::Summarize => {
             // Level 3: Summarize all old messages via LLM into a single
             // system-level recap, keeping only recent turns.
-            summarize_old_messages(conversation, config, _client).await
+            summarize_old_messages(conversation, config, client).await
         }
         CompactionStrategy::Hybrid { keep_recent } => {
             // Level 4: Keep recent N turns verbatim, summarize the rest.
             let keep = *keep_recent;
-            summarize_old_messages_keeping(conversation, config, _client, keep).await
+            summarize_old_messages_keeping(conversation, config, client, keep).await
         }
     }
 }

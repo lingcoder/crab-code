@@ -140,8 +140,7 @@ impl BashTool {
         }
 
         let timeout = timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(Duration::from_secs(120));
+            .map_or(Duration::from_secs(120), Duration::from_millis);
 
         let (prog, args) = if cfg!(windows) {
             ("cmd", vec!["/C".to_owned(), command])
@@ -229,11 +228,11 @@ impl BashTool {
                     Err(e) => Ok(ToolOutput::error(format!("process error: {e}"))),
                 }
             }
-            _ = tokio::time::sleep(timeout) => {
+            () = tokio::time::sleep(timeout) => {
                 let _ = child.kill().await;
                 Ok(ToolOutput::error(format!("Command timed out\n{combined}")))
             }
-            _ = cancel.cancelled() => {
+            () = cancel.cancelled() => {
                 let _ = child.kill().await;
                 Ok(ToolOutput::error(format!("Command cancelled\n{combined}")))
             }

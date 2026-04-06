@@ -64,7 +64,7 @@ struct GitHubAsset {
 }
 
 impl GitHubRelease {
-    /// Parse the tag_name as a semver::Version, stripping a leading 'v' if present.
+    /// Parse the `tag_name` as a `semver::Version`, stripping a leading 'v' if present.
     fn semver(&self) -> Option<semver::Version> {
         let tag = self.tag_name.strip_prefix('v').unwrap_or(&self.tag_name);
         semver::Version::parse(tag).ok()
@@ -294,28 +294,25 @@ fn run_install(target: Option<&str>, dry_run: bool, force: bool) -> anyhow::Resu
     let current = current_version();
     let current_sv = current_semver();
 
-    let (target_tag, target_sv) = match target {
-        Some(v) => {
-            let clean = v.strip_prefix('v').unwrap_or(v);
-            let sv = semver::Version::parse(clean)
-                .map_err(|e| anyhow::anyhow!("invalid version '{v}': {e}"))?;
-            (clean.to_owned(), sv)
-        }
-        None => {
-            eprintln!("Fetching latest release...");
-            let releases = fetch_releases(5)?;
-            let latest = find_latest(&releases)
-                .ok_or_else(|| anyhow::anyhow!("no stable releases found"))?;
-            let sv = latest
-                .semver()
-                .ok_or_else(|| anyhow::anyhow!("could not parse latest tag"))?;
-            let tag = latest
-                .tag_name
-                .strip_prefix('v')
-                .unwrap_or(&latest.tag_name)
-                .to_owned();
-            (tag, sv)
-        }
+    let (target_tag, target_sv) = if let Some(v) = target {
+        let clean = v.strip_prefix('v').unwrap_or(v);
+        let sv = semver::Version::parse(clean)
+            .map_err(|e| anyhow::anyhow!("invalid version '{v}': {e}"))?;
+        (clean.to_owned(), sv)
+    } else {
+        eprintln!("Fetching latest release...");
+        let releases = fetch_releases(5)?;
+        let latest = find_latest(&releases)
+            .ok_or_else(|| anyhow::anyhow!("no stable releases found"))?;
+        let sv = latest
+            .semver()
+            .ok_or_else(|| anyhow::anyhow!("could not parse latest tag"))?;
+        let tag = latest
+            .tag_name
+            .strip_prefix('v')
+            .unwrap_or(&latest.tag_name)
+            .to_owned();
+        (tag, sv)
     };
 
     eprintln!("Current version: v{current}");
@@ -363,54 +360,51 @@ fn run_rollback(target: Option<&str>) -> anyhow::Result<()> {
     let current = current_version();
     eprintln!("Current version: v{current}");
 
-    match target {
-        Some(v) => {
-            let clean = v.strip_prefix('v').unwrap_or(v);
-            let sv = semver::Version::parse(clean)
-                .map_err(|e| anyhow::anyhow!("invalid version '{v}': {e}"))?;
+    if let Some(v) = target {
+        let clean = v.strip_prefix('v').unwrap_or(v);
+        let sv = semver::Version::parse(clean)
+            .map_err(|e| anyhow::anyhow!("invalid version '{v}': {e}"))?;
 
-            if sv >= current_semver() {
-                eprintln!("v{sv} is not older than current v{current}. Use `crab update install` instead.");
-                return Ok(());
-            }
-
-            eprintln!("Requested rollback to: v{sv}");
-            eprintln!();
-            eprintln!(
-                "Rollback via self-replace is not yet available.\n\
-                 Install manually: cargo install crab-code@{clean}"
-            );
+        if sv >= current_semver() {
+            eprintln!("v{sv} is not older than current v{current}. Use `crab update install` instead.");
+            return Ok(());
         }
-        None => {
-            eprintln!();
-            eprintln!("Fetching available versions...");
-            match fetch_releases(10) {
-                Ok(releases) => {
-                    let current_sv = current_semver();
-                    let older: Vec<&GitHubRelease> = releases
-                        .iter()
-                        .filter(|r| {
-                            !r.draft
-                                && !r.prerelease
-                                && r.semver().is_some_and(|v| v < current_sv)
-                        })
-                        .collect();
-                    if older.is_empty() {
-                        eprintln!("No older stable versions found.");
-                    } else {
-                        eprintln!("Available rollback targets:");
-                        for r in &older {
-                            let name = r.name.as_deref().unwrap_or(&r.tag_name);
-                            eprintln!("  {name}");
-                        }
-                        eprintln!();
-                        eprintln!("Usage: crab update rollback <version>");
+
+        eprintln!("Requested rollback to: v{sv}");
+        eprintln!();
+        eprintln!(
+            "Rollback via self-replace is not yet available.\n\
+             Install manually: cargo install crab-code@{clean}"
+        );
+    } else {
+        eprintln!();
+        eprintln!("Fetching available versions...");
+        match fetch_releases(10) {
+            Ok(releases) => {
+                let current_sv = current_semver();
+                let older: Vec<&GitHubRelease> = releases
+                    .iter()
+                    .filter(|r| {
+                        !r.draft
+                            && !r.prerelease
+                            && r.semver().is_some_and(|v| v < current_sv)
+                    })
+                    .collect();
+                if older.is_empty() {
+                    eprintln!("No older stable versions found.");
+                } else {
+                    eprintln!("Available rollback targets:");
+                    for r in &older {
+                        let name = r.name.as_deref().unwrap_or(&r.tag_name);
+                        eprintln!("  {name}");
                     }
+                    eprintln!();
+                    eprintln!("Usage: crab update rollback <version>");
                 }
-                Err(e) => {
-                    eprintln!("Failed to fetch releases: {e}");
-                    eprintln!("Check: https://github.com/CrabForge/crab-code/releases");
-                }
+            }
+            Err(e) => {
+                eprintln!("Failed to fetch releases: {e}");
+                eprintln!("Check: https://github.com/CrabForge/crab-code/releases");
             }
         }
     }

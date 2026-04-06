@@ -13,11 +13,11 @@ use std::pin::Pin;
 pub struct TeamCreateTool;
 
 impl Tool for TeamCreateTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "team_create"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Create a new team for multi-agent collaboration"
     }
 
@@ -98,11 +98,11 @@ impl Tool for TeamCreateTool {
 pub struct TeamDeleteTool;
 
 impl Tool for TeamDeleteTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "team_delete"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Delete the current team and clean up its configuration"
     }
 
@@ -155,11 +155,11 @@ impl Tool for TeamDeleteTool {
 pub struct SendMessageTool;
 
 impl Tool for SendMessageTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "send_message"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Send a message to another agent by name, or broadcast to all with \"*\""
     }
 

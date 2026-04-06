@@ -70,7 +70,7 @@ fn run_list() -> anyhow::Result<()> {
     eprintln!("Installed plugins:");
     for entry in &entries {
         let status = plugin_status(&dir, entry);
-        eprintln!("  {} — {}", entry, status);
+        eprintln!("  {entry} — {status}");
     }
 
     Ok(())
@@ -80,11 +80,10 @@ fn list_plugin_dirs(dir: &Path) -> anyhow::Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
+        if entry.file_type()?.is_dir()
+            && let Some(name) = entry.file_name().to_str() {
                 names.push(name.to_string());
             }
-        }
     }
     names.sort();
     Ok(names)
@@ -152,11 +151,11 @@ fn run_disable(name: &str) -> anyhow::Result<()> {
     }
 
     let marker = dir.join(".disabled");
-    if !marker.exists() {
+    if marker.exists() {
+        eprintln!("Plugin '{name}' is already disabled.");
+    } else {
         std::fs::write(&marker, "")?;
         eprintln!("Disabled plugin '{name}'.");
-    } else {
-        eprintln!("Plugin '{name}' is already disabled.");
     }
 
     Ok(())
@@ -166,7 +165,7 @@ fn run_validate(path: &str) -> anyhow::Result<()> {
     let dir = Path::new(path);
 
     if !dir.exists() || !dir.is_dir() {
-        anyhow::bail!("'{}' is not a valid directory", path);
+        anyhow::bail!("'{path}' is not a valid directory");
     }
 
     let manifest = dir.join("plugin.json");

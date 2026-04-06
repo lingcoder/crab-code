@@ -47,8 +47,7 @@ impl PluginManager {
     pub fn with_defaults() -> Self {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
+            .map_or_else(|_| PathBuf::from("."), PathBuf::from);
         let global_dir = home.join(".crab").join("plugins");
         Self::new(vec![global_dir])
     }
@@ -188,15 +187,13 @@ impl PluginManager {
             .remove(name)
             .ok_or_else(|| crab_common::Error::Other(format!("plugin '{name}' not found")))?;
 
-        if let Some(dir) = &entry.manifest.source_dir {
-            if dir.exists() {
-                std::fs::remove_dir_all(dir).map_err(|e| {
-                    crab_common::Error::Other(format!(
-                        "failed to remove plugin directory {}: {e}",
-                        dir.display()
-                    ))
-                })?;
-            }
+        if let Some(dir) = &entry.manifest.source_dir && dir.exists() {
+            std::fs::remove_dir_all(dir).map_err(|e| {
+                crab_common::Error::Other(format!(
+                    "failed to remove plugin directory {}: {e}",
+                    dir.display()
+                ))
+            })?;
         }
         Ok(())
     }

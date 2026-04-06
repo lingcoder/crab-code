@@ -17,7 +17,7 @@ pub enum EffortLevel {
 }
 
 impl EffortLevel {
-    /// Map effort level to extended thinking budget_tokens.
+    /// Map effort level to extended thinking `budget_tokens`.
     ///
     /// - `Low`: `None` (thinking disabled)
     /// - `Medium`: 5,000 tokens

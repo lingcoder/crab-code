@@ -192,10 +192,11 @@ fn fetch_pr_diff(pr_ref: &str) -> Option<String> {
     let lines: Vec<&str> = diff.lines().collect();
     if lines.len() > MAX_DIFF_LINES {
         let mut truncated = lines[..MAX_DIFF_LINES].join("\n");
-        truncated.push_str(&format!(
+        let _ = write!(
+            truncated,
             "\n\n... ({} more lines truncated)",
             lines.len() - MAX_DIFF_LINES
-        ));
+        );
         Some(truncated)
     } else {
         Some(diff.into_owned())

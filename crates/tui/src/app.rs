@@ -279,16 +279,12 @@ impl App {
                             self.autocomplete.prev();
                             return AppAction::None;
                         }
-                        KeyCode::Tab => {
+                        KeyCode::Tab | KeyCode::Down => {
                             self.autocomplete.next();
                             return AppAction::None;
                         }
                         KeyCode::Up => {
                             self.autocomplete.prev();
-                            return AppAction::None;
-                        }
-                        KeyCode::Down => {
-                            self.autocomplete.next();
                             return AppAction::None;
                         }
                         KeyCode::Enter => {

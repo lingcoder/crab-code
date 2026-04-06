@@ -293,7 +293,7 @@ fn cmd_memory(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult 
         .ok()
         .into_iter()
         .flatten()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.path()
                 .extension()
@@ -336,7 +336,7 @@ fn cmd_config(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult 
         ctx.model,
         ctx.permission_mode,
         ctx.working_dir.display(),
-        ctx.memory_dir.map_or("(none)".to_string(), |d| d.display().to_string()),
+        ctx.memory_dir.as_ref().map_or_else(|| "(none)".to_string(), |d| d.display().to_string()),
     );
     SlashCommandResult::Message(text)
 }
@@ -383,7 +383,7 @@ fn cmd_history(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult
         .ok()
         .into_iter()
         .flatten()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.path()
                 .extension()

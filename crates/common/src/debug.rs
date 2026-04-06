@@ -95,11 +95,11 @@ pub struct DebugConfig {
 /// Call this once, early in `main`. If `config.enabled` is false, this is a
 /// no-op and the default (no-op) subscriber remains active.
 pub fn init_debug(config: &DebugConfig) {
+    use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
     if !config.enabled {
         return;
     }
-
-    use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
     let filter_str = config
         .filter

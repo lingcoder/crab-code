@@ -66,10 +66,11 @@ pub struct HookContext {
 }
 
 /// Action a hook commands the system to take.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HookAction {
     /// Allow the operation to proceed as-is.
+    #[default]
     Allow,
     /// Block the operation.
     Deny,
@@ -77,11 +78,6 @@ pub enum HookAction {
     Modify,
 }
 
-impl Default for HookAction {
-    fn default() -> Self {
-        Self::Allow
-    }
-}
 
 /// Structured result parsed from a hook's JSON stdout.
 ///

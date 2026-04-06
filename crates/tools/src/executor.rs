@@ -175,13 +175,12 @@ impl ToolExecutor {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Deny(reason) => return Ok(ToolOutput::error(reason)),
                 PermissionDecision::AskUser(prompt) => {
-                    if let Some(handler) = &permission_handler {
-                        if !handler.ask_permission(&tool_name, &prompt).await {
+                    if let Some(handler) = &permission_handler
+                        && !handler.ask_permission(&tool_name, &prompt).await {
                             return Ok(ToolOutput::error(format!(
                                 "User denied permission for '{tool_name}'"
                             )));
                         }
-                    }
                 }
             }
 

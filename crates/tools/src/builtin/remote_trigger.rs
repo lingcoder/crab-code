@@ -118,11 +118,11 @@ impl RemoteTriggerTool {
 }
 
 impl Tool for RemoteTriggerTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "remote_trigger"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Create, list, get, update, or run remote triggers"
     }
 
@@ -156,6 +156,7 @@ impl Tool for RemoteTriggerTool {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn execute(
         &self,
         input: Value,
@@ -204,23 +205,22 @@ impl Tool for RemoteTriggerTool {
                         })?;
 
                     let s = store.lock().unwrap();
-                    if let Some(trigger) = s.get(trigger_id) {
-                        let result = serde_json::json!({
-                            "id": trigger.id,
-                            "name": trigger.name,
-                            "description": trigger.description,
-                            "prompt": trigger.prompt,
-                            "created_at": trigger.created_at,
-                        });
-                        Ok(ToolOutput::with_content(
-                            vec![ToolOutputContent::Json { value: result }],
-                            false,
-                        ))
-                    } else {
-                        Ok(ToolOutput::error(format!(
-                            "trigger '{trigger_id}' not found"
-                        )))
-                    }
+                    s.get(trigger_id).map_or_else(
+                        || Ok(ToolOutput::error(format!("trigger '{trigger_id}' not found"))),
+                        |trigger| {
+                            let result = serde_json::json!({
+                                "id": trigger.id,
+                                "name": trigger.name,
+                                "description": trigger.description,
+                                "prompt": trigger.prompt,
+                                "created_at": trigger.created_at,
+                            });
+                            Ok(ToolOutput::with_content(
+                                vec![ToolOutputContent::Json { value: result }],
+                                false,
+                            ))
+                        },
+                    )
                 }
                 "create" => {
                     let name = input

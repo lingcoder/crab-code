@@ -61,7 +61,7 @@ impl GitContext {
         })
         .unwrap_or_default();
 
-        Some(GitContext {
+        Some(Self {
             branch_name,
             main_branch,
             git_user,

@@ -17,7 +17,7 @@ pub fn run() -> anyhow::Result<()> {
             found_any = true;
             eprintln!("Project agents ({}):", project_agents.display());
             for agent in &agents {
-                eprintln!("  {}", agent);
+                eprintln!("  {agent}");
             }
         }
     }
@@ -31,7 +31,7 @@ pub fn run() -> anyhow::Result<()> {
             found_any = true;
             eprintln!("Global agents ({}):", global_agents.display());
             for agent in &agents {
-                eprintln!("  {}", agent);
+                eprintln!("  {agent}");
             }
         }
     }
@@ -61,33 +61,30 @@ fn list_agents(dir: &Path) -> anyhow::Result<Vec<String>> {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "json") {
             match std::fs::read_to_string(&path) {
-                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(val) => {
-                        let name = val
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("<unnamed>");
-                        let desc = val
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let model = val
-                            .get("model")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default");
-                        if desc.is_empty() {
-                            agents.push(format!("{name} (model: {model})"));
-                        } else {
-                            agents.push(format!("{name} — {desc} (model: {model})"));
-                        }
+                Ok(content) => if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let name = val
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("<unnamed>");
+                    let desc = val
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let model = val
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("default");
+                    if desc.is_empty() {
+                        agents.push(format!("{name} (model: {model})"));
+                    } else {
+                        agents.push(format!("{name} — {desc} (model: {model})"));
                     }
-                    Err(_) => {
-                        let filename = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy();
-                        agents.push(format!("{filename} — invalid JSON"));
-                    }
+                } else {
+                    let filename = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    agents.push(format!("{filename} — invalid JSON"));
                 },
                 Err(e) => {
                     let filename = path

@@ -136,7 +136,7 @@ pub struct FunctionCallDelta {
 
 /// Controls the output format of the model response.
 ///
-/// See OpenAI API docs: `response_format` parameter.
+/// See `OpenAI` API docs: `response_format` parameter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum ResponseFormat {
@@ -169,6 +169,7 @@ pub struct JsonSchemaSpec {
     pub strict: bool,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !b
 }

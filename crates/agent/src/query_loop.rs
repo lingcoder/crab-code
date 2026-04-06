@@ -35,7 +35,7 @@ pub struct QueryLoopConfig {
     pub budget_tokens: Option<u32>,
     /// Retry policy for API requests. Uses default if `None`.
     pub retry_policy: Option<RetryPolicy>,
-    /// Lifecycle hook executor for PreToolUse / PostToolUse / UserPromptSubmit.
+    /// Lifecycle hook executor for `PreToolUse` / `PostToolUse` / `UserPromptSubmit`.
     pub hook_executor: Option<Arc<HookExecutor>>,
     /// Session ID passed to hooks via `CRAB_SESSION_ID` env var.
     pub session_id: Option<String>,
@@ -95,11 +95,7 @@ pub async fn query_loop(
             tools: config.tool_schemas.clone(),
             temperature: config.temperature,
             cache_breakpoints,
-            budget_tokens: if let Some(effort) = &config.effort {
-                effort.to_budget_tokens()
-            } else {
-                config.budget_tokens
-            },
+            budget_tokens: config.effort.as_ref().map_or(config.budget_tokens, |e| e.to_budget_tokens()),
             response_format: None,
             tool_choice: None,
         };
@@ -255,8 +251,6 @@ async fn stream_response(
     // Track thinking content blocks by index
     let mut thinking_blocks: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
     // Track which block indices are thinking blocks
-    let mut thinking_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
     while let Some(event) = stream.next().await {
         if cancel.is_cancelled() {
             break;
@@ -295,9 +289,6 @@ async fn stream_response(
                     })
                     .await;
             }
-            StreamEvent::ContentBlockStart { index, content_type } if content_type == "thinking" => {
-                thinking_indices.insert(*index);
-            }
             StreamEvent::ContentBlockStop { index } => {
                 let _ = event_tx
                     .send(Event::ContentBlockStop { index: *index })
@@ -327,13 +318,12 @@ async fn stream_response(
 
     // Add thinking blocks (sorted by index to preserve order)
     let mut thinking_indices_sorted: Vec<usize> = thinking_blocks.keys().copied().collect();
-    thinking_indices_sorted.sort();
+    thinking_indices_sorted.sort_unstable();
     for idx in thinking_indices_sorted {
-        if let Some(thinking) = thinking_blocks.remove(&idx) {
-            if !thinking.is_empty() {
+        if let Some(thinking) = thinking_blocks.remove(&idx)
+            && !thinking.is_empty() {
                 content.push(ContentBlock::Thinking { thinking });
             }
-        }
     }
 
     // Add text content if any
@@ -427,7 +417,7 @@ async fn check_and_compact(
 /// Execute all tool calls from an assistant message.
 ///
 /// Read-only tools are executed concurrently; write tools sequentially.
-/// PreToolUse / PostToolUse hooks are invoked around each tool execution.
+/// `PreToolUse` / `PostToolUse` hooks are invoked around each tool execution.
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_calls(
     assistant_msg: &Message,

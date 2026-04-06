@@ -448,15 +448,15 @@ impl Tool for TaskUpdateTool {
 /// Task stop tool — requests cancellation of a background task.
 ///
 /// Returns a structured JSON action for the agent layer to intercept
-/// and cancel the corresponding worker via CancellationToken.
+/// and cancel the corresponding worker via `CancellationToken`.
 pub struct TaskStopTool;
 
 impl Tool for TaskStopTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "task_stop"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Stop a running background task by its ID"
     }
 
@@ -511,11 +511,11 @@ impl Tool for TaskStopTool {
 pub struct TaskOutputTool;
 
 impl Tool for TaskOutputTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "task_output"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Get the output of a background task"
     }
 
@@ -559,12 +559,12 @@ impl Tool for TaskOutputTool {
 
             let block = input
                 .get("block")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
 
             let timeout = input
                 .get("timeout")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(30_000);
 
             let result = serde_json::json!({

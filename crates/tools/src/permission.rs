@@ -146,7 +146,7 @@ fn check_builtin_permission(
     }
 }
 
-/// Returns `true` if `tool_name` is a file-editing tool (write, edit, notebook_edit).
+/// Returns `true` if `tool_name` is a file-editing tool (write, edit, `notebook_edit`).
 fn is_file_edit_tool(tool_name: &str) -> bool {
     matches!(tool_name, "write" | "edit" | "notebook_edit")
 }

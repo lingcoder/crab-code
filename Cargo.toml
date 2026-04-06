@@ -138,6 +138,19 @@ missing_const_for_fn = "allow"
 missing_errors_doc = "allow"
 unused_async = "allow"
 new_without_default = "allow"
+# Phase 2 generated code — refactor targets
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+fn_params_excessive_bools = "allow"
+# Phase 2 stubs — will tighten as real impls land
+unnecessary_wraps = "allow"
+option_if_let_else = "allow"
+or_fun_call = "allow"
+comparison_chain = "allow"
+if_same_then_else = "allow"
 
 [profile.dev]
 opt-level = 0

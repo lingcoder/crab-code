@@ -280,10 +280,10 @@ fn check_disk_space(global_dir: &Path) -> Check {
             format!(
                 "sessions: {:.1} MB{}",
                 size_mb,
-                if !passed {
-                    " (consider running 'crab session delete' to clean up)"
-                } else {
+                if passed {
                     ""
+                } else {
+                    " (consider running 'crab session delete' to clean up)"
                 }
             )
         },
