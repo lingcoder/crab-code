@@ -64,8 +64,8 @@ fn check_providers(settings: &crab_config::Settings) -> Vec<ProviderStatus> {
 
 pub fn run(action: &AuthAction) -> anyhow::Result<()> {
     let working_dir = std::env::current_dir().unwrap_or_default();
-    let settings = crab_config::settings::load_merged_settings(Some(&working_dir))
-        .unwrap_or_default();
+    let settings =
+        crab_config::settings::load_merged_settings(Some(&working_dir)).unwrap_or_default();
 
     match action {
         AuthAction::Login => run_login(&settings),
@@ -154,8 +154,8 @@ fn run_logout() -> anyhow::Result<()> {
     }
 
     let content = std::fs::read_to_string(&settings_path)?;
-    let mut value: serde_json::Value = serde_json::from_str(&content)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let mut value: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
 
     if let Some(obj) = value.as_object_mut() {
         if obj.remove("apiKey").is_some() {

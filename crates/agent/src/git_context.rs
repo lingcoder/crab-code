@@ -36,13 +36,11 @@ impl GitContext {
 
         let main_branch = detect_main_branch(working_dir).unwrap_or_else(|| branch_name.clone());
 
-        let git_user = run_git(working_dir, &["config", "user.name"])
-            .unwrap_or_else(|| "unknown".to_string());
+        let git_user =
+            run_git(working_dir, &["config", "user.name"]).unwrap_or_else(|| "unknown".to_string());
 
         let status_output = run_git(working_dir, &["status", "--porcelain"]);
-        let is_dirty = status_output
-            .as_ref()
-            .is_some_and(|s| !s.trim().is_empty());
+        let is_dirty = status_output.as_ref().is_some_and(|s| !s.trim().is_empty());
         let status_summary = if is_dirty {
             status_output.unwrap_or_default()
         } else {
@@ -53,12 +51,7 @@ impl GitContext {
             working_dir,
             &["log", "--oneline", "-n", "5", "--no-decorate"],
         )
-        .map(|output| {
-            output
-                .lines()
-                .map(String::from)
-                .collect::<Vec<_>>()
-        })
+        .map(|output| output.lines().map(String::from).collect::<Vec<_>>())
         .unwrap_or_default();
 
         Some(Self {

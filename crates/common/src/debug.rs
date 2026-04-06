@@ -101,13 +101,10 @@ pub fn init_debug(config: &DebugConfig) {
         return;
     }
 
-    let filter_str = config
-        .filter
-        .as_deref()
-        .unwrap_or("crab=debug");
+    let filter_str = config.filter.as_deref().unwrap_or("crab=debug");
 
-    let env_filter = EnvFilter::try_new(filter_str)
-        .unwrap_or_else(|_| EnvFilter::new("crab=debug"));
+    let env_filter =
+        EnvFilter::try_new(filter_str).unwrap_or_else(|_| EnvFilter::new("crab=debug"));
 
     let stderr_layer = fmt::layer()
         .with_writer(std::io::stderr)
@@ -117,7 +114,9 @@ pub fn init_debug(config: &DebugConfig) {
         .with_line_number(true);
 
     if let Some(ref file_path) = config.file {
-        let dir = file_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let dir = file_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         let filename = file_path
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new("crab-debug.log"));
@@ -197,8 +196,14 @@ mod tests {
     #[test]
     fn category_to_filter_directive() {
         assert_eq!(DebugCategory::Api.to_filter_directive(), "crab_api=debug");
-        assert_eq!(DebugCategory::Hooks.to_filter_directive(), "crab_agent=debug");
-        assert_eq!(DebugCategory::Tools.to_filter_directive(), "crab_tools=debug");
+        assert_eq!(
+            DebugCategory::Hooks.to_filter_directive(),
+            "crab_agent=debug"
+        );
+        assert_eq!(
+            DebugCategory::Tools.to_filter_directive(),
+            "crab_tools=debug"
+        );
         assert_eq!(DebugCategory::Mcp.to_filter_directive(), "crab_mcp=debug");
     }
 

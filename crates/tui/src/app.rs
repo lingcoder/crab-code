@@ -730,13 +730,9 @@ fn render_autocomplete_popup(ac: &AutoComplete, input_area: Rect, buf: &mut Buff
         let is_selected = (i + scroll_offset) == selected_idx;
 
         let style = if is_selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+            Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::DarkGray)
+            Style::default().fg(Color::White).bg(Color::DarkGray)
         };
 
         // Render candidate text + description
@@ -1317,13 +1313,34 @@ mod tests {
     fn setup_app_with_commands() -> App {
         let mut app = App::new("test");
         app.set_slash_commands(vec![
-            CommandInfo { name: "help".into(), description: "Show help".into() },
-            CommandInfo { name: "history".into(), description: "Show history".into() },
-            CommandInfo { name: "commit".into(), description: "Create a commit".into() },
-            CommandInfo { name: "compact".into(), description: "Compact context".into() },
-            CommandInfo { name: "config".into(), description: "Show config".into() },
-            CommandInfo { name: "cost".into(), description: "Show cost".into() },
-            CommandInfo { name: "clear".into(), description: "Clear screen".into() },
+            CommandInfo {
+                name: "help".into(),
+                description: "Show help".into(),
+            },
+            CommandInfo {
+                name: "history".into(),
+                description: "Show history".into(),
+            },
+            CommandInfo {
+                name: "commit".into(),
+                description: "Create a commit".into(),
+            },
+            CommandInfo {
+                name: "compact".into(),
+                description: "Compact context".into(),
+            },
+            CommandInfo {
+                name: "config".into(),
+                description: "Show config".into(),
+            },
+            CommandInfo {
+                name: "cost".into(),
+                description: "Show cost".into(),
+            },
+            CommandInfo {
+                name: "clear".into(),
+                description: "Clear screen".into(),
+            },
         ]);
         // Start in WaitingForInput so `/` is treated as text, not search trigger
         app.state = AppState::WaitingForInput;

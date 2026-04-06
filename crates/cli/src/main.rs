@@ -124,7 +124,11 @@ struct Cli {
     allowed_tools: Vec<String>,
 
     /// Disallowed tools (comma-separated). Supports glob patterns like `mcp__*`.
-    #[arg(long = "disallowed-tools", alias = "disallowedTools", value_delimiter = ',')]
+    #[arg(
+        long = "disallowed-tools",
+        alias = "disallowedTools",
+        value_delimiter = ','
+    )]
     disallowed_tools: Vec<String>,
 
     /// Available tool set: "" (disable all), "default" (all), or comma-separated names.
@@ -176,7 +180,6 @@ struct Cli {
     fallback_model: Option<String>,
 
     // ─── Step 10: bare + no-session-persistence ───
-
     /// Minimal mode — skip hooks, LSP, plugins, auto-memory, CRAB.md discovery.
     #[arg(long)]
     bare: bool,
@@ -186,7 +189,6 @@ struct Cli {
     no_session_persistence: bool,
 
     // ─── Step 11: worktree + tmux ───
-
     /// Create a git worktree. Optionally provide a branch name.
     #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "")]
     worktree: Option<String>,
@@ -196,7 +198,6 @@ struct Cli {
     tmux: bool,
 
     // ─── Step 12: fork-session + from-pr + session-id + json-schema ───
-
     /// When resuming, fork into a new session instead of continuing the old one.
     #[arg(long)]
     fork_session: bool,
@@ -214,7 +215,6 @@ struct Cli {
     json_schema: Option<String>,
 
     // ─── Step 13: plugin-dir + disable-slash-commands + betas + ide ───
-
     /// Additional plugin directories to load at runtime (repeatable).
     #[arg(long = "plugin-dir")]
     plugin_dir: Vec<PathBuf>,
@@ -439,18 +439,19 @@ fn load_settings_arg(arg: &str) -> anyhow::Result<crab_config::Settings> {
         std::fs::read_to_string(arg)
             .map_err(|e| anyhow::anyhow!("failed to read settings file '{arg}': {e}"))?
     };
-    serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("failed to parse settings: {e}"))
+    serde_json::from_str(&content).map_err(|e| anyhow::anyhow!("failed to parse settings: {e}"))
 }
 
 /// Load MCP server configurations from one or more JSON files and merge them.
 fn load_mcp_configs(paths: &[PathBuf]) -> anyhow::Result<Value> {
     let mut merged = serde_json::Map::new();
     for path in paths {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("failed to read MCP config '{}': {}", path.display(), e))?;
-        let parsed: Value = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("failed to parse MCP config '{}': {}", path.display(), e))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("failed to read MCP config '{}': {}", path.display(), e)
+        })?;
+        let parsed: Value = serde_json::from_str(&content).map_err(|e| {
+            anyhow::anyhow!("failed to parse MCP config '{}': {}", path.display(), e)
+        })?;
         if let Value::Object(map) = parsed {
             for (k, v) in map {
                 merged.insert(k, v);
@@ -534,9 +535,10 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Load merged settings with optional source control
-    let sources = cli.setting_sources.as_ref().map(|s| {
-        crab_config::settings::SettingSource::parse_list(s)
-    });
+    let sources = cli
+        .setting_sources
+        .as_ref()
+        .map(|s| crab_config::settings::SettingSource::parse_list(s));
     let mut settings = crab_config::settings::load_merged_settings_with_sources(
         Some(&working_dir),
         sources.as_deref(),
@@ -687,16 +689,16 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
 
     // Validate effort if provided
     if let Some(ref e) = effort
-        && !matches!(e.as_str(), "low" | "medium" | "high" | "max") {
-            anyhow::bail!("invalid --effort value: '{e}'. Valid: low, medium, high, max");
-        }
+        && !matches!(e.as_str(), "low" | "medium" | "high" | "max")
+    {
+        anyhow::bail!("invalid --effort value: '{e}'. Valid: low, medium, high, max");
+    }
     // Validate thinking if provided
     if let Some(ref t) = thinking_mode
-        && !matches!(t.as_str(), "enabled" | "adaptive" | "disabled") {
-            anyhow::bail!(
-                "invalid --thinking value: '{t}'. Valid: enabled, adaptive, disabled"
-            );
-        }
+        && !matches!(t.as_str(), "enabled" | "adaptive" | "disabled")
+    {
+        anyhow::bail!("invalid --thinking value: '{t}'. Valid: enabled, adaptive, disabled");
+    }
 
     // --bare skips memory
     let effective_memory_dir = if cli.bare {
@@ -1182,7 +1184,10 @@ fn event_to_json(event: &Event) -> Option<Value> {
             "used": used,
             "limit": limit,
         })),
-        Event::CompactStart { strategy, before_tokens } => Some(json!({
+        Event::CompactStart {
+            strategy,
+            before_tokens,
+        } => Some(json!({
             "type": "compact_start",
             "strategy": strategy,
             "before_tokens": before_tokens,
@@ -1195,13 +1200,20 @@ fn event_to_json(event: &Event) -> Option<Value> {
             "after_tokens": after_tokens,
             "removed_messages": removed_messages,
         })),
-        Event::PermissionRequest { tool_name, input_summary, request_id } => Some(json!({
+        Event::PermissionRequest {
+            tool_name,
+            input_summary,
+            request_id,
+        } => Some(json!({
             "type": "permission_request",
             "tool_name": tool_name,
             "input_summary": input_summary,
             "request_id": request_id,
         })),
-        Event::PermissionResponse { request_id, allowed } => Some(json!({
+        Event::PermissionResponse {
+            request_id,
+            allowed,
+        } => Some(json!({
             "type": "permission_response",
             "request_id": request_id,
             "allowed": allowed,
@@ -1218,17 +1230,28 @@ fn event_to_json(event: &Event) -> Option<Value> {
             "type": "session_saved",
             "session_id": session_id,
         })),
-        Event::SessionResumed { session_id, message_count } => Some(json!({
+        Event::SessionResumed {
+            session_id,
+            message_count,
+        } => Some(json!({
             "type": "session_resumed",
             "session_id": session_id,
             "message_count": message_count,
         })),
-        Event::AgentWorkerStarted { worker_id, task_prompt } => Some(json!({
+        Event::AgentWorkerStarted {
+            worker_id,
+            task_prompt,
+        } => Some(json!({
             "type": "agent_worker_started",
             "worker_id": worker_id,
             "task_prompt": task_prompt,
         })),
-        Event::AgentWorkerCompleted { worker_id, result, success, usage } => Some(json!({
+        Event::AgentWorkerCompleted {
+            worker_id,
+            result,
+            success,
+            usage,
+        } => Some(json!({
             "type": "agent_worker_completed",
             "worker_id": worker_id,
             "result": result,
@@ -1419,8 +1442,7 @@ mod tests {
 
     #[test]
     fn cli_parses_output_format_stream_json() {
-        let cli =
-            Cli::try_parse_from(["crab", "--output-format", "stream-json", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--output-format", "stream-json", "hello"]).unwrap();
         assert_eq!(cli.output_format, OutputFormat::StreamJson);
     }
 
@@ -1433,8 +1455,7 @@ mod tests {
 
     #[test]
     fn cli_effective_output_format_no_json_flag() {
-        let cli =
-            Cli::try_parse_from(["crab", "--output-format", "stream-json", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--output-format", "stream-json", "hello"]).unwrap();
         assert_eq!(cli.effective_output_format(), OutputFormat::StreamJson);
     }
 
@@ -1442,9 +1463,8 @@ mod tests {
 
     #[test]
     fn cli_parses_mcp_config() {
-        let cli =
-            Cli::try_parse_from(["crab", "--mcp-config", "a.json", "b.json", "--", "hello"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--mcp-config", "a.json", "b.json", "--", "hello"])
+            .unwrap();
         assert_eq!(cli.mcp_config.len(), 2);
         assert_eq!(cli.prompt.as_deref(), Some("hello"));
     }
@@ -1457,13 +1477,8 @@ mod tests {
 
     #[test]
     fn cli_parses_settings_inline_json() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--settings",
-            r#"{"model":"gpt-4o"}"#,
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--settings", r#"{"model":"gpt-4o"}"#, "hello"]).unwrap();
         assert!(cli.settings.is_some());
     }
 
@@ -1537,9 +1552,7 @@ mod tests {
 
     #[test]
     fn event_to_json_message_start() {
-        let event = Event::MessageStart {
-            id: "msg_1".into(),
-        };
+        let event = Event::MessageStart { id: "msg_1".into() };
         let json = event_to_json(&event).unwrap();
         assert_eq!(json["type"], "message_start");
         assert_eq!(json["role"], "assistant");
@@ -1582,26 +1595,80 @@ mod tests {
         let events = vec![
             Event::TurnStart { turn_index: 0 },
             Event::MessageStart { id: "m".into() },
-            Event::ContentDelta { index: 0, delta: "d".into() },
-            Event::ThinkingDelta { index: 0, delta: "t".into() },
+            Event::ContentDelta {
+                index: 0,
+                delta: "d".into(),
+            },
+            Event::ThinkingDelta {
+                index: 0,
+                delta: "t".into(),
+            },
             Event::ContentBlockStop { index: 0 },
-            Event::MessageEnd { usage: TokenUsage::default() },
-            Event::ToolUseStart { id: "t".into(), name: "n".into() },
-            Event::ToolUseInput { id: "t".into(), input: json!({}) },
-            Event::ToolOutputDelta { id: "t".into(), delta: "line".into() },
-            Event::ToolResult { id: "t".into(), output: ToolOutput::success("ok") },
-            Event::Error { message: "e".into() },
-            Event::TokenWarning { usage_pct: 0.5, used: 50, limit: 100 },
-            Event::CompactStart { strategy: "s".into(), before_tokens: 0 },
-            Event::CompactEnd { after_tokens: 0, removed_messages: 0 },
-            Event::PermissionRequest { tool_name: "t".into(), input_summary: "s".into(), request_id: "r".into() },
-            Event::PermissionResponse { request_id: "r".into(), allowed: true },
+            Event::MessageEnd {
+                usage: TokenUsage::default(),
+            },
+            Event::ToolUseStart {
+                id: "t".into(),
+                name: "n".into(),
+            },
+            Event::ToolUseInput {
+                id: "t".into(),
+                input: json!({}),
+            },
+            Event::ToolOutputDelta {
+                id: "t".into(),
+                delta: "line".into(),
+            },
+            Event::ToolResult {
+                id: "t".into(),
+                output: ToolOutput::success("ok"),
+            },
+            Event::Error {
+                message: "e".into(),
+            },
+            Event::TokenWarning {
+                usage_pct: 0.5,
+                used: 50,
+                limit: 100,
+            },
+            Event::CompactStart {
+                strategy: "s".into(),
+                before_tokens: 0,
+            },
+            Event::CompactEnd {
+                after_tokens: 0,
+                removed_messages: 0,
+            },
+            Event::PermissionRequest {
+                tool_name: "t".into(),
+                input_summary: "s".into(),
+                request_id: "r".into(),
+            },
+            Event::PermissionResponse {
+                request_id: "r".into(),
+                allowed: true,
+            },
             Event::MemoryLoaded { count: 0 },
-            Event::MemorySaved { filename: "f".into() },
-            Event::SessionSaved { session_id: "s".into() },
-            Event::SessionResumed { session_id: "s".into(), message_count: 0 },
-            Event::AgentWorkerStarted { worker_id: "w".into(), task_prompt: "p".into() },
-            Event::AgentWorkerCompleted { worker_id: "w".into(), result: None, success: true, usage: TokenUsage::default() },
+            Event::MemorySaved {
+                filename: "f".into(),
+            },
+            Event::SessionSaved {
+                session_id: "s".into(),
+            },
+            Event::SessionResumed {
+                session_id: "s".into(),
+                message_count: 0,
+            },
+            Event::AgentWorkerStarted {
+                worker_id: "w".into(),
+                task_prompt: "p".into(),
+            },
+            Event::AgentWorkerCompleted {
+                worker_id: "w".into(),
+                result: None,
+                success: true,
+                usage: TokenUsage::default(),
+            },
         ];
 
         for event in &events {
@@ -1617,44 +1684,27 @@ mod tests {
 
     #[test]
     fn cli_parses_allowed_tools() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--allowed-tools",
-            "read,write,edit",
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--allowed-tools", "read,write,edit", "hello"]).unwrap();
         assert_eq!(cli.allowed_tools, vec!["read", "write", "edit"]);
     }
 
     #[test]
     fn cli_parses_allowed_tools_camel_case_alias() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--allowedTools",
-            "bash,read",
-            "hello",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--allowedTools", "bash,read", "hello"]).unwrap();
         assert_eq!(cli.allowed_tools, vec!["bash", "read"]);
     }
 
     #[test]
     fn cli_parses_disallowed_tools() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--disallowed-tools",
-            "bash,mcp__*",
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--disallowed-tools", "bash,mcp__*", "hello"]).unwrap();
         assert_eq!(cli.disallowed_tools, vec!["bash", "mcp__*"]);
     }
 
     #[test]
     fn cli_parses_tools_flag() {
-        let cli =
-            Cli::try_parse_from(["crab", "--tools", "read,write", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--tools", "read,write", "hello"]).unwrap();
         assert_eq!(cli.tools.as_deref(), Some("read,write"));
     }
 
@@ -1666,8 +1716,7 @@ mod tests {
 
     #[test]
     fn cli_parses_tools_default() {
-        let cli =
-            Cli::try_parse_from(["crab", "--tools", "default", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--tools", "default", "hello"]).unwrap();
         assert_eq!(cli.tools.as_deref(), Some("default"));
     }
 
@@ -1675,15 +1724,13 @@ mod tests {
 
     #[test]
     fn cli_parses_effort() {
-        let cli =
-            Cli::try_parse_from(["crab", "--effort", "high", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--effort", "high", "hello"]).unwrap();
         assert_eq!(cli.effort.as_deref(), Some("high"));
     }
 
     #[test]
     fn cli_parses_thinking() {
-        let cli =
-            Cli::try_parse_from(["crab", "--thinking", "enabled", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--thinking", "enabled", "hello"]).unwrap();
         assert_eq!(cli.thinking.as_deref(), Some("enabled"));
     }
 
@@ -1698,11 +1745,8 @@ mod tests {
 
     #[test]
     fn resolve_tool_filters_passthrough_lists() {
-        let (allowed, denied) = resolve_tool_filters(
-            &["read".into(), "write".into()],
-            &["bash".into()],
-            None,
-        );
+        let (allowed, denied) =
+            resolve_tool_filters(&["read".into(), "write".into()], &["bash".into()], None);
         assert_eq!(allowed, vec!["read", "write"]);
         assert_eq!(denied, vec!["bash"]);
     }
@@ -1723,8 +1767,7 @@ mod tests {
 
     #[test]
     fn resolve_tool_filters_tools_explicit_list() {
-        let (allowed, denied) =
-            resolve_tool_filters(&[], &[], Some("read,write,edit"));
+        let (allowed, denied) = resolve_tool_filters(&[], &[], Some("read,write,edit"));
         assert_eq!(allowed, vec!["read", "write", "edit"]);
         assert!(denied.is_empty());
     }
@@ -1733,13 +1776,8 @@ mod tests {
 
     #[test]
     fn cli_parses_system_prompt() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--system-prompt",
-            "You are a pirate.",
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--system-prompt", "You are a pirate.", "hello"]).unwrap();
         assert_eq!(
             cli.system_prompt_override.as_deref(),
             Some("You are a pirate.")
@@ -1748,13 +1786,8 @@ mod tests {
 
     #[test]
     fn cli_parses_system_prompt_file() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--system-prompt-file",
-            "/tmp/prompt.txt",
-            "hello",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--system-prompt-file", "/tmp/prompt.txt", "hello"])
+            .unwrap();
         assert_eq!(
             cli.system_prompt_file,
             Some(PathBuf::from("/tmp/prompt.txt"))
@@ -1795,22 +1828,14 @@ mod tests {
 
     #[test]
     fn cli_parses_add_dir_single() {
-        let cli =
-            Cli::try_parse_from(["crab", "--add-dir", "/tmp/extra", "--", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--add-dir", "/tmp/extra", "--", "hello"]).unwrap();
         assert_eq!(cli.add_dir, vec![PathBuf::from("/tmp/extra")]);
     }
 
     #[test]
     fn cli_parses_add_dir_multiple() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--add-dir",
-            "/tmp/a",
-            "/tmp/b",
-            "--",
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--add-dir", "/tmp/a", "/tmp/b", "--", "hello"]).unwrap();
         assert_eq!(
             cli.add_dir,
             vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]
@@ -1841,8 +1866,7 @@ mod tests {
 
     #[test]
     fn cli_parses_max_budget_usd() {
-        let cli =
-            Cli::try_parse_from(["crab", "--max-budget-usd", "5.50", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--max-budget-usd", "5.50", "hello"]).unwrap();
         assert!((cli.max_budget_usd.unwrap() - 5.50).abs() < f64::EPSILON);
     }
 
@@ -1874,13 +1898,8 @@ mod tests {
 
     #[test]
     fn resolve_system_prompt_override() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--system-prompt",
-            "Custom prompt only.",
-            "hello",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--system-prompt", "Custom prompt only.", "hello"])
+            .unwrap();
         let registry = crab_tools::registry::ToolRegistry::new();
         let result =
             resolve_system_prompt(&cli, std::path::Path::new("."), &registry, None).unwrap();
@@ -1932,13 +1951,7 @@ mod tests {
         std::fs::write(&file, "File-based prompt.").unwrap();
 
         let file_str = file.to_str().unwrap();
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--system-prompt-file",
-            file_str,
-            "hello",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--system-prompt-file", file_str, "hello"]).unwrap();
         let registry = crab_tools::registry::ToolRegistry::new();
         let result =
             resolve_system_prompt(&cli, std::path::Path::new("."), &registry, None).unwrap();
@@ -1952,13 +1965,8 @@ mod tests {
         std::fs::write(&file, "APPENDED FROM FILE").unwrap();
 
         let file_str = file.to_str().unwrap();
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--append-system-prompt-file",
-            file_str,
-            "hello",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["crab", "--append-system-prompt-file", file_str, "hello"])
+            .unwrap();
         let registry = crab_tools::registry::ToolRegistry::new();
         let result =
             resolve_system_prompt(&cli, std::path::Path::new("."), &registry, None).unwrap();
@@ -1992,7 +2000,9 @@ mod tests {
     fn cli_parses_update_check_list() {
         let cli = Cli::try_parse_from(["crab", "update", "check", "--list"]).unwrap();
         match cli.command {
-            Some(CliCommand::Update { action: Some(commands::update::UpdateAction::Check { list }) }) => {
+            Some(CliCommand::Update {
+                action: Some(commands::update::UpdateAction::Check { list }),
+            }) => {
                 assert!(list);
             }
             _ => panic!("expected Update Check --list"),
@@ -2003,7 +2013,14 @@ mod tests {
     fn cli_parses_update_install_dry_run() {
         let cli = Cli::try_parse_from(["crab", "update", "install", "--dry-run", "1.0.0"]).unwrap();
         match cli.command {
-            Some(CliCommand::Update { action: Some(commands::update::UpdateAction::Install { target, dry_run, force }) }) => {
+            Some(CliCommand::Update {
+                action:
+                    Some(commands::update::UpdateAction::Install {
+                        target,
+                        dry_run,
+                        force,
+                    }),
+            }) => {
                 assert_eq!(target.as_deref(), Some("1.0.0"));
                 assert!(dry_run);
                 assert!(!force);
@@ -2016,7 +2033,9 @@ mod tests {
     fn cli_parses_update_rollback() {
         let cli = Cli::try_parse_from(["crab", "update", "rollback", "0.2.0"]).unwrap();
         match cli.command {
-            Some(CliCommand::Update { action: Some(commands::update::UpdateAction::Rollback { target }) }) => {
+            Some(CliCommand::Update {
+                action: Some(commands::update::UpdateAction::Rollback { target }),
+            }) => {
                 assert_eq!(target.as_deref(), Some("0.2.0"));
             }
             _ => panic!("expected Update Rollback"),
@@ -2042,7 +2061,9 @@ mod tests {
     fn cli_parses_plugin_install() {
         let cli = Cli::try_parse_from(["crab", "plugin", "install", "./my-plugin"]).unwrap();
         match cli.command {
-            Some(CliCommand::Plugin { action: commands::plugin::PluginAction::Install { source } }) => {
+            Some(CliCommand::Plugin {
+                action: commands::plugin::PluginAction::Install { source },
+            }) => {
                 assert_eq!(source, "./my-plugin");
             }
             _ => panic!("expected Plugin Install"),
@@ -2053,7 +2074,9 @@ mod tests {
     fn cli_parses_plugin_remove() {
         let cli = Cli::try_parse_from(["crab", "plugin", "remove", "my-plugin"]).unwrap();
         match cli.command {
-            Some(CliCommand::Plugin { action: commands::plugin::PluginAction::Remove { name } }) => {
+            Some(CliCommand::Plugin {
+                action: commands::plugin::PluginAction::Remove { name },
+            }) => {
                 assert_eq!(name, "my-plugin");
             }
             _ => panic!("expected Plugin Remove"),
@@ -2065,7 +2088,9 @@ mod tests {
         let cli = Cli::try_parse_from(["crab", "plugin", "enable", "my-plugin"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(CliCommand::Plugin { action: commands::plugin::PluginAction::Enable { .. } })
+            Some(CliCommand::Plugin {
+                action: commands::plugin::PluginAction::Enable { .. }
+            })
         ));
     }
 
@@ -2074,7 +2099,9 @@ mod tests {
         let cli = Cli::try_parse_from(["crab", "plugin", "disable", "my-plugin"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(CliCommand::Plugin { action: commands::plugin::PluginAction::Disable { .. } })
+            Some(CliCommand::Plugin {
+                action: commands::plugin::PluginAction::Disable { .. }
+            })
         ));
     }
 
@@ -2083,7 +2110,9 @@ mod tests {
         let cli = Cli::try_parse_from(["crab", "plugin", "validate", "./path"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(CliCommand::Plugin { action: commands::plugin::PluginAction::Validate { .. } })
+            Some(CliCommand::Plugin {
+                action: commands::plugin::PluginAction::Validate { .. }
+            })
         ));
     }
 
@@ -2219,7 +2248,8 @@ mod tests {
 
     #[test]
     fn cli_parses_plugin_dir_single() {
-        let cli = Cli::try_parse_from(["crab", "--plugin-dir", "/tmp/plugins", "--", "hello"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--plugin-dir", "/tmp/plugins", "--", "hello"]).unwrap();
         assert_eq!(cli.plugin_dir, vec![PathBuf::from("/tmp/plugins")]);
     }
 
@@ -2227,11 +2257,18 @@ mod tests {
     fn cli_parses_plugin_dir_multiple() {
         let cli = Cli::try_parse_from([
             "crab",
-            "--plugin-dir", "/tmp/a",
-            "--plugin-dir", "/tmp/b",
-            "--", "hello",
-        ]).unwrap();
-        assert_eq!(cli.plugin_dir, vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+            "--plugin-dir",
+            "/tmp/a",
+            "--plugin-dir",
+            "/tmp/b",
+            "--",
+            "hello",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.plugin_dir,
+            vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]
+        );
     }
 
     #[test]
@@ -2242,15 +2279,22 @@ mod tests {
 
     #[test]
     fn cli_parses_betas() {
-        let cli = Cli::try_parse_from(["crab", "--betas", "prompt-caching", "--", "hello"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--betas", "prompt-caching", "--", "hello"]).unwrap();
         assert_eq!(cli.betas, vec!["prompt-caching"]);
     }
 
     #[test]
     fn cli_parses_betas_multiple() {
         let cli = Cli::try_parse_from([
-            "crab", "--betas", "prompt-caching", "computer-use", "--", "hello",
-        ]).unwrap();
+            "crab",
+            "--betas",
+            "prompt-caching",
+            "computer-use",
+            "--",
+            "hello",
+        ])
+        .unwrap();
         assert_eq!(cli.betas, vec!["prompt-caching", "computer-use"]);
     }
 
@@ -2270,13 +2314,8 @@ mod tests {
 
     #[test]
     fn cli_parses_setting_sources() {
-        let cli = Cli::try_parse_from([
-            "crab",
-            "--setting-sources",
-            "user,project",
-            "hello",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["crab", "--setting-sources", "user,project", "hello"]).unwrap();
         assert_eq!(cli.setting_sources.as_deref(), Some("user,project"));
     }
 

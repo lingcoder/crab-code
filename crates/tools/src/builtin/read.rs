@@ -12,9 +12,8 @@ pub struct ReadTool;
 
 /// Extensions treated as binary/non-text — return type info instead of content.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "svg", "zip", "tar", "gz", "bz2",
-    "xz", "7z", "rar", "exe", "dll", "so", "dylib", "mp3", "mp4", "wav", "ogg", "avi", "mov",
-    "mkv",
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "svg", "zip", "tar", "gz", "bz2", "xz",
+    "7z", "rar", "exe", "dll", "so", "dylib", "mp3", "mp4", "wav", "ogg", "avi", "mov", "mkv",
 ];
 
 /// Notebook extensions — return type info (full notebook reading handled separately).
@@ -203,11 +202,12 @@ async fn read_pdf(path: &Path, pages_spec: Option<&str>) -> Result<ToolOutput> {
     #[cfg(feature = "pdf")]
     {
         let pages_owned = pages_spec.map(String::from);
-        let result = tokio::task::spawn_blocking(move || {
-            extract_pdf_text(&bytes, pages_owned.as_deref())
-        })
-        .await
-        .map_err(|e| crab_common::Error::Other(format!("PDF extraction task failed: {e}")))?;
+        let result =
+            tokio::task::spawn_blocking(move || extract_pdf_text(&bytes, pages_owned.as_deref()))
+                .await
+                .map_err(|e| {
+                    crab_common::Error::Other(format!("PDF extraction task failed: {e}"))
+                })?;
 
         match result {
             Ok(text) => Ok(ToolOutput::success(text)),
@@ -227,10 +227,7 @@ async fn read_pdf(path: &Path, pages_spec: Option<&str>) -> Result<ToolOutput> {
 
 /// Extract text from PDF bytes. Returns the formatted text or an error message.
 #[cfg(feature = "pdf")]
-fn extract_pdf_text(
-    bytes: &[u8],
-    pages_spec: Option<&str>,
-) -> std::result::Result<String, String> {
+fn extract_pdf_text(bytes: &[u8], pages_spec: Option<&str>) -> std::result::Result<String, String> {
     use std::fmt::Write;
     // pdf-extract provides extract_text_from_mem which extracts all pages
     let full_text = pdf_extract::extract_text_from_mem(bytes)

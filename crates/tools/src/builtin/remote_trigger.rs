@@ -206,7 +206,11 @@ impl Tool for RemoteTriggerTool {
 
                     let s = store.lock().unwrap();
                     s.get(trigger_id).map_or_else(
-                        || Ok(ToolOutput::error(format!("trigger '{trigger_id}' not found"))),
+                        || {
+                            Ok(ToolOutput::error(format!(
+                                "trigger '{trigger_id}' not found"
+                            )))
+                        },
                         |trigger| {
                             let result = serde_json::json!({
                                 "id": trigger.id,
@@ -223,14 +227,9 @@ impl Tool for RemoteTriggerTool {
                     )
                 }
                 "create" => {
-                    let name = input
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            crab_common::Error::Other(
-                                "name is required for 'create' action".into(),
-                            )
-                        })?;
+                    let name = input.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                        crab_common::Error::Other("name is required for 'create' action".into())
+                    })?;
 
                     let prompt = input
                         .get("prompt")
@@ -383,7 +382,11 @@ mod tests {
     #[test]
     fn store_create_and_get() {
         let mut store = TriggerStore::new();
-        let t = store.create("deploy".into(), Some("Deploy to prod".into()), "run deploy".into());
+        let t = store.create(
+            "deploy".into(),
+            Some("Deploy to prod".into()),
+            "run deploy".into(),
+        );
         assert_eq!(t.id, "trigger_1");
         assert_eq!(t.name, "deploy");
         let got = store.get("trigger_1").unwrap();
@@ -394,7 +397,12 @@ mod tests {
     fn store_update() {
         let mut store = TriggerStore::new();
         store.create("old".into(), None, "old prompt".into());
-        assert!(store.update("trigger_1", Some("new".into()), None, Some("new prompt".into())));
+        assert!(store.update(
+            "trigger_1",
+            Some("new".into()),
+            None,
+            Some("new prompt".into())
+        ));
         let t = store.get("trigger_1").unwrap();
         assert_eq!(t.name, "new");
         assert_eq!(t.prompt, "new prompt");

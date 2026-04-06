@@ -196,19 +196,15 @@ pub fn sse_event_to_stream_event(event: AnthropicSseEvent) -> Option<StreamEvent
             AnthropicDelta::TextDelta { text } => {
                 Some(StreamEvent::ContentDelta { index, delta: text })
             }
-            AnthropicDelta::InputJsonDelta { partial_json } => {
-                Some(StreamEvent::ContentDelta {
-                    index,
-                    delta: partial_json,
-                })
-            }
-            AnthropicDelta::ThinkingDelta { thinking } => {
-                Some(StreamEvent::ThinkingDelta {
-                    index,
-                    delta: thinking,
-                })
-            }
-        }
+            AnthropicDelta::InputJsonDelta { partial_json } => Some(StreamEvent::ContentDelta {
+                index,
+                delta: partial_json,
+            }),
+            AnthropicDelta::ThinkingDelta { thinking } => Some(StreamEvent::ThinkingDelta {
+                index,
+                delta: thinking,
+            }),
+        },
         AnthropicSseEvent::ContentBlockStop { index } => {
             Some(StreamEvent::ContentBlockStop { index })
         }
@@ -688,7 +684,11 @@ mod tests {
         };
         let (msg, _) = from_anthropic_response(resp).unwrap();
         assert_eq!(msg.content.len(), 2);
-        assert!(matches!(&msg.content[0], ContentBlock::Thinking { thinking } if thinking == "Let me think..."));
-        assert!(matches!(&msg.content[1], ContentBlock::Text { text } if text == "Here's my answer."));
+        assert!(
+            matches!(&msg.content[0], ContentBlock::Thinking { thinking } if thinking == "Let me think...")
+        );
+        assert!(
+            matches!(&msg.content[1], ContentBlock::Text { text } if text == "Here's my answer.")
+        );
     }
 }

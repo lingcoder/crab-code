@@ -11,7 +11,9 @@ use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
 use crab_core::tool::{ToolContext, ToolOutput};
 use crab_plugin::hook::{HookAction, HookContext, HookExecutor, HookTrigger};
-use crab_session::{CompactionStrategy, CostAccumulator, ContextAction, ContextManager, Conversation};
+use crab_session::{
+    CompactionStrategy, ContextAction, ContextManager, Conversation, CostAccumulator,
+};
 use crab_tools::executor::{StreamingOutput, ToolExecutor};
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -95,33 +97,43 @@ pub async fn query_loop(
             tools: config.tool_schemas.clone(),
             temperature: config.temperature,
             cache_breakpoints,
-            budget_tokens: config.effort.as_ref().map_or(config.budget_tokens, |e| e.to_budget_tokens()),
+            budget_tokens: config
+                .effort
+                .as_ref()
+                .map_or(config.budget_tokens, |e| e.to_budget_tokens()),
             response_format: None,
             tool_choice: None,
         };
 
         // Stream the LLM response with retry support + fallback
-        let (assistant_msg, total_usage, _stop_reason) =
-            match stream_with_retry(backend, req.clone(), &retry_policy, &event_tx, &cancel).await {
-                Ok(result) => result,
-                Err(e) if is_overloaded_error(&e) && config.fallback_model.is_some() => {
-                    let fallback = config.fallback_model.as_ref().unwrap();
-                    let _ = event_tx
-                        .send(Event::Error {
-                            message: format!(
-                                "Primary model overloaded, falling back to {}",
-                                fallback.as_str()
-                            ),
-                        })
-                        .await;
-                    let fallback_req = MessageRequest {
-                        model: fallback.clone(),
-                        ..req
-                    };
-                    stream_with_retry(backend, fallback_req, &retry_policy, &event_tx, &cancel).await?
-                }
-                Err(e) => return Err(e),
-            };
+        let (assistant_msg, total_usage, _stop_reason) = match stream_with_retry(
+            backend,
+            req.clone(),
+            &retry_policy,
+            &event_tx,
+            &cancel,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) if is_overloaded_error(&e) && config.fallback_model.is_some() => {
+                let fallback = config.fallback_model.as_ref().unwrap();
+                let _ = event_tx
+                    .send(Event::Error {
+                        message: format!(
+                            "Primary model overloaded, falling back to {}",
+                            fallback.as_str()
+                        ),
+                    })
+                    .await;
+                let fallback_req = MessageRequest {
+                    model: fallback.clone(),
+                    ..req
+                };
+                stream_with_retry(backend, fallback_req, &retry_policy, &event_tx, &cancel).await?
+            }
+            Err(e) => return Err(e),
+        };
 
         // Record usage
         cost_tracker.add_usage(config.model.as_str(), &total_usage);
@@ -249,7 +261,8 @@ async fn stream_response(
     // Use StreamingUsage for accurate token accumulation
     let mut usage_tracker = StreamingUsage::new();
     // Track thinking content blocks by index
-    let mut thinking_blocks: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut thinking_blocks: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     // Track which block indices are thinking blocks
     while let Some(event) = stream.next().await {
         if cancel.is_cancelled() {
@@ -278,10 +291,7 @@ async fn stream_response(
                     .await;
             }
             StreamEvent::ThinkingDelta { index, delta } => {
-                thinking_blocks
-                    .entry(*index)
-                    .or_default()
-                    .push_str(delta);
+                thinking_blocks.entry(*index).or_default().push_str(delta);
                 let _ = event_tx
                     .send(Event::ThinkingDelta {
                         index: *index,
@@ -321,9 +331,10 @@ async fn stream_response(
     thinking_indices_sorted.sort_unstable();
     for idx in thinking_indices_sorted {
         if let Some(thinking) = thinking_blocks.remove(&idx)
-            && !thinking.is_empty() {
-                content.push(ContentBlock::Thinking { thinking });
-            }
+            && !thinking.is_empty()
+        {
+            content.push(ContentBlock::Thinking { thinking });
+        }
     }
 
     // Add text content if any

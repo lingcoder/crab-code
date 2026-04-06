@@ -122,7 +122,10 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         hook_executor: None,
         session_id: Some(config.session_config.session_id.clone()),
         effort: None,
-        fallback_model: config.session_config.fallback_model.map(crab_core::model::ModelId::from),
+        fallback_model: config
+            .session_config
+            .fallback_model
+            .map(crab_core::model::ModelId::from),
     };
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);

@@ -509,8 +509,7 @@ mod tests {
     #[test]
     fn whitelist_blocks_unlisted_tool() {
         let p = policy_with_allowed(PermissionMode::Default, vec!["read".into(), "write".into()]);
-        let result =
-            check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
+        let result = check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
         assert!(
             matches!(result, PermissionDecision::Deny(_)),
             "tool not in whitelist should be denied"
@@ -535,8 +534,7 @@ mod tests {
     #[test]
     fn empty_whitelist_allows_all() {
         let p = policy_with_allowed(PermissionMode::Default, vec![]);
-        let result =
-            check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
+        let result = check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
         // empty whitelist means no filtering — falls through to normal check
         assert!(matches!(result, PermissionDecision::AskUser(_)));
     }

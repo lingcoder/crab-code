@@ -54,7 +54,9 @@ impl FromStr for EffortLevel {
             "medium" | "med" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "max" => Ok(Self::Max),
-            other => Err(format!("unknown effort level: '{other}'. Valid: low, medium, high, max")),
+            other => Err(format!(
+                "unknown effort level: '{other}'. Valid: low, medium, high, max"
+            )),
         }
     }
 }
@@ -102,7 +104,10 @@ mod tests {
     #[test]
     fn effort_level_from_str() {
         assert_eq!("low".parse::<EffortLevel>().unwrap(), EffortLevel::Low);
-        assert_eq!("medium".parse::<EffortLevel>().unwrap(), EffortLevel::Medium);
+        assert_eq!(
+            "medium".parse::<EffortLevel>().unwrap(),
+            EffortLevel::Medium
+        );
         assert_eq!("med".parse::<EffortLevel>().unwrap(), EffortLevel::Medium);
         assert_eq!("high".parse::<EffortLevel>().unwrap(), EffortLevel::High);
         assert_eq!("max".parse::<EffortLevel>().unwrap(), EffortLevel::Max);
@@ -128,12 +133,27 @@ mod tests {
 
     #[test]
     fn thinking_mode_from_str() {
-        assert_eq!("enabled".parse::<ThinkingMode>().unwrap(), ThinkingMode::Enabled);
+        assert_eq!(
+            "enabled".parse::<ThinkingMode>().unwrap(),
+            ThinkingMode::Enabled
+        );
         assert_eq!("on".parse::<ThinkingMode>().unwrap(), ThinkingMode::Enabled);
-        assert_eq!("adaptive".parse::<ThinkingMode>().unwrap(), ThinkingMode::Adaptive);
-        assert_eq!("auto".parse::<ThinkingMode>().unwrap(), ThinkingMode::Adaptive);
-        assert_eq!("disabled".parse::<ThinkingMode>().unwrap(), ThinkingMode::Disabled);
-        assert_eq!("off".parse::<ThinkingMode>().unwrap(), ThinkingMode::Disabled);
+        assert_eq!(
+            "adaptive".parse::<ThinkingMode>().unwrap(),
+            ThinkingMode::Adaptive
+        );
+        assert_eq!(
+            "auto".parse::<ThinkingMode>().unwrap(),
+            ThinkingMode::Adaptive
+        );
+        assert_eq!(
+            "disabled".parse::<ThinkingMode>().unwrap(),
+            ThinkingMode::Disabled
+        );
+        assert_eq!(
+            "off".parse::<ThinkingMode>().unwrap(),
+            ThinkingMode::Disabled
+        );
         assert!("bogus".parse::<ThinkingMode>().is_err());
     }
 

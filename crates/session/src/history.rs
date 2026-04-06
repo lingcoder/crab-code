@@ -208,10 +208,11 @@ impl SessionHistory {
                 let name = name.to_string_lossy();
                 if let Some(id) = name.strip_suffix(".json")
                     && let Ok(meta) = entry.metadata()
-                        && let Ok(mtime) = meta.modified()
-                            && best.as_ref().is_none_or(|(_, t)| mtime > *t) {
-                                best = Some((id.to_string(), mtime));
-                            }
+                    && let Ok(mtime) = meta.modified()
+                    && best.as_ref().is_none_or(|(_, t)| mtime > *t)
+                {
+                    best = Some((id.to_string(), mtime));
+                }
             }
         }
         best.map(|(id, _)| id)
@@ -927,7 +928,11 @@ mod tests {
     fn find_latest_for_dir_empty_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().join("sessions"));
-        assert!(history.find_latest_for_dir(std::path::Path::new("/tmp")).is_none());
+        assert!(
+            history
+                .find_latest_for_dir(std::path::Path::new("/tmp"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -935,12 +940,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
 
-        history.save("session-old", &[Message::user("old")]).unwrap();
+        history
+            .save("session-old", &[Message::user("old")])
+            .unwrap();
         // Small delay to ensure different mtime
         std::thread::sleep(std::time::Duration::from_millis(50));
-        history.save("session-new", &[Message::user("new")]).unwrap();
+        history
+            .save("session-new", &[Message::user("new")])
+            .unwrap();
 
-        let latest = history.find_latest_for_dir(std::path::Path::new("/tmp")).unwrap();
+        let latest = history
+            .find_latest_for_dir(std::path::Path::new("/tmp"))
+            .unwrap();
         assert_eq!(latest, "session-new");
     }
 
@@ -952,7 +963,12 @@ mod tests {
         let history = SessionHistory::new(dir.path().to_path_buf());
 
         history
-            .save_with_metadata("s1", Some("my feature"), Some("/tmp/project"), &[Message::user("hi")])
+            .save_with_metadata(
+                "s1",
+                Some("my feature"),
+                Some("/tmp/project"),
+                &[Message::user("hi")],
+            )
             .unwrap();
 
         // Load raw file to verify name is stored

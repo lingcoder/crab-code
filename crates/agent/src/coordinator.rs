@@ -88,7 +88,6 @@ pub struct SessionConfig {
     pub fallback_model: Option<String>,
 
     // ─── B-level flags (Steps 10–13) ───
-
     /// Bare mode — skip hooks, plugins, auto-memory, CRAB.md discovery.
     pub bare_mode: bool,
     /// Git worktree branch name (empty string = auto-name).
@@ -164,7 +163,9 @@ impl AgentSession {
         {
             match crate::pr_context::load_pr_context(pr_ref) {
                 Ok(ctx) => {
-                    conversation.system_prompt.push_str(&ctx.format_for_prompt());
+                    conversation
+                        .system_prompt
+                        .push_str(&ctx.format_for_prompt());
                     tracing::info!(pr = pr_ref.as_str(), "loaded PR context");
                 }
                 Err(e) => {
@@ -210,9 +211,7 @@ impl AgentSession {
                 .effort
                 .as_deref()
                 .and_then(|e| e.parse::<crate::effort::EffortLevel>().ok()),
-            fallback_model: session_config
-                .fallback_model
-                .map(ModelId::from),
+            fallback_model: session_config.fallback_model.map(ModelId::from),
         };
 
         let (event_tx, event_rx) = mpsc::channel(256);

@@ -370,10 +370,7 @@ fn process_is_alive(pid: u32) -> bool {
     use sysinfo::{Pid, System};
     let mut sys = System::new();
     let pid = Pid::from_u32(pid);
-    sys.refresh_processes(
-        sysinfo::ProcessesToUpdate::Some(&[pid]),
-        true,
-    );
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
     sys.process(pid).is_some()
 }
 

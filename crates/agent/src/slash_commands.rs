@@ -125,11 +125,7 @@ impl SlashCommandRegistry {
             cmd_resume,
         );
         reg.register("history", "List recent sessions", cmd_history);
-        reg.register(
-            "export",
-            "Export conversation (/export [path])",
-            cmd_export,
-        );
+        reg.register("export", "Export conversation (/export [path])", cmd_export);
         reg.register("doctor", "Run health diagnostics", cmd_doctor);
         reg.register("diff", "Show git diff summary", cmd_diff);
         reg.register("review", "Show pending review items", cmd_review);
@@ -151,7 +147,11 @@ impl SlashCommandRegistry {
             "Add working directory (/add-dir <path>)",
             cmd_add_dir,
         );
-        reg.register("files", "List tracked files in working directory", cmd_files);
+        reg.register(
+            "files",
+            "List tracked files in working directory",
+            cmd_files,
+        );
         reg.register("plugin", "List loaded plugins", cmd_plugin);
         reg.register("mcp", "List MCP server connections", cmd_mcp);
         reg.register("branch", "Show current git branch", cmd_branch);
@@ -193,14 +193,14 @@ impl SlashCommandRegistry {
         args: &str,
         ctx: &SlashCommandContext<'_>,
     ) -> Option<SlashCommandResult> {
-        self.commands.get(name).map(|entry| (entry.handler)(args, ctx))
+        self.commands
+            .get(name)
+            .map(|entry| (entry.handler)(args, ctx))
     }
 
     /// Look up a command by name.
     pub fn find(&self, name: &str) -> Option<(&str, &str)> {
-        self.commands
-            .get(name)
-            .map(|e| (e.name, e.description))
+        self.commands.get(name).map(|e| (e.name, e.description))
     }
 
     /// List all commands in registration order as `(name, description)` pairs.
@@ -294,11 +294,7 @@ fn cmd_memory(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult 
         .into_iter()
         .flatten()
         .filter_map(std::result::Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .map(|e| format!("  {}", e.file_name().to_string_lossy()))
         .collect();
 
@@ -336,7 +332,9 @@ fn cmd_config(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult 
         ctx.model,
         ctx.permission_mode,
         ctx.working_dir.display(),
-        ctx.memory_dir.as_ref().map_or_else(|| "(none)".to_string(), |d| d.display().to_string()),
+        ctx.memory_dir
+            .as_ref()
+            .map_or_else(|| "(none)".to_string(), |d| d.display().to_string()),
     );
     SlashCommandResult::Message(text)
 }
@@ -384,11 +382,7 @@ fn cmd_history(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult
         .into_iter()
         .flatten()
         .filter_map(std::result::Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|e| {
             let mtime = e.metadata().ok()?.modified().ok()?;
             let name = e.path().file_stem()?.to_string_lossy().to_string();
@@ -403,7 +397,10 @@ fn cmd_history(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult
     }
 
     let max = 10.min(entries.len());
-    let mut lines = vec![format!("Recent sessions (showing {max} of {}):", entries.len())];
+    let mut lines = vec![format!(
+        "Recent sessions (showing {max} of {}):",
+        entries.len()
+    )];
     for (id, _mtime) in &entries[..max] {
         lines.push(format!("  {id}"));
     }
@@ -425,7 +422,10 @@ fn cmd_doctor(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult 
 
     // Working directory exists
     if ctx.working_dir.exists() {
-        checks.push(format!("  [ok] Working directory: {}", ctx.working_dir.display()));
+        checks.push(format!(
+            "  [ok] Working directory: {}",
+            ctx.working_dir.display()
+        ));
     } else {
         checks.push(format!(
             "  [!!] Working directory missing: {}",
@@ -577,9 +577,7 @@ fn cmd_files(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult {
             } else {
                 String::new()
             };
-            SlashCommandResult::Message(format!(
-                "Tracked files ({count}):\n{preview}{suffix}"
-            ))
+            SlashCommandResult::Message(format!("Tracked files ({count}):\n{preview}{suffix}"))
         }
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr);
@@ -1195,7 +1193,9 @@ mod tests {
         let reg = SlashCommandRegistry::new();
         let (model, cost, dir) = make_ctx();
         let ctx = ctx_from(&model, &cost, &dir);
-        let result = reg.execute("add-dir", "/nonexistent/path/xyz", &ctx).unwrap();
+        let result = reg
+            .execute("add-dir", "/nonexistent/path/xyz", &ctx)
+            .unwrap();
         if let SlashCommandResult::Message(text) = result {
             assert!(text.contains("Not a directory"));
         } else {
@@ -1209,9 +1209,7 @@ mod tests {
         let (model, cost, dir) = make_ctx();
         let ctx = ctx_from(&model, &cost, &dir);
         let tmp = std::env::temp_dir();
-        let result = reg
-            .execute("add-dir", tmp.to_str().unwrap(), &ctx)
-            .unwrap();
+        let result = reg.execute("add-dir", tmp.to_str().unwrap(), &ctx).unwrap();
         assert!(matches!(
             result,
             SlashCommandResult::Action(SlashAction::AddDir(_))

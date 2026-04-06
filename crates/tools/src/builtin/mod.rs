@@ -74,7 +74,9 @@ pub fn register_all_builtins(
     registry.register(Arc::new(cron::CronListTool::new(cron_store)));
 
     let trigger_store = remote_trigger::shared_trigger_store();
-    registry.register(Arc::new(remote_trigger::RemoteTriggerTool::new(trigger_store)));
+    registry.register(Arc::new(remote_trigger::RemoteTriggerTool::new(
+        trigger_store,
+    )));
 
     // PowerShell tool — registered on Windows only
     #[cfg(target_os = "windows")]

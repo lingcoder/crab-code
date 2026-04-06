@@ -139,8 +139,7 @@ impl BashTool {
             return Ok(ToolOutput::error("command is required"));
         }
 
-        let timeout = timeout_ms
-            .map_or(Duration::from_secs(120), Duration::from_millis);
+        let timeout = timeout_ms.map_or(Duration::from_secs(120), Duration::from_millis);
 
         let (prog, args) = if cfg!(windows) {
             ("cmd", vec!["/C".to_owned(), command])
@@ -291,9 +290,7 @@ mod pty_support {
                 run_in_pty(&command, &working_dir, timeout, strip_ansi)
             })
             .await
-            .map_err(|e| {
-                crab_common::Error::Other(format!("PTY task failed: {e}"))
-            })??;
+            .map_err(|e| crab_common::Error::Other(format!("PTY task failed: {e}")))??;
 
             Ok(result)
         }
@@ -336,7 +333,9 @@ mod pty_support {
         // Drop the slave — we read from master
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader()
+        let mut reader = pair
+            .master
+            .try_clone_reader()
             .map_err(|e| crab_common::Error::Other(format!("failed to clone PTY reader: {e}")))?;
 
         // Read output with timeout
@@ -448,9 +447,8 @@ mod tests {
         let input = serde_json::json!({ "command": "echo hello_stream" });
         let ctx = make_ctx();
 
-        let handle = tokio::spawn(async move {
-            tool.execute_streaming(input, &ctx, streaming).await
-        });
+        let handle =
+            tokio::spawn(async move { tool.execute_streaming(input, &ctx, streaming).await });
 
         let result = handle.await.unwrap().unwrap();
         assert!(!result.is_error);

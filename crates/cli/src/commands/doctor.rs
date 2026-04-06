@@ -12,8 +12,8 @@ struct Check {
 pub fn run() -> anyhow::Result<()> {
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let global_dir = crab_config::settings::global_config_dir();
-    let settings = crab_config::settings::load_merged_settings(Some(&working_dir))
-        .unwrap_or_default();
+    let settings =
+        crab_config::settings::load_merged_settings(Some(&working_dir)).unwrap_or_default();
 
     let checks = vec![
         check_api_key(&settings),
@@ -62,10 +62,7 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 fn check_api_key(settings: &crab_config::Settings) -> Check {
-    let has_settings_key = settings
-        .api_key
-        .as_ref()
-        .is_some_and(|k| !k.is_empty());
+    let has_settings_key = settings.api_key.as_ref().is_some_and(|k| !k.is_empty());
     let has_anthropic_env = std::env::var("ANTHROPIC_API_KEY")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
@@ -124,14 +121,9 @@ fn check_settings_file(global_dir: &Path) -> Check {
 }
 
 fn check_git() -> Check {
-    match std::process::Command::new("git")
-        .arg("--version")
-        .output()
-    {
+    match std::process::Command::new("git").arg("--version").output() {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             Check {
                 name: "Git",
                 passed: true,

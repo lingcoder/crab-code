@@ -105,10 +105,7 @@ pub fn load_pr_context(pr_ref: &str) -> crab_common::Result<PrContext> {
     // Fetch diff summary
     let diff_summary = fetch_pr_diff(pr_ref).unwrap_or_default();
 
-    Ok(PrContext {
-        info,
-        diff_summary,
-    })
+    Ok(PrContext { info, diff_summary })
 }
 
 /// Fetch PR metadata via `gh pr view --json`.

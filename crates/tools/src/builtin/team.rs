@@ -192,12 +192,9 @@ impl Tool for SendMessageTool {
         let session_id = ctx.session_id.clone();
 
         Box::pin(async move {
-            let to = input
-                .get("to")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: to".into())
-                })?;
+            let to = input.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
+                crab_common::Error::Other("missing required parameter: to".into())
+            })?;
 
             let message = input
                 .get("message")

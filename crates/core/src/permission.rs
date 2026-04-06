@@ -89,11 +89,7 @@ impl PermissionPolicy {
     ///
     /// Returns `true` if `allowed_tools` is empty (no whitelist) or if the
     /// tool matches at least one allowed pattern.
-    pub fn is_allowed_by_whitelist(
-        &self,
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-    ) -> bool {
+    pub fn is_allowed_by_whitelist(&self, tool_name: &str, tool_input: &serde_json::Value) -> bool {
         if self.allowed_tools.is_empty() {
             return true; // no whitelist = everything allowed
         }
@@ -104,11 +100,7 @@ impl PermissionPolicy {
 
     /// Check whether a tool invocation is denied by the `denied_tools`
     /// blacklist, using full glob + parameter matching.
-    pub fn is_denied_by_filter(
-        &self,
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-    ) -> bool {
+    pub fn is_denied_by_filter(&self, tool_name: &str, tool_input: &serde_json::Value) -> bool {
         self.denied_tools
             .iter()
             .any(|pattern| matches_tool_filter(pattern, tool_name, tool_input))
@@ -145,7 +137,9 @@ pub fn matches_tool_filter(filter: &str, tool_name: &str, tool_input: &serde_jso
     }
 
     // Check for Name(pattern) format
-    if let Some(paren_start) = filter.find('(') && filter.ends_with(')') {
+    if let Some(paren_start) = filter.find('(')
+        && filter.ends_with(')')
+    {
         let name_part = &filter[..paren_start];
         let pattern_part = &filter[paren_start + 1..filter.len() - 1];
 
@@ -321,11 +315,7 @@ const AUTO_DANGEROUS_PATTERNS: &[&str] = &[
 
 impl AutoModeClassifier {
     /// Classify the risk level of a tool invocation using heuristics.
-    pub fn classify(
-        tool_name: &str,
-        is_read_only: bool,
-        input: &serde_json::Value,
-    ) -> RiskLevel {
+    pub fn classify(tool_name: &str, is_read_only: bool, input: &serde_json::Value) -> RiskLevel {
         // Read-only tools are always safe
         if is_read_only || SAFE_TOOLS.contains(&tool_name) {
             return RiskLevel::Safe;
@@ -411,15 +401,42 @@ mod tests {
 
     #[test]
     fn permission_mode_from_str() {
-        assert_eq!("default".parse::<PermissionMode>().unwrap(), PermissionMode::Default);
-        assert_eq!("acceptEdits".parse::<PermissionMode>().unwrap(), PermissionMode::AcceptEdits);
-        assert_eq!("accept-edits".parse::<PermissionMode>().unwrap(), PermissionMode::AcceptEdits);
-        assert_eq!("trust-project".parse::<PermissionMode>().unwrap(), PermissionMode::TrustProject);
-        assert_eq!("trust_project".parse::<PermissionMode>().unwrap(), PermissionMode::TrustProject);
-        assert_eq!("dontAsk".parse::<PermissionMode>().unwrap(), PermissionMode::DontAsk);
-        assert_eq!("bypassPermissions".parse::<PermissionMode>().unwrap(), PermissionMode::Dangerously);
-        assert_eq!("dangerously".parse::<PermissionMode>().unwrap(), PermissionMode::Dangerously);
-        assert_eq!("plan".parse::<PermissionMode>().unwrap(), PermissionMode::Plan);
+        assert_eq!(
+            "default".parse::<PermissionMode>().unwrap(),
+            PermissionMode::Default
+        );
+        assert_eq!(
+            "acceptEdits".parse::<PermissionMode>().unwrap(),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            "accept-edits".parse::<PermissionMode>().unwrap(),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            "trust-project".parse::<PermissionMode>().unwrap(),
+            PermissionMode::TrustProject
+        );
+        assert_eq!(
+            "trust_project".parse::<PermissionMode>().unwrap(),
+            PermissionMode::TrustProject
+        );
+        assert_eq!(
+            "dontAsk".parse::<PermissionMode>().unwrap(),
+            PermissionMode::DontAsk
+        );
+        assert_eq!(
+            "bypassPermissions".parse::<PermissionMode>().unwrap(),
+            PermissionMode::Dangerously
+        );
+        assert_eq!(
+            "dangerously".parse::<PermissionMode>().unwrap(),
+            PermissionMode::Dangerously
+        );
+        assert_eq!(
+            "plan".parse::<PermissionMode>().unwrap(),
+            PermissionMode::Plan
+        );
         assert!("unknown".parse::<PermissionMode>().is_err());
     }
 

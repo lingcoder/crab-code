@@ -78,7 +78,6 @@ pub enum HookAction {
     Modify,
 }
 
-
 /// Structured result parsed from a hook's JSON stdout.
 ///
 /// If a hook prints valid JSON to stdout matching this shape, it is used.
@@ -444,7 +443,8 @@ mod tests {
 
     #[test]
     fn hook_def_with_match_pattern() {
-        let json = r#"{"trigger": "pre_tool_use", "command": "validate", "match_pattern": "mcp__*"}"#;
+        let json =
+            r#"{"trigger": "pre_tool_use", "command": "validate", "match_pattern": "mcp__*"}"#;
         let hook: HookDef = serde_json::from_str(json).unwrap();
         assert_eq!(hook.match_pattern.as_deref(), Some("mcp__*"));
     }
@@ -809,11 +809,19 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let (_script_path, cmd) = if cfg!(windows) {
             let p = dir.join("deny.cmd");
-            std::fs::write(&p, "@echo off\necho {\"action\": \"deny\", \"message\": \"blocked\"}").unwrap();
+            std::fs::write(
+                &p,
+                "@echo off\necho {\"action\": \"deny\", \"message\": \"blocked\"}",
+            )
+            .unwrap();
             (p.clone(), format!("cmd /C {}", p.display()))
         } else {
             let p = dir.join("deny.sh");
-            std::fs::write(&p, "#!/bin/sh\necho '{\"action\": \"deny\", \"message\": \"blocked\"}'").unwrap();
+            std::fs::write(
+                &p,
+                "#!/bin/sh\necho '{\"action\": \"deny\", \"message\": \"blocked\"}'",
+            )
+            .unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -860,10 +868,7 @@ mod tests {
             tool_exit_code: None,
             session_id: Some("sess-123".into()),
         };
-        let result = exec
-            .run(HookTrigger::UserPromptSubmit, &ctx)
-            .await
-            .unwrap();
+        let result = exec.run(HookTrigger::UserPromptSubmit, &ctx).await.unwrap();
         assert!(result.is_allowed());
     }
 }

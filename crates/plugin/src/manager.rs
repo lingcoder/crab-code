@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::manifest::{discover_plugins, load_manifest, PluginManifest};
+use crate::manifest::{PluginManifest, discover_plugins, load_manifest};
 
 /// Runtime state for a loaded plugin.
 #[derive(Debug, Clone)]
@@ -187,7 +187,9 @@ impl PluginManager {
             .remove(name)
             .ok_or_else(|| crab_common::Error::Other(format!("plugin '{name}' not found")))?;
 
-        if let Some(dir) = &entry.manifest.source_dir && dir.exists() {
+        if let Some(dir) = &entry.manifest.source_dir
+            && dir.exists()
+        {
             std::fs::remove_dir_all(dir).map_err(|e| {
                 crab_common::Error::Other(format!(
                     "failed to remove plugin directory {}: {e}",
@@ -207,8 +209,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> crab_common::Result<()> {
     for entry in std::fs::read_dir(src)
         .map_err(|e| crab_common::Error::Other(format!("read_dir {}: {e}", src.display())))?
     {
-        let entry =
-            entry.map_err(|e| crab_common::Error::Other(format!("dir entry: {e}")))?;
+        let entry = entry.map_err(|e| crab_common::Error::Other(format!("dir entry: {e}")))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if src_path.is_dir() {
@@ -263,11 +264,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("crab-pm-test-enable");
         let plugin_dir = tmp.join("test-plugin");
         let _ = std::fs::create_dir_all(&plugin_dir);
-        std::fs::write(
-            plugin_dir.join("plugin.json"),
-            r#"{"name": "test-plugin"}"#,
-        )
-        .unwrap();
+        std::fs::write(plugin_dir.join("plugin.json"), r#"{"name": "test-plugin"}"#).unwrap();
 
         let mut mgr = PluginManager::new(vec![tmp.clone()]);
         mgr.discover();

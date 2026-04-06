@@ -176,11 +176,12 @@ impl ToolExecutor {
                 PermissionDecision::Deny(reason) => return Ok(ToolOutput::error(reason)),
                 PermissionDecision::AskUser(prompt) => {
                     if let Some(handler) = &permission_handler
-                        && !handler.ask_permission(&tool_name, &prompt).await {
-                            return Ok(ToolOutput::error(format!(
-                                "User denied permission for '{tool_name}'"
-                            )));
-                        }
+                        && !handler.ask_permission(&tool_name, &prompt).await
+                    {
+                        return Ok(ToolOutput::error(format!(
+                            "User denied permission for '{tool_name}'"
+                        )));
+                    }
                 }
             }
 
@@ -369,11 +370,8 @@ mod tests {
     async fn execute_streaming_existing_tool() {
         let executor = make_executor();
         let ctx = make_ctx(PermissionMode::Dangerously);
-        let (mut rx, handle) = executor.execute_streaming(
-            "echo",
-            serde_json::json!({"text": "streamed"}),
-            &ctx,
-        );
+        let (mut rx, handle) =
+            executor.execute_streaming("echo", serde_json::json!({"text": "streamed"}), &ctx);
 
         let result = handle.await.unwrap().unwrap();
         assert!(!result.is_error);
@@ -391,8 +389,7 @@ mod tests {
     async fn execute_streaming_missing_tool() {
         let executor = make_executor();
         let ctx = make_ctx(PermissionMode::Default);
-        let (_rx, handle) =
-            executor.execute_streaming("nonexistent", serde_json::json!({}), &ctx);
+        let (_rx, handle) = executor.execute_streaming("nonexistent", serde_json::json!({}), &ctx);
 
         let result = handle.await.unwrap();
         assert!(result.is_err());

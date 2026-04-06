@@ -203,7 +203,11 @@ impl PkceChallenge {
 /// The URL includes `response_type=code`, `code_challenge_method=S256`,
 /// and all configured scopes. The user opens this URL in a browser.
 #[must_use]
-pub fn build_authorization_url(config: &OAuth2Config, challenge: &PkceChallenge, state: &str) -> String {
+pub fn build_authorization_url(
+    config: &OAuth2Config,
+    challenge: &PkceChallenge,
+    state: &str,
+) -> String {
     let scopes = config.scopes.join(" ");
     let params = [
         ("response_type", "code"),
@@ -336,10 +340,7 @@ fn parse_token_response(json_str: &str) -> Result<TokenResponse, AuthError> {
 
     let expires_in = body["expires_in"].as_u64().map(Duration::from_secs);
 
-    let token_type = body["token_type"]
-        .as_str()
-        .unwrap_or("Bearer")
-        .to_string();
+    let token_type = body["token_type"].as_str().unwrap_or("Bearer").to_string();
 
     Ok(TokenResponse {
         access_token,
@@ -353,12 +354,9 @@ fn parse_token_response(json_str: &str) -> Result<TokenResponse, AuthError> {
 ///
 /// Parses `?code=...&state=...` from a URL like `http://localhost:9876/callback?code=abc&state=xyz`.
 pub fn parse_callback_params(url: &str) -> Result<(String, String), AuthError> {
-    let query = url
-        .split('?')
-        .nth(1)
-        .ok_or_else(|| AuthError::Auth {
-            message: "callback URL has no query string".into(),
-        })?;
+    let query = url.split('?').nth(1).ok_or_else(|| AuthError::Auth {
+        message: "callback URL has no query string".into(),
+    })?;
 
     let mut code = None;
     let mut state = None;
@@ -409,14 +407,21 @@ fn url_encode(s: &str) -> String {
 /// that resolves to the callback URL (containing `code` and `state` params).
 ///
 /// The server handles exactly one request and then shuts down.
-pub async fn start_callback_server() -> Result<(u16, impl std::future::Future<Output = Result<String, AuthError>>), AuthError> {
+pub async fn start_callback_server() -> Result<
+    (
+        u16,
+        impl std::future::Future<Output = Result<String, AuthError>>,
+    ),
+    AuthError,
+> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| AuthError::Auth {
             message: format!("failed to bind callback server: {e}"),
         })?;
 
-    let port = listener.local_addr()
+    let port = listener
+        .local_addr()
         .map_err(|e| AuthError::Auth {
             message: format!("failed to get local address: {e}"),
         })?
@@ -1087,14 +1092,16 @@ mod tests {
     fn pkce_verifier_is_url_safe() {
         let pkce = PkceChallenge::generate();
         // base64url should only contain [A-Za-z0-9_-]
-        assert!(pkce
-            .code_verifier
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
-        assert!(pkce
-            .code_challenge
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert!(
+            pkce.code_verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        );
+        assert!(
+            pkce.code_challenge
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        );
     }
 
     // ── Authorization URL tests ────────────────────────────────────────
@@ -1200,7 +1207,8 @@ mod tests {
             let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
                 .await
                 .unwrap();
-            let request = "GET /callback?code=test_code&state=test_state HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            let request =
+                "GET /callback?code=test_code&state=test_state HTTP/1.1\r\nHost: localhost\r\n\r\n";
             tokio::io::AsyncWriteExt::write_all(&mut stream, request.as_bytes())
                 .await
                 .unwrap();
@@ -1229,7 +1237,8 @@ mod tests {
             let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
                 .await
                 .unwrap();
-            let request = "GET /callback?code=abc123&state=xyz789 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            let request =
+                "GET /callback?code=abc123&state=xyz789 HTTP/1.1\r\nHost: localhost\r\n\r\n";
             tokio::io::AsyncWriteExt::write_all(&mut stream, request.as_bytes())
                 .await
                 .unwrap();

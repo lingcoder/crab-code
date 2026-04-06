@@ -4,8 +4,7 @@ use std::time::{Duration, SystemTime};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
-const GITHUB_RELEASES_URL: &str =
-    "https://api.github.com/repos/CrabForge/crab-code/releases";
+const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/CrabForge/crab-code/releases";
 
 /// How long to cache the latest-version check result (24 hours).
 const VERSION_CHECK_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -227,17 +226,15 @@ fn run_check(list: bool) -> anyhow::Result<()> {
                     eprintln!("  No stable releases found.");
                 } else {
                     for r in &stable {
-                        let marker = r
-                            .semver()
-                            .map_or(String::new(), |v| {
-                                if v == current_sv {
-                                    " (current)".to_owned()
-                                } else if v > current_sv {
-                                    " (newer)".to_owned()
-                                } else {
-                                    String::new()
-                                }
-                            });
+                        let marker = r.semver().map_or(String::new(), |v| {
+                            if v == current_sv {
+                                " (current)".to_owned()
+                            } else if v > current_sv {
+                                " (newer)".to_owned()
+                            } else {
+                                String::new()
+                            }
+                        });
                         let name = r.name.as_deref().unwrap_or(&r.tag_name);
                         eprintln!("  {name}{marker}");
                         eprintln!("    {}", r.html_url);
@@ -259,7 +256,10 @@ fn run_check(list: bool) -> anyhow::Result<()> {
         match fetch_releases(5) {
             Ok(releases) => {
                 if let Some(latest) = find_latest(&releases) {
-                    let tag = latest.tag_name.strip_prefix('v').unwrap_or(&latest.tag_name);
+                    let tag = latest
+                        .tag_name
+                        .strip_prefix('v')
+                        .unwrap_or(&latest.tag_name);
                     write_cache(tag);
                     tag.to_owned()
                 } else {
@@ -302,8 +302,8 @@ fn run_install(target: Option<&str>, dry_run: bool, force: bool) -> anyhow::Resu
     } else {
         eprintln!("Fetching latest release...");
         let releases = fetch_releases(5)?;
-        let latest = find_latest(&releases)
-            .ok_or_else(|| anyhow::anyhow!("no stable releases found"))?;
+        let latest =
+            find_latest(&releases).ok_or_else(|| anyhow::anyhow!("no stable releases found"))?;
         let sv = latest
             .semver()
             .ok_or_else(|| anyhow::anyhow!("could not parse latest tag"))?;
@@ -334,7 +334,9 @@ fn run_install(target: Option<&str>, dry_run: bool, force: bool) -> anyhow::Resu
     eprintln!("Looking for asset: {asset_name}");
 
     if dry_run {
-        eprintln!("[dry-run] Would download v{target_tag} asset '{asset_name}' and replace current binary.");
+        eprintln!(
+            "[dry-run] Would download v{target_tag} asset '{asset_name}' and replace current binary."
+        );
         return Ok(());
     }
 
@@ -366,7 +368,9 @@ fn run_rollback(target: Option<&str>) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("invalid version '{v}': {e}"))?;
 
         if sv >= current_semver() {
-            eprintln!("v{sv} is not older than current v{current}. Use `crab update install` instead.");
+            eprintln!(
+                "v{sv} is not older than current v{current}. Use `crab update install` instead."
+            );
             return Ok(());
         }
 
@@ -385,9 +389,7 @@ fn run_rollback(target: Option<&str>) -> anyhow::Result<()> {
                 let older: Vec<&GitHubRelease> = releases
                     .iter()
                     .filter(|r| {
-                        !r.draft
-                            && !r.prerelease
-                            && r.semver().is_some_and(|v| v < current_sv)
+                        !r.draft && !r.prerelease && r.semver().is_some_and(|v| v < current_sv)
                     })
                     .collect();
                 if older.is_empty() {
@@ -421,11 +423,7 @@ pub fn startup_version_check() -> Option<String> {
     let cached = read_cache()?;
     let latest = semver::Version::parse(&cached).ok()?;
     let current = current_semver();
-    if latest > current {
-        Some(cached)
-    } else {
-        None
-    }
+    if latest > current { Some(cached) } else { None }
 }
 
 #[cfg(test)]
@@ -436,7 +434,10 @@ mod tests {
     fn current_version_is_semver() {
         let v = current_version();
         assert!(!v.is_empty());
-        assert!(semver::Version::parse(v).is_ok(), "should be valid semver: {v}");
+        assert!(
+            semver::Version::parse(v).is_ok(),
+            "should be valid semver: {v}"
+        );
     }
 
     #[test]

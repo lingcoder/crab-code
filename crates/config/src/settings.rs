@@ -461,7 +461,10 @@ mod tests {
             mcp_servers: Some(serde_json::json!({"old": true})),
             hooks: Some(serde_json::json!([])),
             theme: Some("light".into()),
-            git_context: Some(GitContextConfig { enabled: true, max_diff_lines: 100 }),
+            git_context: Some(GitContextConfig {
+                enabled: true,
+                max_diff_lines: 100,
+            }),
         };
         let overlay = Settings {
             api_provider: Some("openai".into()),
@@ -475,7 +478,10 @@ mod tests {
             mcp_servers: Some(serde_json::json!({"new": true})),
             hooks: Some(serde_json::json!([{"trigger": "pre_tool_use"}])),
             theme: Some("dark".into()),
-            git_context: Some(GitContextConfig { enabled: false, max_diff_lines: 50 }),
+            git_context: Some(GitContextConfig {
+                enabled: false,
+                max_diff_lines: 50,
+            }),
         };
         let merged = base.merge(&overlay);
         assert_eq!(merged.api_provider.as_deref(), Some("openai"));
@@ -828,7 +834,11 @@ mod tests {
         let sources = SettingSource::parse_list("user,project,local");
         assert_eq!(
             sources,
-            vec![SettingSource::User, SettingSource::Project, SettingSource::Local]
+            vec![
+                SettingSource::User,
+                SettingSource::Project,
+                SettingSource::Local
+            ]
         );
     }
 

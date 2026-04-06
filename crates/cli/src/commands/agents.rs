@@ -61,36 +61,32 @@ fn list_agents(dir: &Path) -> anyhow::Result<Vec<String>> {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "json") {
             match std::fs::read_to_string(&path) {
-                Ok(content) => if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let name = val
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("<unnamed>");
-                    let desc = val
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let model = val
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("default");
-                    if desc.is_empty() {
-                        agents.push(format!("{name} (model: {model})"));
+                Ok(content) => {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let name = val
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("<unnamed>");
+                        let desc = val
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let model = val
+                            .get("model")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("default");
+                        if desc.is_empty() {
+                            agents.push(format!("{name} (model: {model})"));
+                        } else {
+                            agents.push(format!("{name} — {desc} (model: {model})"));
+                        }
                     } else {
-                        agents.push(format!("{name} — {desc} (model: {model})"));
+                        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                        agents.push(format!("{filename} — invalid JSON"));
                     }
-                } else {
-                    let filename = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    agents.push(format!("{filename} — invalid JSON"));
-                },
+                }
                 Err(e) => {
-                    let filename = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
+                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
                     agents.push(format!("{filename} — read error: {e}"));
                 }
             }

@@ -513,10 +513,8 @@ async fn summarize_large_tool_results(
                     let estimated = content.len() as u64 / 4;
                     if estimated > SNIP_TOKEN_THRESHOLD {
                         // Ask LLM to summarize this tool result
-                        let summary_msg = Message::new(
-                            Role::User,
-                            vec![ContentBlock::text(content.clone())],
-                        );
+                        let summary_msg =
+                            Message::new(Role::User, vec![ContentBlock::text(content.clone())]);
                         let summary = client
                             .summarize(
                                 &[summary_msg],
@@ -557,8 +555,7 @@ async fn summarize_old_messages(
     config: &CompactionConfig,
     client: &dyn CompactionClient,
 ) -> crab_common::Result<()> {
-    summarize_old_messages_keeping(conversation, config, client, config.preserve_recent_turns)
-        .await
+    summarize_old_messages_keeping(conversation, config, client, config.preserve_recent_turns).await
 }
 
 /// Level 3/4 compaction: summarize old messages, keeping `keep_recent` turns verbatim.
