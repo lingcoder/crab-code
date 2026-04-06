@@ -122,6 +122,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         hook_executor: None,
         session_id: Some(config.session_config.session_id.clone()),
         effort: None,
+        fallback_model: config.session_config.fallback_model.map(crab_core::model::ModelId::from),
     };
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);
@@ -367,6 +368,7 @@ async fn run_loop(
                         hook_executor: None,
                         session_id: None,
                         effort: None,
+                        fallback_model: None,
                     };
 
                     let mut task_cost_tracker = crab_session::CostAccumulator::default();
@@ -564,6 +566,16 @@ mod tests {
                 max_turns: None,
                 max_budget_usd: None,
                 fallback_model: None,
+                bare_mode: false,
+                worktree_name: None,
+                fork_session: false,
+                from_pr: None,
+                custom_session_id: None,
+                json_schema: None,
+                plugin_dirs: Vec::new(),
+                disable_skills: false,
+                beta_headers: Vec::new(),
+                ide_connect: false,
             },
             backend: Arc::new(crab_api::LlmBackend::OpenAi(
                 crab_api::openai::OpenAiClient::new("http://localhost:0/v1", None),

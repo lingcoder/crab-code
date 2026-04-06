@@ -38,22 +38,29 @@ pub fn check_permission(
     input: &serde_json::Value,
     working_dir: &Path,
 ) -> PermissionDecision {
-    // 1. Denied list — always deny, any mode
-    if policy.is_denied(tool_name) {
+    // 1. Denied list — always deny, any mode (supports glob + param matching)
+    if policy.is_denied_by_filter(tool_name, input) {
         return PermissionDecision::Deny(format!("tool '{tool_name}' is denied by policy"));
     }
 
-    // 2. Dangerously mode — allow everything (after denied check)
+    // 2. Allowed whitelist — if non-empty, only whitelisted tools may run
+    if !policy.allowed_tools.is_empty() && !policy.is_allowed_by_whitelist(tool_name, input) {
+        return PermissionDecision::Deny(format!(
+            "tool '{tool_name}' is not in the allowed tools list"
+        ));
+    }
+
+    // 3. Dangerously mode — allow everything (after denied/whitelist check)
     if policy.mode == PermissionMode::Dangerously {
         return PermissionDecision::Allow;
     }
 
-    // 3. Read-only tools — always allowed in any mode
+    // 4. Read-only tools — always allowed in any mode
     if is_read_only {
         return PermissionDecision::Allow;
     }
 
-    // 4. Explicitly allowed tools skip normal Prompt, but NOT dangerous check
+    // 5. Explicitly allowed tools skip normal Prompt, but NOT dangerous check
     let explicitly_allowed = policy.is_explicitly_allowed(tool_name);
     if explicitly_allowed && !is_dangerous_command(input) {
         return PermissionDecision::Allow;
@@ -495,5 +502,75 @@ mod tests {
         let p = policy_with_denied(PermissionMode::Default, vec!["read".into()]);
         let result = check_permission(&p, "read", &ToolSource::BuiltIn, true, &json!({}), cwd());
         assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    // ─── Whitelist enforcement tests ───
+
+    #[test]
+    fn whitelist_blocks_unlisted_tool() {
+        let p = policy_with_allowed(PermissionMode::Default, vec!["read".into(), "write".into()]);
+        let result =
+            check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
+        assert!(
+            matches!(result, PermissionDecision::Deny(_)),
+            "tool not in whitelist should be denied"
+        );
+    }
+
+    #[test]
+    fn whitelist_allows_listed_tool() {
+        let p = policy_with_allowed(PermissionMode::Default, vec!["write".into()]);
+        let result = check_permission(
+            &p,
+            "write",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"file_path": "/tmp/project/foo.txt"}),
+            cwd(),
+        );
+        // write is in allowed_tools → is_explicitly_allowed returns true → Allow
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn empty_whitelist_allows_all() {
+        let p = policy_with_allowed(PermissionMode::Default, vec![]);
+        let result =
+            check_permission(&p, "bash", &ToolSource::BuiltIn, false, &json!({}), cwd());
+        // empty whitelist means no filtering — falls through to normal check
+        assert!(matches!(result, PermissionDecision::AskUser(_)));
+    }
+
+    // ─── Glob-based denied filter tests ───
+
+    #[test]
+    fn denied_glob_blocks_matching_tool() {
+        let p = policy_with_denied(PermissionMode::TrustProject, vec!["mcp__*".into()]);
+        let result = check_permission(
+            &p,
+            "mcp__server__dangerous",
+            &ToolSource::McpExternal {
+                server_name: "server".into(),
+            },
+            false,
+            &json!({}),
+            cwd(),
+        );
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn denied_glob_allows_non_matching_tool() {
+        let p = policy_with_denied(PermissionMode::TrustProject, vec!["mcp__*".into()]);
+        let result = check_permission(
+            &p,
+            "bash",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"command": "ls"}),
+            cwd(),
+        );
+        // bash does not match mcp__*, should be allowed (TrustProject, in-project, safe command)
+        assert_eq!(result, PermissionDecision::Allow);
     }
 }

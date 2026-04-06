@@ -76,8 +76,42 @@ impl PermissionPolicy {
     }
 
     /// Check whether a tool name is in the `allowed_tools` list.
+    ///
+    /// When `allowed_tools` is non-empty, it acts as a whitelist: only tools
+    /// matching at least one pattern are permitted. Supports glob patterns
+    /// and parameter-level matching via `matches_tool_filter`.
     pub fn is_explicitly_allowed(&self, tool_name: &str) -> bool {
         self.allowed_tools.iter().any(|a| a == tool_name)
+    }
+
+    /// Check whether a tool invocation is allowed by the `allowed_tools`
+    /// whitelist, using full glob + parameter matching.
+    ///
+    /// Returns `true` if `allowed_tools` is empty (no whitelist) or if the
+    /// tool matches at least one allowed pattern.
+    pub fn is_allowed_by_whitelist(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> bool {
+        if self.allowed_tools.is_empty() {
+            return true; // no whitelist = everything allowed
+        }
+        self.allowed_tools
+            .iter()
+            .any(|pattern| matches_tool_filter(pattern, tool_name, tool_input))
+    }
+
+    /// Check whether a tool invocation is denied by the `denied_tools`
+    /// blacklist, using full glob + parameter matching.
+    pub fn is_denied_by_filter(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> bool {
+        self.denied_tools
+            .iter()
+            .any(|pattern| matches_tool_filter(pattern, tool_name, tool_input))
     }
 }
 
@@ -223,6 +257,143 @@ fn match_char_class(pat: &[char], ch: char) -> Option<(bool, usize)> {
         Some((matched, i + 1))
     } else {
         None // Malformed: no closing bracket
+    }
+}
+
+// ─── Auto-mode: AI/heuristic risk classification ──────────────────────
+
+/// Risk level for a tool invocation, used by auto-mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RiskLevel {
+    /// Read-only, no side effects (auto-approve).
+    Safe,
+    /// Side effects but recoverable (prompt the user).
+    Risky,
+    /// Destructive or irreversible (deny or prompt with strong warning).
+    Dangerous,
+}
+
+/// Heuristic risk classifier for auto-mode permission decisions.
+///
+/// Classifies tool invocations based on tool name, read-only status,
+/// and input patterns. This is the fallback when the LLM classifier
+/// is unavailable.
+pub struct AutoModeClassifier;
+
+/// Read-only tools that are always safe.
+const SAFE_TOOLS: &[&str] = &[
+    "read",
+    "glob",
+    "grep",
+    "notebook_read",
+    "list_directory",
+    "get_diagnostics",
+];
+
+/// Write tools that are risky but not dangerous.
+const RISKY_TOOLS: &[&str] = &["write", "edit", "notebook_edit", "bash"];
+
+/// Dangerous command patterns for auto-mode (superset of permission.rs patterns).
+const AUTO_DANGEROUS_PATTERNS: &[&str] = &[
+    "rm -rf",
+    "rm -fr",
+    "sudo ",
+    "| sh",
+    "|sh",
+    "| bash",
+    "|bash",
+    "chmod ",
+    "chown ",
+    "eval ",
+    "mkfs",
+    "> /dev/",
+    "dd if=",
+    ":(){ :|:& };:",
+    "git push --force",
+    "git push -f",
+    "git reset --hard",
+    "git clean -f",
+    "DROP TABLE",
+    "DROP DATABASE",
+    "TRUNCATE ",
+    "kill -9",
+    "pkill ",
+];
+
+impl AutoModeClassifier {
+    /// Classify the risk level of a tool invocation using heuristics.
+    pub fn classify(
+        tool_name: &str,
+        is_read_only: bool,
+        input: &serde_json::Value,
+    ) -> RiskLevel {
+        // Read-only tools are always safe
+        if is_read_only || SAFE_TOOLS.contains(&tool_name) {
+            return RiskLevel::Safe;
+        }
+
+        // Check for dangerous patterns in input
+        let command_text = input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        if !command_text.is_empty()
+            && AUTO_DANGEROUS_PATTERNS
+                .iter()
+                .any(|p| command_text.contains(p))
+        {
+            return RiskLevel::Dangerous;
+        }
+
+        // MCP tools are risky by default (external, untrusted)
+        if tool_name.starts_with("mcp__") {
+            return RiskLevel::Risky;
+        }
+
+        // Known risky tools
+        if RISKY_TOOLS.contains(&tool_name) {
+            return RiskLevel::Risky;
+        }
+
+        // Unknown tools default to risky
+        RiskLevel::Risky
+    }
+}
+
+/// Make a permission decision using auto-mode classification.
+///
+/// - Safe → Allow
+/// - Risky → AskUser
+/// - Dangerous → Deny
+pub fn auto_mode_decision(
+    policy: &PermissionPolicy,
+    tool_name: &str,
+    is_read_only: bool,
+    input: &serde_json::Value,
+) -> PermissionDecision {
+    // Denied list still applies
+    if policy.is_denied_by_filter(tool_name, input) {
+        return PermissionDecision::Deny(format!("tool '{tool_name}' is denied by policy"));
+    }
+
+    // Whitelist still applies
+    if !policy.allowed_tools.is_empty() && !policy.is_allowed_by_whitelist(tool_name, input) {
+        return PermissionDecision::Deny(format!(
+            "tool '{tool_name}' is not in the allowed tools list"
+        ));
+    }
+
+    let risk = AutoModeClassifier::classify(tool_name, is_read_only, input);
+    match risk {
+        RiskLevel::Safe => PermissionDecision::Allow,
+        RiskLevel::Risky => {
+            PermissionDecision::AskUser(format!("Auto-mode: '{tool_name}' classified as risky"))
+        }
+        RiskLevel::Dangerous => PermissionDecision::Deny(format!(
+            "Auto-mode: '{tool_name}' classified as dangerous and blocked"
+        )),
     }
 }
 
@@ -575,5 +746,231 @@ mod tests {
         let input = serde_json::json!({});
         assert!(!matches_tool_filter("bash", "Bash", &input));
         assert!(matches_tool_filter("Bash", "Bash", &input));
+    }
+
+    // ─── is_allowed_by_whitelist tests ───
+
+    #[test]
+    fn whitelist_empty_allows_all() {
+        let policy = PermissionPolicy::default();
+        let input = serde_json::json!({});
+        assert!(policy.is_allowed_by_whitelist("bash", &input));
+        assert!(policy.is_allowed_by_whitelist("read", &input));
+    }
+
+    #[test]
+    fn whitelist_exact_match() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec!["read".into(), "write".into()],
+            denied_tools: vec![],
+        };
+        let input = serde_json::json!({});
+        assert!(policy.is_allowed_by_whitelist("read", &input));
+        assert!(policy.is_allowed_by_whitelist("write", &input));
+        assert!(!policy.is_allowed_by_whitelist("bash", &input));
+    }
+
+    #[test]
+    fn whitelist_glob_pattern() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec!["mcp__*".into()],
+            denied_tools: vec![],
+        };
+        let input = serde_json::json!({});
+        assert!(policy.is_allowed_by_whitelist("mcp__server__tool", &input));
+        assert!(!policy.is_allowed_by_whitelist("bash", &input));
+    }
+
+    #[test]
+    fn whitelist_param_pattern() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec!["Bash(command:git*)".into()],
+            denied_tools: vec![],
+        };
+        let git_input = serde_json::json!({"command": "git status"});
+        let rm_input = serde_json::json!({"command": "rm -rf /"});
+        assert!(policy.is_allowed_by_whitelist("Bash", &git_input));
+        assert!(!policy.is_allowed_by_whitelist("Bash", &rm_input));
+    }
+
+    // ─── is_denied_by_filter tests ───
+
+    #[test]
+    fn denied_filter_exact() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec![],
+            denied_tools: vec!["bash".into()],
+        };
+        let input = serde_json::json!({});
+        assert!(policy.is_denied_by_filter("bash", &input));
+        assert!(!policy.is_denied_by_filter("read", &input));
+    }
+
+    #[test]
+    fn denied_filter_glob() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec![],
+            denied_tools: vec!["mcp__*".into()],
+        };
+        let input = serde_json::json!({});
+        assert!(policy.is_denied_by_filter("mcp__server__tool", &input));
+        assert!(!policy.is_denied_by_filter("bash", &input));
+    }
+
+    #[test]
+    fn denied_filter_param_pattern() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec![],
+            denied_tools: vec!["Bash(command:rm*)".into()],
+        };
+        let rm_input = serde_json::json!({"command": "rm -rf /"});
+        let ls_input = serde_json::json!({"command": "ls -la"});
+        assert!(policy.is_denied_by_filter("Bash", &rm_input));
+        assert!(!policy.is_denied_by_filter("Bash", &ls_input));
+    }
+
+    // ─── Auto-mode classifier tests ───
+
+    #[test]
+    fn auto_classify_read_only_is_safe() {
+        let input = serde_json::json!({});
+        assert_eq!(
+            AutoModeClassifier::classify("read", true, &input),
+            RiskLevel::Safe
+        );
+    }
+
+    #[test]
+    fn auto_classify_known_safe_tools() {
+        let input = serde_json::json!({});
+        for tool in SAFE_TOOLS {
+            assert_eq!(
+                AutoModeClassifier::classify(tool, false, &input),
+                RiskLevel::Safe,
+                "tool {tool} should be safe"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_classify_write_tools_are_risky() {
+        let input = serde_json::json!({"file_path": "/tmp/foo.rs"});
+        assert_eq!(
+            AutoModeClassifier::classify("write", false, &input),
+            RiskLevel::Risky
+        );
+        assert_eq!(
+            AutoModeClassifier::classify("edit", false, &input),
+            RiskLevel::Risky
+        );
+    }
+
+    #[test]
+    fn auto_classify_dangerous_command() {
+        let input = serde_json::json!({"command": "rm -rf /"});
+        assert_eq!(
+            AutoModeClassifier::classify("bash", false, &input),
+            RiskLevel::Dangerous
+        );
+    }
+
+    #[test]
+    fn auto_classify_force_push_is_dangerous() {
+        let input = serde_json::json!({"command": "git push --force origin main"});
+        assert_eq!(
+            AutoModeClassifier::classify("bash", false, &input),
+            RiskLevel::Dangerous
+        );
+    }
+
+    #[test]
+    fn auto_classify_safe_bash_command() {
+        let input = serde_json::json!({"command": "ls -la"});
+        assert_eq!(
+            AutoModeClassifier::classify("bash", false, &input),
+            RiskLevel::Risky
+        );
+    }
+
+    #[test]
+    fn auto_classify_mcp_tools_are_risky() {
+        let input = serde_json::json!({});
+        assert_eq!(
+            AutoModeClassifier::classify("mcp__server__tool", false, &input),
+            RiskLevel::Risky
+        );
+    }
+
+    #[test]
+    fn auto_classify_unknown_tool_is_risky() {
+        let input = serde_json::json!({});
+        assert_eq!(
+            AutoModeClassifier::classify("some_new_tool", false, &input),
+            RiskLevel::Risky
+        );
+    }
+
+    #[test]
+    fn auto_mode_decision_safe_allows() {
+        let policy = PermissionPolicy::default();
+        let input = serde_json::json!({});
+        let result = auto_mode_decision(&policy, "read", true, &input);
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn auto_mode_decision_risky_asks() {
+        let policy = PermissionPolicy::default();
+        let input = serde_json::json!({"file_path": "/tmp/foo"});
+        let result = auto_mode_decision(&policy, "write", false, &input);
+        assert!(matches!(result, PermissionDecision::AskUser(_)));
+    }
+
+    #[test]
+    fn auto_mode_decision_dangerous_denies() {
+        let policy = PermissionPolicy::default();
+        let input = serde_json::json!({"command": "rm -rf /"});
+        let result = auto_mode_decision(&policy, "bash", false, &input);
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn auto_mode_decision_respects_denied_list() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec![],
+            denied_tools: vec!["read".into()],
+        };
+        let input = serde_json::json!({});
+        let result = auto_mode_decision(&policy, "read", true, &input);
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn auto_mode_decision_respects_whitelist() {
+        let policy = PermissionPolicy {
+            mode: PermissionMode::Default,
+            allowed_tools: vec!["read".into()],
+            denied_tools: vec![],
+        };
+        let input = serde_json::json!({});
+        // "write" is not in whitelist
+        let result = auto_mode_decision(&policy, "write", false, &input);
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn risk_level_serde_roundtrip() {
+        for level in [RiskLevel::Safe, RiskLevel::Risky, RiskLevel::Dangerous] {
+            let json = serde_json::to_string(&level).unwrap();
+            let parsed: RiskLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, parsed);
+        }
     }
 }

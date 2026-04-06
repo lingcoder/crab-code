@@ -42,6 +42,9 @@ pub struct QueryLoopConfig {
     /// Effort level for reasoning. When set, overrides `budget_tokens` via
     /// `EffortLevel::to_budget_tokens()`.
     pub effort: Option<crate::effort::EffortLevel>,
+    /// Fallback model to use when the primary model is overloaded (529) or
+    /// rate-limited (429). If `None`, errors propagate normally.
+    pub fallback_model: Option<ModelId>,
 }
 
 /// Core agent loop: user input -> LLM SSE stream -> parse tool calls ->
@@ -101,9 +104,28 @@ pub async fn query_loop(
             tool_choice: None,
         };
 
-        // Stream the LLM response with retry support
+        // Stream the LLM response with retry support + fallback
         let (assistant_msg, total_usage, _stop_reason) =
-            stream_with_retry(backend, req, &retry_policy, &event_tx, &cancel).await?;
+            match stream_with_retry(backend, req.clone(), &retry_policy, &event_tx, &cancel).await {
+                Ok(result) => result,
+                Err(e) if is_overloaded_error(&e) && config.fallback_model.is_some() => {
+                    let fallback = config.fallback_model.as_ref().unwrap();
+                    let _ = event_tx
+                        .send(Event::Error {
+                            message: format!(
+                                "Primary model overloaded, falling back to {}",
+                                fallback.as_str()
+                            ),
+                        })
+                        .await;
+                    let fallback_req = MessageRequest {
+                        model: fallback.clone(),
+                        ..req
+                    };
+                    stream_with_retry(backend, fallback_req, &retry_policy, &event_tx, &cancel).await?
+                }
+                Err(e) => return Err(e),
+            };
 
         // Record usage
         cost_tracker.add_usage(config.model.as_str(), &total_usage);
@@ -200,6 +222,16 @@ fn is_transient_error(err: &crab_common::Error) -> bool {
         || msg.contains("429")
         || msg.contains("529")
         || msg.contains("overloaded")
+}
+
+/// Check if an error specifically indicates an overloaded/rate-limited model
+/// (suitable for model fallback).
+fn is_overloaded_error(err: &crab_common::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("529")
+        || msg.contains("overloaded")
+        || msg.contains("rate limit")
+        || msg.contains("429")
 }
 
 /// Stream an LLM response, assembling the assistant message from SSE events.
@@ -805,6 +837,7 @@ mod tests {
             hook_executor: None,
             session_id: None,
             effort: None,
+            fallback_model: None,
         };
         assert_eq!(config.model.as_str(), "claude-sonnet-4-20250514");
         assert_eq!(config.max_tokens, 4096);
@@ -825,6 +858,7 @@ mod tests {
             hook_executor: None,
             session_id: None,
             effort: None,
+            fallback_model: None,
         };
         assert!(config.retry_policy.is_some());
         assert_eq!(config.retry_policy.unwrap().max_retries, 5);
@@ -907,5 +941,67 @@ mod tests {
     fn non_transient_error_auth() {
         let err = crab_common::Error::Other("unauthorized: invalid API key".into());
         assert!(!is_transient_error(&err));
+    }
+
+    // ─── is_overloaded_error tests ───
+
+    #[test]
+    fn overloaded_error_529() {
+        let err = crab_common::Error::Other("HTTP 529: model is overloaded".into());
+        assert!(is_overloaded_error(&err));
+    }
+
+    #[test]
+    fn overloaded_error_429() {
+        let err = crab_common::Error::Other("rate limit exceeded 429".into());
+        assert!(is_overloaded_error(&err));
+    }
+
+    #[test]
+    fn overloaded_error_rate_limit_text() {
+        let err = crab_common::Error::Other("Rate Limit exceeded".into());
+        assert!(is_overloaded_error(&err));
+    }
+
+    #[test]
+    fn overloaded_error_overloaded_text() {
+        let err = crab_common::Error::Other("server overloaded, try again".into());
+        assert!(is_overloaded_error(&err));
+    }
+
+    #[test]
+    fn not_overloaded_error_auth() {
+        let err = crab_common::Error::Other("unauthorized: invalid API key".into());
+        assert!(!is_overloaded_error(&err));
+    }
+
+    #[test]
+    fn not_overloaded_error_json() {
+        let err = crab_common::Error::Other("invalid JSON response".into());
+        assert!(!is_overloaded_error(&err));
+    }
+
+    // ─── fallback_model config tests ───
+
+    #[test]
+    fn query_loop_config_with_fallback_model() {
+        let config = QueryLoopConfig {
+            model: ModelId::from("claude-opus-4-20250514"),
+            max_tokens: 8192,
+            temperature: None,
+            tool_schemas: vec![],
+            cache_enabled: false,
+            _token_budget: None,
+            budget_tokens: None,
+            retry_policy: None,
+            hook_executor: None,
+            session_id: None,
+            effort: None,
+            fallback_model: Some(ModelId::from("claude-sonnet-4-20250514")),
+        };
+        assert_eq!(
+            config.fallback_model.as_ref().unwrap().as_str(),
+            "claude-sonnet-4-20250514"
+        );
     }
 }

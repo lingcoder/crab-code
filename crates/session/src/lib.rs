@@ -13,7 +13,7 @@ pub use compaction::{
 pub use context::{ContextAction, ContextManager};
 pub use conversation::Conversation;
 pub use cost::{CostAccumulator, CostSummary, ModelPricing, lookup_pricing};
-pub use history::{ExportFormat, SearchResult, SessionHistory, SessionStats};
+pub use history::{ExportFormat, SearchResult, SessionHistory, SessionMetadata, SessionStats};
 pub use memory::{MemoryFile, MemoryIndexEntry, MemoryStore};
 pub use template::{
     SessionKind, SessionSummary, SessionTemplate, builtin_templates, find_template,

@@ -366,11 +366,15 @@ fn check_pid_file(pid_file: &Path) -> bool {
 }
 
 /// Check if a process with the given PID is alive.
-fn process_is_alive(_pid: u32) -> bool {
-    // Cross-platform: use sysinfo if available, otherwise conservative
-    // For skeleton implementation, assume stale PID files are dead
-    // A production implementation would check via OS APIs.
-    false
+fn process_is_alive(pid: u32) -> bool {
+    use sysinfo::{Pid, System};
+    let mut sys = System::new();
+    let pid = Pid::from_u32(pid);
+    sys.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+    );
+    sys.process(pid).is_some()
 }
 
 #[cfg(test)]
@@ -621,8 +625,14 @@ mod tests {
     }
 
     #[test]
-    fn process_is_alive_returns_false_for_skeleton() {
-        // Skeleton implementation always returns false
-        assert!(!process_is_alive(99999));
+    fn process_is_alive_detects_current_process() {
+        // The current process should be alive
+        assert!(process_is_alive(std::process::id()));
+    }
+
+    #[test]
+    fn process_is_alive_returns_false_for_nonexistent() {
+        // A very high PID should not exist
+        assert!(!process_is_alive(u32::MAX - 1));
     }
 }

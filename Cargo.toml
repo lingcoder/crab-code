@@ -89,6 +89,12 @@ base64 = "0.22"
 sha2 = "0.10"
 rand = "0.9"
 
+# ─── PDF ───
+pdf-extract = "0.7"
+
+# ─── 版本管理 ───
+semver = "1"
+
 # ─── 杂项 ───
 uuid = { version = "1", features = ["v4"] }
 ulid = "1"

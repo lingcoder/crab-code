@@ -21,6 +21,14 @@ tokio.workspace = true
 globset.workspace = true
 schemars.workspace = true
 base64.workspace = true
+pdf-extract = { workspace = true, optional = true }
+portable-pty = { workspace = true, optional = true }
+strip-ansi-escapes = { workspace = true, optional = true }
+
+[features]
+default = ["pdf"]
+pdf = ["pdf-extract"]
+pty = ["portable-pty", "strip-ansi-escapes"]
 
 [dev-dependencies]
 tokio-util.workspace = true

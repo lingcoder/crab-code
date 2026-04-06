@@ -86,6 +86,29 @@ pub struct SessionConfig {
     pub max_budget_usd: Option<f64>,
     /// Fallback model for overloaded primary.
     pub fallback_model: Option<String>,
+
+    // ─── B-level flags (Steps 10–13) ───
+
+    /// Bare mode — skip hooks, plugins, auto-memory, CRAB.md discovery.
+    pub bare_mode: bool,
+    /// Git worktree branch name (empty string = auto-name).
+    pub worktree_name: Option<String>,
+    /// Fork into new session when resuming instead of continuing old one.
+    pub fork_session: bool,
+    /// Load context from a GitHub PR (number or URL).
+    pub from_pr: Option<String>,
+    /// Custom session ID override.
+    pub custom_session_id: Option<String>,
+    /// JSON Schema path/inline for output validation.
+    pub json_schema: Option<String>,
+    /// Additional plugin directories.
+    pub plugin_dirs: Vec<PathBuf>,
+    /// Disable slash commands / skills.
+    pub disable_skills: bool,
+    /// Extra API beta headers.
+    pub beta_headers: Vec<String>,
+    /// Connect to IDE extension.
+    pub ide_connect: bool,
 }
 
 /// A running agent session with all the pieces wired together.
@@ -135,6 +158,21 @@ impl AgentSession {
             conversation.system_prompt.push_str(&memory_section);
         }
 
+        // Load PR context if --from-pr was specified
+        if let Some(pr_ref) = &session_config.from_pr
+            && !pr_ref.is_empty()
+        {
+            match crate::pr_context::load_pr_context(pr_ref) {
+                Ok(ctx) => {
+                    conversation.system_prompt.push_str(&ctx.format_for_prompt());
+                    tracing::info!(pr = pr_ref.as_str(), "loaded PR context");
+                }
+                Err(e) => {
+                    tracing::warn!(pr = pr_ref.as_str(), error = %e, "failed to load PR context");
+                }
+            }
+        }
+
         // Resume from previous session if requested
         if let Some(resume_id) = &session_config.resume_session_id
             && let Some(history) = &session_history
@@ -172,6 +210,9 @@ impl AgentSession {
                 .effort
                 .as_deref()
                 .and_then(|e| e.parse::<crate::effort::EffortLevel>().ok()),
+            fallback_model: session_config
+                .fallback_model
+                .map(ModelId::from),
         };
 
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -645,6 +686,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
         assert_eq!(config.session_id, "sess_1");
         assert_eq!(config.context_window, 200_000);
@@ -683,6 +734,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -733,6 +794,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -767,6 +838,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -808,6 +889,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -904,6 +995,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -936,6 +1037,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -966,6 +1077,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();
@@ -999,6 +1120,16 @@ mod tests {
             max_turns: None,
             max_budget_usd: None,
             fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
         };
 
         let backend = test_backend();

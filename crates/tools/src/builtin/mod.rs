@@ -13,6 +13,8 @@ pub mod notebook;
 pub mod plan_approval;
 pub mod plan_file;
 pub mod plan_mode;
+#[cfg(target_os = "windows")]
+pub mod powershell;
 pub mod read;
 pub mod read_enhanced;
 pub mod remote_trigger;
@@ -73,6 +75,10 @@ pub fn register_all_builtins(
 
     let trigger_store = remote_trigger::shared_trigger_store();
     registry.register(Arc::new(remote_trigger::RemoteTriggerTool::new(trigger_store)));
+
+    // PowerShell tool — registered on Windows only
+    #[cfg(target_os = "windows")]
+    registry.register(Arc::new(powershell::PowerShellTool));
 }
 
 /// Create a `ToolRegistry` pre-populated with all built-in tools.
@@ -123,19 +129,26 @@ mod tests {
         assert!(registry.get("cron_delete").is_some());
         assert!(registry.get("cron_list").is_some());
         assert!(registry.get("remote_trigger").is_some());
+
+        // PowerShell tool — only on Windows
+        if cfg!(windows) {
+            assert!(registry.get("powershell").is_some());
+        }
     }
 
     #[test]
-    fn default_registry_has_31_tools() {
+    fn default_registry_has_expected_tool_count() {
         let registry = create_default_registry();
-        assert_eq!(registry.len(), 31);
+        let expected = if cfg!(windows) { 32 } else { 31 };
+        assert_eq!(registry.len(), expected);
     }
 
     #[test]
     fn all_tools_have_schemas() {
         let registry = create_default_registry();
         let schemas = registry.tool_schemas();
-        assert_eq!(schemas.len(), 31);
+        let expected = if cfg!(windows) { 32 } else { 31 };
+        assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());
             assert!(schema.get("description").is_some());

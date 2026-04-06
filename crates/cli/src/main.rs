@@ -175,6 +175,67 @@ struct Cli {
     #[arg(long = "fallback-model")]
     fallback_model: Option<String>,
 
+    // ─── Step 10: bare + no-session-persistence ───
+
+    /// Minimal mode — skip hooks, LSP, plugins, auto-memory, CRAB.md discovery.
+    #[arg(long)]
+    bare: bool,
+
+    /// Disable session persistence (useful in print mode).
+    #[arg(long)]
+    no_session_persistence: bool,
+
+    // ─── Step 11: worktree + tmux ───
+
+    /// Create a git worktree. Optionally provide a branch name.
+    #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "")]
+    worktree: Option<String>,
+
+    /// Open the worktree in a tmux session (requires --worktree).
+    #[arg(long)]
+    tmux: bool,
+
+    // ─── Step 12: fork-session + from-pr + session-id + json-schema ───
+
+    /// When resuming, fork into a new session instead of continuing the old one.
+    #[arg(long)]
+    fork_session: bool,
+
+    /// Load context from a GitHub PR (number or URL). Optionally provide the value.
+    #[arg(long = "from-pr", num_args = 0..=1, default_missing_value = "")]
+    from_pr: Option<String>,
+
+    /// Use a custom session UUID instead of auto-generating one.
+    #[arg(long = "session-id")]
+    session_id: Option<String>,
+
+    /// Validate the final output against a JSON Schema (path or inline JSON).
+    #[arg(long = "json-schema")]
+    json_schema: Option<String>,
+
+    // ─── Step 13: plugin-dir + disable-slash-commands + betas + ide ───
+
+    /// Additional plugin directories to load at runtime (repeatable).
+    #[arg(long = "plugin-dir")]
+    plugin_dir: Vec<PathBuf>,
+
+    /// Disable all slash commands / skills.
+    #[arg(long)]
+    disable_slash_commands: bool,
+
+    /// API beta headers to send (repeatable).
+    #[arg(long, num_args = 1..)]
+    betas: Vec<String>,
+
+    /// Connect to IDE extension automatically.
+    #[arg(long)]
+    ide: bool,
+
+    /// Control which settings sources to load (comma-separated: user,project,local).
+    /// Default: all sources. Example: --setting-sources user,project
+    #[arg(long = "setting-sources")]
+    setting_sources: Option<String>,
+
     #[command(subcommand)]
     command: Option<CliCommand>,
 }
@@ -462,19 +523,24 @@ fn resolve_system_prompt(
 #[allow(clippy::too_many_lines)]
 async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()> {
     // Initialise debug/tracing if requested
+    let debug_filter = crab_common::debug::resolve_debug_filter(cli.debug.as_deref());
     let debug_config = crab_common::debug::DebugConfig {
-        enabled: cli.debug.is_some() || cli.verbose,
-        filter: cli.debug.as_ref().and_then(|f| {
-            if f.is_empty() { None } else { Some(f.clone()) }
-        }),
+        enabled: debug_filter.is_some() || cli.verbose,
+        filter: debug_filter,
         file: cli.debug_file.clone(),
     };
     crab_common::debug::init_debug(&debug_config);
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // Load merged settings (global ~/.crab/settings.json + project .crab/settings.json)
-    let mut settings = crab_config::settings::load_merged_settings(Some(&working_dir))?;
+    // Load merged settings with optional source control
+    let sources = cli.setting_sources.as_ref().map(|s| {
+        crab_config::settings::SettingSource::parse_list(s)
+    });
+    let mut settings = crab_config::settings::load_merged_settings_with_sources(
+        Some(&working_dir),
+        sources.as_deref(),
+    )?;
 
     // Apply --settings overlay (higher priority than settings files, lower than CLI flags)
     if let Some(ref settings_arg) = cli.settings {
@@ -533,8 +599,16 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     let backend = Arc::new(crab_api::create_backend(&effective_settings));
     let registry = create_default_registry();
 
-    // Discover skills from global + project directories
-    let skill_dirs = build_skill_dirs(&working_dir);
+    // Discover skills from global + project directories (--bare and --disable-slash-commands skip)
+    let mut skill_dirs = if cli.bare || cli.disable_slash_commands {
+        Vec::new()
+    } else {
+        build_skill_dirs(&working_dir)
+    };
+    // --plugin-dir adds extra directories
+    for dir in &cli.plugin_dir {
+        skill_dirs.push(dir.clone());
+    }
     let skill_registry =
         crab_plugin::skill::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
     if !skill_registry.is_empty() {
@@ -569,6 +643,13 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     let global_dir = crab_config::settings::global_config_dir();
     let sessions_dir = global_dir.join("sessions");
 
+    // --no-session-persistence disables session saving
+    let effective_sessions_dir = if cli.no_session_persistence || cli.bare {
+        None
+    } else {
+        Some(sessions_dir.clone())
+    };
+
     // Resolve resume ID: explicit --resume > -c (continue latest) > None
     let effective_resume_id = if resume_session_id.is_some() {
         resume_session_id
@@ -581,6 +662,16 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         found
     } else {
         None
+    };
+
+    // --fork-session: when resuming, generate a new session ID (fork) instead of reusing
+    // --session-id: override auto-generated session ID
+    let session_id = if let Some(ref id) = cli.session_id {
+        id.clone()
+    } else if cli.fork_session && effective_resume_id.is_some() {
+        crab_common::id::new_ulid()
+    } else {
+        crab_common::id::new_ulid()
     };
 
     // Build allowed/denied tool lists from CLI flags
@@ -609,8 +700,15 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         }
     }
 
+    // --bare skips memory
+    let effective_memory_dir = if cli.bare {
+        None
+    } else {
+        Some(global_dir.join("memory"))
+    };
+
     let session_config = SessionConfig {
-        session_id: crab_common::id::new_ulid(),
+        session_id,
         system_prompt,
         model: ModelId::from(model_id.as_str()),
         max_tokens: cli.max_tokens,
@@ -622,8 +720,8 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
             allowed_tools: effective_allowed,
             denied_tools: effective_denied,
         },
-        memory_dir: Some(global_dir.join("memory")),
-        sessions_dir: Some(sessions_dir),
+        memory_dir: effective_memory_dir,
+        sessions_dir: effective_sessions_dir,
         resume_session_id: effective_resume_id,
         effort,
         thinking_mode,
@@ -632,6 +730,16 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         max_turns: cli.max_turns,
         max_budget_usd: cli.max_budget_usd,
         fallback_model: cli.fallback_model.clone(),
+        bare_mode: cli.bare,
+        worktree_name: cli.worktree.clone(),
+        fork_session: cli.fork_session,
+        from_pr: cli.from_pr.clone(),
+        custom_session_id: cli.session_id.clone(),
+        json_schema: cli.json_schema.clone(),
+        plugin_dirs: cli.plugin_dir.clone(),
+        disable_skills: cli.disable_slash_commands,
+        beta_headers: cli.betas.clone(),
+        ide_connect: cli.ide,
     };
 
     print_banner(
@@ -2007,5 +2115,176 @@ mod tests {
             }
             _ => panic!("expected Completion PowerShell"),
         }
+    }
+
+    // ─── Completion generation tests ───
+
+    #[test]
+    fn completion_generate_bash_does_not_panic() {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Bash, &mut cmd, "crab", &mut buf);
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn completion_generate_zsh_does_not_panic() {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Zsh, &mut cmd, "crab", &mut buf);
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn completion_generate_fish_does_not_panic() {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Fish, &mut cmd, "crab", &mut buf);
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn completion_generate_powershell_does_not_panic() {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(clap_complete::Shell::PowerShell, &mut cmd, "crab", &mut buf);
+        assert!(!buf.is_empty());
+    }
+
+    // ─── B-level CLI flag tests (Steps 10–13) ───
+
+    #[test]
+    fn cli_parses_bare() {
+        let cli = Cli::try_parse_from(["crab", "--bare", "hello"]).unwrap();
+        assert!(cli.bare);
+    }
+
+    #[test]
+    fn cli_bare_defaults_to_false() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(!cli.bare);
+    }
+
+    #[test]
+    fn cli_parses_no_session_persistence() {
+        let cli = Cli::try_parse_from(["crab", "--no-session-persistence", "hello"]).unwrap();
+        assert!(cli.no_session_persistence);
+    }
+
+    #[test]
+    fn cli_parses_worktree_without_value() {
+        let cli = Cli::try_parse_from(["crab", "-w"]).unwrap();
+        assert_eq!(cli.worktree.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn cli_parses_worktree_with_value() {
+        let cli = Cli::try_parse_from(["crab", "--worktree", "feature-x"]).unwrap();
+        assert_eq!(cli.worktree.as_deref(), Some("feature-x"));
+    }
+
+    #[test]
+    fn cli_parses_tmux() {
+        let cli = Cli::try_parse_from(["crab", "--tmux"]).unwrap();
+        assert!(cli.tmux);
+    }
+
+    #[test]
+    fn cli_parses_fork_session() {
+        let cli = Cli::try_parse_from(["crab", "--fork-session"]).unwrap();
+        assert!(cli.fork_session);
+    }
+
+    #[test]
+    fn cli_parses_from_pr_without_value() {
+        let cli = Cli::try_parse_from(["crab", "--from-pr"]).unwrap();
+        assert_eq!(cli.from_pr.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn cli_parses_from_pr_with_value() {
+        let cli = Cli::try_parse_from(["crab", "--from-pr", "123"]).unwrap();
+        assert_eq!(cli.from_pr.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn cli_parses_session_id() {
+        let cli = Cli::try_parse_from(["crab", "--session-id", "abc-123"]).unwrap();
+        assert_eq!(cli.session_id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn cli_parses_json_schema() {
+        let cli = Cli::try_parse_from(["crab", "--json-schema", "schema.json", "hello"]).unwrap();
+        assert_eq!(cli.json_schema.as_deref(), Some("schema.json"));
+    }
+
+    #[test]
+    fn cli_parses_plugin_dir_single() {
+        let cli = Cli::try_parse_from(["crab", "--plugin-dir", "/tmp/plugins", "--", "hello"]).unwrap();
+        assert_eq!(cli.plugin_dir, vec![PathBuf::from("/tmp/plugins")]);
+    }
+
+    #[test]
+    fn cli_parses_plugin_dir_multiple() {
+        let cli = Cli::try_parse_from([
+            "crab",
+            "--plugin-dir", "/tmp/a",
+            "--plugin-dir", "/tmp/b",
+            "--", "hello",
+        ]).unwrap();
+        assert_eq!(cli.plugin_dir, vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
+    }
+
+    #[test]
+    fn cli_parses_disable_slash_commands() {
+        let cli = Cli::try_parse_from(["crab", "--disable-slash-commands"]).unwrap();
+        assert!(cli.disable_slash_commands);
+    }
+
+    #[test]
+    fn cli_parses_betas() {
+        let cli = Cli::try_parse_from(["crab", "--betas", "prompt-caching", "--", "hello"]).unwrap();
+        assert_eq!(cli.betas, vec!["prompt-caching"]);
+    }
+
+    #[test]
+    fn cli_parses_betas_multiple() {
+        let cli = Cli::try_parse_from([
+            "crab", "--betas", "prompt-caching", "computer-use", "--", "hello",
+        ]).unwrap();
+        assert_eq!(cli.betas, vec!["prompt-caching", "computer-use"]);
+    }
+
+    #[test]
+    fn cli_parses_ide() {
+        let cli = Cli::try_parse_from(["crab", "--ide"]).unwrap();
+        assert!(cli.ide);
+    }
+
+    #[test]
+    fn cli_ide_defaults_to_false() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(!cli.ide);
+    }
+
+    // ─── --setting-sources CLI flag tests ───
+
+    #[test]
+    fn cli_parses_setting_sources() {
+        let cli = Cli::try_parse_from([
+            "crab",
+            "--setting-sources",
+            "user,project",
+            "hello",
+        ])
+        .unwrap();
+        assert_eq!(cli.setting_sources.as_deref(), Some("user,project"));
+    }
+
+    #[test]
+    fn cli_setting_sources_default_is_none() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(cli.setting_sources.is_none());
     }
 }

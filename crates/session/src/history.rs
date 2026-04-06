@@ -8,7 +8,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 struct SessionFile {
     session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    working_dir: Option<String>,
     messages: Vec<Message>,
+}
+
+/// Metadata for a saved session (returned by list operations).
+#[derive(Debug, Clone)]
+pub struct SessionMetadata {
+    pub session_id: String,
+    pub name: Option<String>,
+    pub working_dir: Option<String>,
+    pub message_count: usize,
+    pub modified: Option<std::time::SystemTime>,
 }
 
 /// A search hit within a session.
@@ -79,9 +93,22 @@ impl SessionHistory {
 
     /// Save a session transcript to disk.
     pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_common::Result<()> {
+        self.save_with_metadata(session_id, None, None, messages)
+    }
+
+    /// Save a session with optional name and working directory metadata.
+    pub fn save_with_metadata(
+        &self,
+        session_id: &str,
+        name: Option<&str>,
+        working_dir: Option<&str>,
+        messages: &[Message],
+    ) -> crab_common::Result<()> {
         self.ensure_dir()?;
         let file = SessionFile {
             session_id: session_id.to_string(),
+            name: name.map(|s| s.to_string()),
+            working_dir: working_dir.map(|s| s.to_string()),
             messages: messages.to_vec(),
         };
         let json = serde_json::to_string_pretty(&file)
@@ -118,6 +145,42 @@ impl SessionHistory {
         }
         sessions.sort();
         Ok(sessions)
+    }
+
+    /// List all sessions with metadata (name, working_dir, message count, mtime).
+    /// Sorted by modification time (newest first).
+    pub fn list_sessions_with_metadata(&self) -> crab_common::Result<Vec<SessionMetadata>> {
+        if !self.base_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut results = Vec::new();
+        for entry in std::fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id) = name.strip_suffix(".json") {
+                let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
+                // Read the file to extract metadata
+                let (session_name, working_dir, message_count) =
+                    match std::fs::read_to_string(entry.path()) {
+                        Ok(data) => match serde_json::from_str::<SessionFile>(&data) {
+                            Ok(file) => (file.name, file.working_dir, file.messages.len()),
+                            Err(_) => (None, None, 0),
+                        },
+                        Err(_) => (None, None, 0),
+                    };
+                results.push(SessionMetadata {
+                    session_id: id.to_string(),
+                    name: session_name,
+                    working_dir,
+                    message_count,
+                    modified,
+                });
+            }
+        }
+        // Sort by mtime, newest first
+        results.sort_by(|a, b| b.modified.cmp(&a.modified));
+        Ok(results)
     }
 
     /// Delete a session file.
@@ -201,6 +264,8 @@ impl SessionHistory {
             ExportFormat::Json => {
                 let file = SessionFile {
                     session_id: session_id.to_string(),
+                    name: None,
+                    working_dir: None,
                     messages,
                 };
                 serde_json::to_string_pretty(&file)
@@ -881,5 +946,99 @@ mod tests {
 
         let latest = history.find_latest_for_dir(std::path::Path::new("/tmp")).unwrap();
         assert_eq!(latest, "session-new");
+    }
+
+    // ── Session metadata tests ────────────────────────────────────
+
+    #[test]
+    fn save_with_metadata_stores_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history
+            .save_with_metadata("s1", Some("my feature"), Some("/tmp/project"), &[Message::user("hi")])
+            .unwrap();
+
+        // Load raw file to verify name is stored
+        let data = std::fs::read_to_string(dir.path().join("s1.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(parsed["name"], "my feature");
+        assert_eq!(parsed["working_dir"], "/tmp/project");
+    }
+
+    #[test]
+    fn save_with_metadata_none_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history
+            .save_with_metadata("s1", None, None, &[Message::user("hi")])
+            .unwrap();
+
+        let data = std::fs::read_to_string(dir.path().join("s1.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert!(parsed.get("name").is_none());
+    }
+
+    #[test]
+    fn list_sessions_with_metadata_returns_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history
+            .save_with_metadata("s1", Some("bug fix"), None, &[Message::user("a")])
+            .unwrap();
+        history
+            .save("s2", &[Message::user("b"), Message::assistant("c")])
+            .unwrap();
+
+        let metas = history.list_sessions_with_metadata().unwrap();
+        assert_eq!(metas.len(), 2);
+
+        let s1 = metas.iter().find(|m| m.session_id == "s1").unwrap();
+        assert_eq!(s1.name.as_deref(), Some("bug fix"));
+        assert_eq!(s1.message_count, 1);
+
+        let s2 = metas.iter().find(|m| m.session_id == "s2").unwrap();
+        assert!(s2.name.is_none());
+        assert_eq!(s2.message_count, 2);
+    }
+
+    #[test]
+    fn list_sessions_with_metadata_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().join("sessions"));
+        assert!(history.list_sessions_with_metadata().unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_with_metadata_backward_compatible_load() {
+        // Sessions saved with metadata can still be loaded by plain load()
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history
+            .save_with_metadata("s1", Some("named"), Some("/proj"), &[Message::user("test")])
+            .unwrap();
+
+        let msgs = history.load("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].text(), "test");
+    }
+
+    #[test]
+    fn load_legacy_session_without_name_field() {
+        // Sessions saved without name/working_dir (old format) should still load
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_json = r#"{"session_id":"legacy","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
+        std::fs::write(dir.path().join("legacy.json"), legacy_json).unwrap();
+
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        let msgs = history.load("legacy").unwrap().unwrap();
+        assert_eq!(msgs.len(), 1);
+
+        let metas = history.list_sessions_with_metadata().unwrap();
+        assert_eq!(metas.len(), 1);
+        assert!(metas[0].name.is_none());
     }
 }

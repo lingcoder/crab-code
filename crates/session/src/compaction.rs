@@ -297,15 +297,22 @@ async fn apply_strategy(
             sliding_window(conversation, *window_size, config);
             Ok(())
         }
-        CompactionStrategy::Microcompact
-        | CompactionStrategy::Summarize
-        | CompactionStrategy::Hybrid { .. } => {
-            // These strategies require LLM summarization — will be fully
-            // implemented when we have streaming summarizer support.
-            // For now, fall back to truncation with a generous budget.
-            let budget = conversation.context_window * 60 / 100;
-            truncate_preserving_important(conversation, budget, config);
+        CompactionStrategy::Microcompact => {
+            // Level 2: Summarize large tool results (>500 tokens) via LLM,
+            // then snip anything remaining that is still large.
+            summarize_large_tool_results(conversation, config, _client).await?;
+            snip_large_tool_results(conversation, config);
             Ok(())
+        }
+        CompactionStrategy::Summarize => {
+            // Level 3: Summarize all old messages via LLM into a single
+            // system-level recap, keeping only recent turns.
+            summarize_old_messages(conversation, config, _client).await
+        }
+        CompactionStrategy::Hybrid { keep_recent } => {
+            // Level 4: Keep recent N turns verbatim, summarize the rest.
+            let keep = *keep_recent;
+            summarize_old_messages_keeping(conversation, config, _client, keep).await
         }
     }
 }
@@ -474,6 +481,167 @@ fn truncate_preserving_important(
     for msg in kept {
         conversation.inner.push(msg);
     }
+}
+
+/// Level 2 compaction: replace large tool results with LLM-generated summaries.
+async fn summarize_large_tool_results(
+    conversation: &mut Conversation,
+    config: &CompactionConfig,
+    client: &dyn CompactionClient,
+) -> crab_common::Result<()> {
+    let turn_count = conversation.turn_count();
+    let preserve_turns = turn_count.saturating_sub(config.preserve_recent_turns);
+
+    let messages = conversation.inner.messages().to_vec();
+    let mut updated = Vec::with_capacity(messages.len());
+    let mut current_turn = 0usize;
+
+    for msg in messages {
+        if msg.role == Role::User {
+            current_turn += 1;
+        }
+
+        if current_turn <= preserve_turns && !is_important_message(&msg, config) {
+            let mut new_content = Vec::with_capacity(msg.content.len());
+            for block in msg.content {
+                if let ContentBlock::ToolResult {
+                    ref tool_use_id,
+                    ref content,
+                    is_error,
+                } = block
+                {
+                    let estimated = content.len() as u64 / 4;
+                    if estimated > SNIP_TOKEN_THRESHOLD {
+                        // Ask LLM to summarize this tool result
+                        let summary_msg = Message::new(
+                            Role::User,
+                            vec![ContentBlock::text(content.clone())],
+                        );
+                        let summary = client
+                            .summarize(
+                                &[summary_msg],
+                                "Summarize this tool output in 1-2 sentences. Keep key facts.",
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                // Fallback to simple truncation if LLM fails
+                                let preview: String = content.chars().take(200).collect();
+                                format!("{preview}... [summarization failed, truncated]")
+                            });
+                        new_content.push(ContentBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: format!("[summary] {summary}"),
+                            is_error,
+                        });
+                        continue;
+                    }
+                }
+                new_content.push(block);
+            }
+            updated.push(Message::new(msg.role, new_content));
+        } else {
+            updated.push(msg);
+        }
+    }
+
+    conversation.inner.clear();
+    for msg in updated {
+        conversation.inner.push(msg);
+    }
+    Ok(())
+}
+
+/// Level 3 compaction: summarize all old messages into a single recap.
+async fn summarize_old_messages(
+    conversation: &mut Conversation,
+    config: &CompactionConfig,
+    client: &dyn CompactionClient,
+) -> crab_common::Result<()> {
+    summarize_old_messages_keeping(conversation, config, client, config.preserve_recent_turns)
+        .await
+}
+
+/// Level 3/4 compaction: summarize old messages, keeping `keep_recent` turns verbatim.
+async fn summarize_old_messages_keeping(
+    conversation: &mut Conversation,
+    config: &CompactionConfig,
+    client: &dyn CompactionClient,
+    keep_recent: usize,
+) -> crab_common::Result<()> {
+    let turn_count = conversation.turn_count();
+    if turn_count <= keep_recent {
+        return Ok(()); // nothing old to summarize
+    }
+
+    let messages = conversation.inner.messages().to_vec();
+    let preserve_boundary = turn_count.saturating_sub(keep_recent);
+
+    // Split messages into old (to summarize) and recent (to keep)
+    let mut old_msgs = Vec::new();
+    let mut recent_msgs = Vec::new();
+    let mut important_msgs = Vec::new();
+    let mut current_turn = 0usize;
+
+    for msg in &messages {
+        if msg.role == Role::User {
+            current_turn += 1;
+        }
+        if current_turn <= preserve_boundary {
+            if is_important_message(msg, config) {
+                important_msgs.push(msg.clone());
+            } else {
+                old_msgs.push(msg.clone());
+            }
+        } else {
+            recent_msgs.push(msg.clone());
+        }
+    }
+
+    if old_msgs.is_empty() {
+        return Ok(()); // nothing to summarize
+    }
+
+    // Ask LLM to produce a summary of old messages
+    let summary = client
+        .summarize(
+            &old_msgs,
+            "Summarize the preceding conversation concisely. \
+             Preserve key decisions, file paths, function names, and outcomes. \
+             Omit routine acknowledgements.",
+        )
+        .await
+        .unwrap_or_else(|_| {
+            // Fallback: just count what was removed
+            format!(
+                "[compaction: {} old messages removed, {} turns summarized]",
+                old_msgs.len(),
+                preserve_boundary
+            )
+        });
+
+    // Rebuild conversation: important + summary + recent
+    conversation.inner.clear();
+    for msg in important_msgs {
+        conversation.inner.push(msg);
+    }
+    // Insert the summary as a system message so the model has context
+    conversation.inner.push(Message::new(
+        Role::User,
+        vec![ContentBlock::text(format!(
+            "[Context compacted — summary of earlier conversation]\n{summary}"
+        ))],
+    ));
+    conversation.inner.push(Message::new(
+        Role::Assistant,
+        vec![ContentBlock::text(
+            "Understood, I have the context from the summary above.".to_owned(),
+        )],
+    ));
+    for msg in recent_msgs {
+        conversation.inner.push(msg);
+    }
+
+    Ok(())
 }
 
 /// Sliding window compaction: keep only the most recent N turns.

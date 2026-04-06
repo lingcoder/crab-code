@@ -243,6 +243,151 @@ impl BashTool {
     }
 }
 
+// ─── PTY support (feature-gated) ───
+
+#[cfg(feature = "pty")]
+mod pty_support {
+    use super::*;
+
+    /// Configuration for PTY execution.
+    pub struct PtyConfig {
+        /// Whether to strip ANSI escape sequences from output.
+        pub strip_ansi: bool,
+        /// Timeout for the PTY session.
+        pub timeout: Duration,
+    }
+
+    impl Default for PtyConfig {
+        fn default() -> Self {
+            Self {
+                strip_ansi: true,
+                timeout: Duration::from_secs(120),
+            }
+        }
+    }
+
+    impl BashTool {
+        /// Execute a command in a pseudo-terminal.
+        ///
+        /// Uses `portable-pty` to create a PTY pair, run the command in it,
+        /// and capture output. This is useful for commands that detect terminal
+        /// presence (e.g. colored output, interactive prompts).
+        pub async fn execute_with_pty(
+            &self,
+            command: &str,
+            working_dir: &std::path::Path,
+            config: PtyConfig,
+        ) -> Result<ToolOutput> {
+            if command.is_empty() {
+                return Ok(ToolOutput::error("command is required"));
+            }
+
+            let command = command.to_owned();
+            let working_dir = working_dir.to_path_buf();
+            let timeout = config.timeout;
+            let strip_ansi = config.strip_ansi;
+
+            // PTY operations are blocking — run in a blocking thread
+            let result = tokio::task::spawn_blocking(move || {
+                run_in_pty(&command, &working_dir, timeout, strip_ansi)
+            })
+            .await
+            .map_err(|e| {
+                crab_common::Error::Other(format!("PTY task failed: {e}"))
+            })??;
+
+            Ok(result)
+        }
+    }
+
+    fn run_in_pty(
+        command: &str,
+        working_dir: &std::path::Path,
+        timeout: Duration,
+        strip_ansi: bool,
+    ) -> Result<ToolOutput> {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| crab_common::Error::Other(format!("failed to open PTY: {e}")))?;
+
+        let (shell, flag) = if cfg!(windows) {
+            ("cmd", "/C")
+        } else {
+            ("sh", "-c")
+        };
+
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.arg(flag);
+        cmd.arg(command);
+        cmd.cwd(working_dir);
+
+        let mut child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| crab_common::Error::Other(format!("failed to spawn in PTY: {e}")))?;
+
+        // Drop the slave — we read from master
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader()
+            .map_err(|e| crab_common::Error::Other(format!("failed to clone PTY reader: {e}")))?;
+
+        // Read output with timeout
+        let mut output = Vec::new();
+        let start = std::time::Instant::now();
+        let mut buf = [0u8; 4096];
+
+        loop {
+            if start.elapsed() > timeout {
+                let _ = child.kill();
+                let text = String::from_utf8_lossy(&output).to_string();
+                return Ok(ToolOutput::error(format!("PTY command timed out\n{text}")));
+            }
+
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => output.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let status = child
+            .wait()
+            .map_err(|e| crab_common::Error::Other(format!("failed to wait for PTY child: {e}")))?;
+
+        let mut text = String::from_utf8_lossy(&output).to_string();
+
+        if strip_ansi {
+            if let Ok(stripped) = strip_ansi_escapes::strip_str(&text) {
+                text = stripped;
+            }
+        }
+
+        if status.success() {
+            Ok(ToolOutput::success(text))
+        } else {
+            Ok(ToolOutput::with_content(
+                vec![crab_core::tool::ToolOutputContent::Text { text }],
+                true,
+            ))
+        }
+    }
+}
+
+#[cfg(feature = "pty")]
+pub use pty_support::PtyConfig;
+
 #[cfg(test)]
 mod tests {
     use super::*;

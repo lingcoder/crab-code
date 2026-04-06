@@ -9,6 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::components::autocomplete::{AutoComplete, CommandInfo};
 use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
 use crate::components::dialog::{PermissionDialog, PermissionResponse, RiskLevel};
 use crate::components::input::InputBox;
@@ -87,6 +88,8 @@ pub struct App {
     pub search: SearchState,
     /// Image placeholders encountered during the session.
     pub image_placeholders: Vec<ImagePlaceholder>,
+    /// Tab-completion engine for `/commands` and file paths.
+    pub autocomplete: AutoComplete,
 }
 
 impl App {
@@ -112,6 +115,7 @@ impl App {
             code_blocks: CodeBlockTracker::new(),
             search: SearchState::new(),
             image_placeholders: Vec::new(),
+            autocomplete: AutoComplete::default(),
         }
     }
 
@@ -123,6 +127,16 @@ impl App {
     /// Set custom keybindings.
     pub fn set_keybindings(&mut self, keybindings: Keybindings) {
         self.keybindings = keybindings;
+    }
+
+    /// Register slash commands for Tab completion.
+    pub fn set_slash_commands(&mut self, commands: Vec<CommandInfo>) {
+        self.autocomplete.set_commands(commands);
+    }
+
+    /// Set the working directory for file path completion.
+    pub fn set_completion_cwd(&mut self, cwd: impl Into<std::path::PathBuf>) {
+        self.autocomplete.set_cwd(cwd);
     }
 
     /// Handle a TUI event and return an action for the outer loop.
@@ -257,6 +271,56 @@ impl App {
 
                 // Reset scroll to bottom on new input
                 self.content_scroll = 0;
+
+                // ── Autocomplete popup is active ──
+                if self.autocomplete.is_active() {
+                    match key.code {
+                        KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            self.autocomplete.prev();
+                            return AppAction::None;
+                        }
+                        KeyCode::Tab => {
+                            self.autocomplete.next();
+                            return AppAction::None;
+                        }
+                        KeyCode::Up => {
+                            self.autocomplete.prev();
+                            return AppAction::None;
+                        }
+                        KeyCode::Down => {
+                            self.autocomplete.next();
+                            return AppAction::None;
+                        }
+                        KeyCode::Enter => {
+                            if let Some((token, replacement)) = self.autocomplete.accept() {
+                                let text = self.input.text();
+                                let new_text = text.replacen(&token, &replacement, 1);
+                                self.input.set_text(&new_text);
+                            }
+                            return AppAction::None;
+                        }
+                        KeyCode::Esc => {
+                            self.autocomplete.dismiss();
+                            return AppAction::None;
+                        }
+                        _ => {
+                            // Any other key dismisses autocomplete and falls through
+                            self.autocomplete.dismiss();
+                        }
+                    }
+                }
+
+                // ── Tab triggers autocomplete ──
+                if key.code == KeyCode::Tab && !self.input.is_empty() {
+                    let text = self.input.text();
+                    let (_, col) = self.input.cursor();
+                    let count = self.autocomplete.complete(&text, col);
+                    if count > 0 {
+                        return AppAction::None;
+                    }
+                    // No completions — fall through (don't insert tab)
+                    return AppAction::None;
+                }
 
                 // Enter (without shift) submits
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -518,6 +582,11 @@ impl App {
             buf,
         );
 
+        // Autocomplete popup (renders above input)
+        if self.autocomplete.is_active() {
+            render_autocomplete_popup(&self.autocomplete, layout.input, buf);
+        }
+
         // Permission dialog overlay (renders on top of everything)
         if let Some(ref dialog) = self.permission_dialog {
             let dialog_area = PermissionDialog::dialog_area(area);
@@ -625,6 +694,85 @@ fn render_content_scrolled(text: &str, scroll_offset: usize, area: Rect, buf: &m
     }
 }
 
+/// Render the autocomplete popup above the input area.
+#[allow(clippy::cast_possible_truncation)]
+fn render_autocomplete_popup(ac: &AutoComplete, input_area: Rect, buf: &mut Buffer) {
+    let candidates = ac.candidates();
+    if candidates.is_empty() {
+        return;
+    }
+
+    let max_visible = 8.min(candidates.len());
+    let popup_height = max_visible as u16;
+    let popup_width = input_area.width.min(60);
+
+    // Position above the input area
+    let popup_y = input_area.y.saturating_sub(popup_height);
+    let popup_area = Rect {
+        x: input_area.x,
+        y: popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let selected_idx = ac.selected_index().unwrap_or(0);
+
+    // Scroll if needed so selected item is visible
+    let scroll_offset = if selected_idx >= max_visible {
+        selected_idx - max_visible + 1
+    } else {
+        0
+    };
+
+    for (i, candidate) in candidates
+        .iter()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .enumerate()
+    {
+        let y = popup_area.y + i as u16;
+        let is_selected = (i + scroll_offset) == selected_idx;
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+        } else {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+        };
+
+        // Render candidate text + description
+        let desc_width = (popup_width as usize).saturating_sub(candidate.text.len() + 3);
+        let desc = if candidate.description.len() > desc_width {
+            &candidate.description[..desc_width]
+        } else {
+            &candidate.description
+        };
+
+        let line = Line::from(vec![
+            Span::styled(&candidate.text, style.add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(
+                    " {desc:>width$}",
+                    desc = desc,
+                    width = popup_width as usize - candidate.text.len() - 1
+                ),
+                style,
+            ),
+        ]);
+
+        let line_area = Rect {
+            x: popup_area.x,
+            y,
+            width: popup_width,
+            height: 1,
+        };
+        Widget::render(line, line_area, buf);
+    }
+}
+
 /// Classify tool risk level based on tool name for the permission dialog.
 fn classify_tool_risk(tool_name: &str) -> RiskLevel {
     match tool_name {
@@ -647,9 +795,9 @@ fn render_bottom_bar_enhanced(
         match state {
             AppState::Idle | AppState::WaitingForInput => {
                 if sidebar_visible {
-                    "Enter: send | /: search | y: copy code | Ctrl+B: hide sidebar | Ctrl+C: quit"
+                    "Enter: send | Tab: complete | /: search | y: copy | Ctrl+B: sidebar | Ctrl+C: quit"
                 } else {
-                    "Enter: send | /: search | y: copy code | Ctrl+N: new session | Ctrl+C: quit"
+                    "Enter: send | Tab: complete | /: search | y: copy | Ctrl+N: new | Ctrl+C: quit"
                 }
             }
             AppState::Processing => "Ctrl+C: quit | PageUp/Down: scroll",
@@ -1166,5 +1314,135 @@ mod tests {
             delta: "new text".into(),
         }));
         assert_eq!(app.content_scroll, 0);
+    }
+
+    // ── Tab completion tests ──
+
+    fn setup_app_with_commands() -> App {
+        let mut app = App::new("test");
+        app.set_slash_commands(vec![
+            CommandInfo { name: "help".into(), description: "Show help".into() },
+            CommandInfo { name: "history".into(), description: "Show history".into() },
+            CommandInfo { name: "commit".into(), description: "Create a commit".into() },
+            CommandInfo { name: "compact".into(), description: "Compact context".into() },
+            CommandInfo { name: "config".into(), description: "Show config".into() },
+            CommandInfo { name: "cost".into(), description: "Show cost".into() },
+            CommandInfo { name: "clear".into(), description: "Clear screen".into() },
+        ]);
+        // Start in WaitingForInput so `/` is treated as text, not search trigger
+        app.state = AppState::WaitingForInput;
+        app
+    }
+
+    #[test]
+    fn tab_on_slash_triggers_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/co");
+
+        // Press Tab
+        let action = app.handle_event(key(KeyCode::Tab));
+        assert_eq!(action, AppAction::None);
+        assert!(app.autocomplete.is_active());
+        // Should match: commit, compact, config, cost
+        assert!(app.autocomplete.candidates().len() >= 3);
+    }
+
+    #[test]
+    fn tab_cycles_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/h");
+        // Tab to trigger
+        app.handle_event(key(KeyCode::Tab));
+        assert!(app.autocomplete.is_active());
+        let first = app.autocomplete.selected_index();
+
+        // Tab again to cycle
+        app.handle_event(key(KeyCode::Tab));
+        let second = app.autocomplete.selected_index();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn enter_accepts_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/he");
+        // Tab triggers completion, first candidate should be /help
+        app.handle_event(key(KeyCode::Tab));
+        assert!(app.autocomplete.is_active());
+
+        // Enter accepts
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(action, AppAction::None);
+        assert!(!app.autocomplete.is_active());
+        assert_eq!(app.input.text(), "/help");
+    }
+
+    #[test]
+    fn esc_dismisses_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/c");
+        app.handle_event(key(KeyCode::Tab));
+        assert!(app.autocomplete.is_active());
+
+        app.handle_event(key(KeyCode::Esc));
+        assert!(!app.autocomplete.is_active());
+    }
+
+    #[test]
+    fn tab_on_empty_does_nothing() {
+        let mut app = setup_app_with_commands();
+        let action = app.handle_event(key(KeyCode::Tab));
+        // Empty input, Tab goes through to input handler but no completion
+        assert_eq!(action, AppAction::None);
+        assert!(!app.autocomplete.is_active());
+    }
+
+    #[test]
+    fn tab_no_match_stays_inactive() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/zz");
+        app.handle_event(key(KeyCode::Tab));
+        assert!(!app.autocomplete.is_active());
+    }
+
+    #[test]
+    fn set_slash_commands_and_completion_cwd() {
+        let mut app = App::new("test");
+        app.set_slash_commands(vec![CommandInfo {
+            name: "test".into(),
+            description: "A test command".into(),
+        }]);
+        app.set_completion_cwd("/tmp");
+        // Should not panic
+        assert!(!app.autocomplete.is_active());
+    }
+
+    #[test]
+    fn up_down_navigate_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/c");
+        app.handle_event(key(KeyCode::Tab));
+        assert!(app.autocomplete.is_active());
+
+        let idx0 = app.autocomplete.selected_index();
+        app.handle_event(key(KeyCode::Down));
+        let idx1 = app.autocomplete.selected_index();
+        assert_ne!(idx0, idx1);
+
+        app.handle_event(key(KeyCode::Up));
+        let idx2 = app.autocomplete.selected_index();
+        assert_eq!(idx0, idx2);
+    }
+
+    #[test]
+    fn typing_dismisses_autocomplete() {
+        let mut app = setup_app_with_commands();
+        app.input.set_text("/c");
+        app.handle_event(key(KeyCode::Tab));
+        assert!(app.autocomplete.is_active());
+
+        // Typing a character should dismiss and fall through
+        app.handle_event(key(KeyCode::Char('x')));
+        assert!(!app.autocomplete.is_active());
     }
 }

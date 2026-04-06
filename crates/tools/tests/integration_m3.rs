@@ -537,7 +537,7 @@ async fn execute_unchecked_skips_permission() {
 #[test]
 fn register_all_builtins_produces_31_tools() {
     let registry = create_default_registry();
-    assert_eq!(registry.len(), 31);
+    assert_eq!(registry.len(), 32);
 }
 
 #[test]
@@ -587,7 +587,7 @@ fn all_expected_tools_registered() {
 fn all_tools_have_valid_schemas() {
     let registry = create_default_registry();
     let schemas = registry.tool_schemas();
-    assert_eq!(schemas.len(), 31);
+    assert_eq!(schemas.len(), 32);
     for schema in &schemas {
         let name = schema["name"].as_str().unwrap();
         assert!(!name.is_empty(), "tool name should not be empty");

@@ -18,11 +18,14 @@ pub fn run() -> anyhow::Result<()> {
     let checks = vec![
         check_api_key(&settings),
         check_settings_file(&global_dir),
+        check_project_settings(&working_dir),
         check_git(),
         check_working_dir(&working_dir),
         check_sessions_dir(&global_dir),
         check_memory_dir(&global_dir),
         check_mcp_config(&settings),
+        check_disk_space(&global_dir),
+        check_version(),
     ];
 
     let mut pass_count = 0;
@@ -209,6 +212,109 @@ fn check_dir_exists_writable(global_dir: &Path, subdir: &str, name: &'static str
     }
 }
 
+fn check_project_settings(working_dir: &Path) -> Check {
+    let project_dir = working_dir.join(".crab");
+    let settings_path = project_dir.join("settings.json");
+    let local_path = project_dir.join("settings.local.json");
+
+    if !project_dir.exists() {
+        return Check {
+            name: "Project settings",
+            passed: true,
+            detail: "no .crab/ directory (using global settings only)".into(),
+        };
+    }
+
+    let mut parts = Vec::new();
+    if settings_path.exists() {
+        match std::fs::read_to_string(&settings_path) {
+            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(_) => parts.push("settings.json (valid)"),
+                Err(_) => {
+                    return Check {
+                        name: "Project settings",
+                        passed: false,
+                        detail: "settings.json has invalid JSON".into(),
+                    };
+                }
+            },
+            Err(_) => parts.push("settings.json (unreadable)"),
+        }
+    }
+    if local_path.exists() {
+        parts.push("settings.local.json");
+    }
+
+    Check {
+        name: "Project settings",
+        passed: true,
+        detail: if parts.is_empty() {
+            ".crab/ exists but no settings files".into()
+        } else {
+            parts.join(", ")
+        },
+    }
+}
+
+fn check_disk_space(global_dir: &Path) -> Check {
+    let sessions_dir = global_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return Check {
+            name: "Disk usage",
+            passed: true,
+            detail: "no sessions directory yet".into(),
+        };
+    }
+
+    // Calculate total size of sessions directory
+    let total_bytes = dir_size(&sessions_dir);
+    let size_mb = total_bytes as f64 / (1024.0 * 1024.0);
+    let passed = size_mb < 500.0; // warn if > 500 MB
+
+    Check {
+        name: "Disk usage",
+        passed,
+        detail: if size_mb < 1.0 {
+            format!("sessions: {:.0} KB", total_bytes as f64 / 1024.0)
+        } else {
+            format!(
+                "sessions: {:.1} MB{}",
+                size_mb,
+                if !passed {
+                    " (consider running 'crab session delete' to clean up)"
+                } else {
+                    ""
+                }
+            )
+        },
+    }
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                } else if meta.is_dir() {
+                    total += dir_size(&entry.path());
+                }
+            }
+        }
+    }
+    total
+}
+
+fn check_version() -> Check {
+    let current = env!("CARGO_PKG_VERSION");
+    Check {
+        name: "Version",
+        passed: true,
+        detail: format!("crab-code v{current}"),
+    }
+}
+
 fn check_mcp_config(settings: &crab_config::Settings) -> Check {
     match &settings.mcp_servers {
         None => Check {
@@ -327,5 +433,74 @@ mod tests {
             "Sessions directory",
         );
         assert!(result.passed); // Will be created on first use
+    }
+
+    #[test]
+    fn check_project_settings_no_crab_dir() {
+        let dir = std::env::temp_dir().join("crab-doctor-test-no-crab");
+        let _ = std::fs::create_dir_all(&dir);
+        let result = check_project_settings(&dir);
+        assert!(result.passed);
+        assert!(result.detail.contains("no .crab/"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_project_settings_with_valid_json() {
+        let dir = std::env::temp_dir().join("crab-doctor-test-proj-settings");
+        let crab_dir = dir.join(".crab");
+        let _ = std::fs::create_dir_all(&crab_dir);
+        std::fs::write(crab_dir.join("settings.json"), r#"{"model":"test"}"#).unwrap();
+
+        let result = check_project_settings(&dir);
+        assert!(result.passed);
+        assert!(result.detail.contains("settings.json"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_disk_space_no_sessions_dir() {
+        let result = check_disk_space(Path::new("/nonexistent/crab"));
+        assert!(result.passed);
+        assert!(result.detail.contains("no sessions"));
+    }
+
+    #[test]
+    fn check_disk_space_with_files() {
+        let dir = std::env::temp_dir().join("crab-doctor-test-disk");
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
+        std::fs::write(sessions.join("test.json"), "{}").unwrap();
+
+        let result = check_disk_space(&dir);
+        assert!(result.passed);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_version_includes_version_string() {
+        let result = check_version();
+        assert!(result.passed);
+        assert!(result.detail.contains("crab-code v"));
+    }
+
+    #[test]
+    fn dir_size_empty() {
+        let dir = std::env::temp_dir().join("crab-doctor-test-empty-dir");
+        let _ = std::fs::create_dir_all(&dir);
+        assert_eq!(dir_size(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dir_size_with_files() {
+        let dir = std::env::temp_dir().join("crab-doctor-test-sized-dir");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("a.txt"), "hello").unwrap();
+        std::fs::write(dir.join("b.txt"), "world!").unwrap();
+        assert!(dir_size(&dir) > 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

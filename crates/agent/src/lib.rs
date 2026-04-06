@@ -4,6 +4,7 @@ pub mod error_recovery;
 pub mod git_context;
 pub mod message_bus;
 pub mod message_router;
+pub mod pr_context;
 pub mod query_loop;
 pub mod repl_commands;
 pub mod retry;

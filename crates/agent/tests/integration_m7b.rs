@@ -48,6 +48,16 @@ fn test_session_config() -> SessionConfig {
         max_turns: None,
         max_budget_usd: None,
         fallback_model: None,
+        bare_mode: false,
+        worktree_name: None,
+        fork_session: false,
+        from_pr: None,
+        custom_session_id: None,
+        json_schema: None,
+        plugin_dirs: Vec::new(),
+        disable_skills: false,
+        beta_headers: Vec::new(),
+        ide_connect: false,
     }
 }
 
@@ -512,6 +522,7 @@ fn query_loop_config_is_cloneable() {
         hook_executor: None,
         session_id: None,
         effort: None,
+        fallback_model: None,
     };
     let cloned = config.clone();
     assert_eq!(cloned.model.as_str(), "test-model");
