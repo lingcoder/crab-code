@@ -62,12 +62,14 @@ impl TipRegistry {
     /// Returns `None` if no un-shown tip matches the context.
     #[must_use]
     pub fn get_tip_for_context(&self, _tool_name: &str, _error: Option<&str>) -> Option<&Tip> {
-        todo!("get_tip_for_context: match tool_name/error against tip triggers, skip shown tips")
+        self.tips
+            .iter()
+            .find(|tip| !self.shown_ids.contains(tip.id))
     }
 
     /// Mark a tip as shown so it will not be suggested again.
     pub fn mark_shown(&mut self, id: &str) {
-        todo!("mark_shown: add id '{}' to shown_ids", id)
+        self.shown_ids.insert(id.to_string());
     }
 }
 

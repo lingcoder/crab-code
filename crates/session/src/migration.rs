@@ -31,7 +31,9 @@ pub struct Migration {
 /// Each migration upgrades the data from `version - 1` to `version`.
 #[must_use]
 pub fn available_migrations() -> Vec<Migration> {
-    todo!("available_migrations: return the ordered list of all known migrations")
+    // No migrations defined yet. As the on-disk format evolves,
+    // migration entries will be added here in version order.
+    Vec::new()
 }
 
 /// Read the current schema version from a data blob.
@@ -39,8 +41,10 @@ pub fn available_migrations() -> Vec<Migration> {
 /// Looks for a `"version"` key at the top level. Returns `0` if the
 /// key is missing (pre-versioning data).
 #[must_use]
-pub fn current_version(_data: &Value) -> u32 {
-    todo!("current_version: extract version number from data, default to 0")
+pub fn current_version(data: &Value) -> u32 {
+    data.get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32
 }
 
 // ── Execution ─────────────────────────────────────────────────────────
@@ -56,8 +60,24 @@ pub fn current_version(_data: &Value) -> u32 {
 /// Returns `Err` with a description if any migration step fails.
 /// The data may be partially migrated; callers should not persist it
 /// on error.
-pub fn run_migrations(_data: &mut Value, _target_version: u32) -> Result<Vec<String>, String> {
-    todo!("run_migrations: apply migrations sequentially, collect names of applied ones")
+pub fn run_migrations(data: &mut Value, target_version: u32) -> Result<Vec<String>, String> {
+    let current = current_version(data);
+    let mut applied = Vec::new();
+
+    for m in available_migrations() {
+        if m.version <= current || m.version > target_version {
+            continue;
+        }
+        (m.migrate)(data)
+            .map_err(|e| format!("migration '{}' (v{}) failed: {e}", m.name, m.version))?;
+        // Stamp the new version into the data.
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("version".into(), Value::from(u64::from(m.version)));
+        }
+        applied.push(m.name.to_string());
+    }
+
+    Ok(applied)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────

@@ -117,7 +117,9 @@ impl TokenBudget {
     /// produce a response after incorporating the tool result.
     #[must_use]
     pub fn tool_result_budget(&self) -> usize {
-        todo!("tool_result_budget: compute allocation from remaining input tokens")
+        // Allocate 80% of remaining input budget for tool results,
+        // reserving the rest for the LLM to produce a response.
+        self.remaining_input() * 4 / 5
     }
 }
 

@@ -52,7 +52,9 @@ pub fn suggest_prompts(
     _conversation_summary: &str,
     _last_tool_used: Option<&str>,
 ) -> Vec<PromptSuggestion> {
-    todo!("suggest_prompts: analyze context and generate follow-up suggestions")
+    // Placeholder: real implementation will analyze the conversation
+    // context and generate relevant follow-up suggestions via the LLM.
+    Vec::new()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
