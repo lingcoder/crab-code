@@ -1,14 +1,20 @@
 pub mod agent;
 pub mod ask_user;
 pub mod bash;
+pub mod bash_classifier;
 pub mod bash_security;
+pub mod brief;
+pub mod config_tool;
 pub mod cron;
 pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod image_read;
 pub mod lsp;
+pub mod mcp_auth;
+pub mod mcp_resource;
 pub mod mcp_tool;
+pub mod monitor;
 pub mod notebook;
 pub mod plan_approval;
 pub mod plan_file;
@@ -18,12 +24,22 @@ pub mod powershell;
 pub mod read;
 pub mod read_enhanced;
 pub mod remote_trigger;
+pub mod send_message;
+pub mod send_user_file;
+pub mod skill;
+pub mod sleep;
+pub mod snip;
 pub mod task;
 pub mod team;
+pub mod todo_write;
+pub mod tool_search;
+pub mod verify_plan;
+pub mod web_browser;
 pub mod web_cache;
 pub mod web_fetch;
 pub mod web_formatter;
 pub mod web_search;
+pub mod workflow;
 pub mod worktree;
 pub mod write;
 
@@ -77,6 +93,24 @@ pub fn register_all_builtins(
     registry.register(Arc::new(remote_trigger::RemoteTriggerTool::new(
         trigger_store,
     )));
+
+    // P1 tools
+    registry.register(Arc::new(config_tool::ConfigTool));
+    registry.register(Arc::new(brief::BriefTool));
+    registry.register(Arc::new(sleep::SleepTool));
+    registry.register(Arc::new(snip::SnipTool));
+    registry.register(Arc::new(todo_write::TodoWriteTool));
+    registry.register(Arc::new(tool_search::ToolSearchTool));
+    registry.register(Arc::new(verify_plan::VerifyPlanExecutionTool));
+    registry.register(Arc::new(mcp_resource::ListMcpResourcesTool));
+    registry.register(Arc::new(mcp_resource::ReadMcpResourceTool));
+    registry.register(Arc::new(mcp_auth::McpAuthTool));
+
+    // P2 tools
+    registry.register(Arc::new(web_browser::WebBrowserTool));
+    registry.register(Arc::new(workflow::WorkflowTool));
+    registry.register(Arc::new(monitor::MonitorTool));
+    registry.register(Arc::new(send_user_file::SendUserFileTool));
 
     // PowerShell tool — registered on Windows only
     #[cfg(target_os = "windows")]
@@ -132,16 +166,34 @@ mod tests {
         assert!(registry.get("CronList").is_some());
         assert!(registry.get("RemoteTrigger").is_some());
 
+        // P1 tools
+        assert!(registry.get("Config").is_some());
+        assert!(registry.get("Brief").is_some());
+        assert!(registry.get("Sleep").is_some());
+        assert!(registry.get("Snip").is_some());
+        assert!(registry.get("TodoWrite").is_some());
+        assert!(registry.get("ToolSearch").is_some());
+        assert!(registry.get("VerifyPlanExecution").is_some());
+        assert!(registry.get("ListMcpResources").is_some());
+        assert!(registry.get("ReadMcpResource").is_some());
+        assert!(registry.get("McpAuth").is_some());
+
         // PowerShell tool — only on Windows
         if cfg!(windows) {
             assert!(registry.get("PowerShell").is_some());
         }
+
+        // P2 tools
+        assert!(registry.get("WebBrowser").is_some());
+        assert!(registry.get("Workflow").is_some());
+        assert!(registry.get("Monitor").is_some());
+        assert!(registry.get("SendUserFile").is_some());
     }
 
     #[test]
     fn default_registry_has_expected_tool_count() {
         let registry = create_default_registry();
-        let expected = if cfg!(windows) { 32 } else { 31 };
+        let expected = if cfg!(windows) { 46 } else { 45 };
         assert_eq!(registry.len(), expected);
     }
 
@@ -149,7 +201,7 @@ mod tests {
     fn all_tools_have_schemas() {
         let registry = create_default_registry();
         let schemas = registry.tool_schemas();
-        let expected = if cfg!(windows) { 32 } else { 31 };
+        let expected = if cfg!(windows) { 46 } else { 45 };
         assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());

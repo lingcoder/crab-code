@@ -552,7 +552,7 @@ async fn execute_unchecked_skips_permission() {
 #[test]
 fn register_all_builtins_produces_expected_tools() {
     let registry = create_default_registry();
-    let expected = if cfg!(target_os = "windows") { 32 } else { 31 };
+    let expected = if cfg!(target_os = "windows") { 46 } else { 45 };
     assert_eq!(registry.len(), expected);
 }
 
@@ -590,6 +590,20 @@ fn all_expected_tools_registered() {
         "CronDelete",
         "CronList",
         "RemoteTrigger",
+        "Config",
+        "Brief",
+        "Sleep",
+        "Snip",
+        "TodoWrite",
+        "ToolSearch",
+        "VerifyPlanExecution",
+        "ListMcpResources",
+        "ReadMcpResource",
+        "McpAuth",
+        "WebBrowser",
+        "Workflow",
+        "Monitor",
+        "SendUserFile",
     ];
     for name in &expected {
         assert!(
@@ -603,7 +617,7 @@ fn all_expected_tools_registered() {
 fn all_tools_have_valid_schemas() {
     let registry = create_default_registry();
     let schemas = registry.tool_schemas();
-    let expected = if cfg!(target_os = "windows") { 32 } else { 31 };
+    let expected = if cfg!(target_os = "windows") { 46 } else { 45 };
     assert_eq!(schemas.len(), expected);
     for schema in &schemas {
         let name = schema["name"].as_str().unwrap();
