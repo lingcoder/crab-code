@@ -12,20 +12,20 @@
 ///
 /// Unresolved variables (not set, no default) expand to an empty string.
 /// Literal `$` can be escaped as `$$`.
-pub fn expand_env_vars(input: &str) -> String {
+pub fn expand_env_vars(_input: &str) -> String {
     todo!()
 }
 
 /// Expand environment variables in each element of an argument list.
 ///
 /// Convenience wrapper around [`expand_env_vars`] for command arguments.
-pub fn expand_env_in_args(args: &[String]) -> Vec<String> {
+pub fn expand_env_in_args(_args: &[String]) -> Vec<String> {
     todo!()
 }
 
 /// Expand environment variables in a map of key-value pairs (e.g., env block).
-pub fn expand_env_in_map(
-    map: &std::collections::HashMap<String, String>,
+pub fn expand_env_in_map<S: ::std::hash::BuildHasher>(
+    _map: &std::collections::HashMap<String, String, S>,
 ) -> std::collections::HashMap<String, String> {
     todo!()
 }

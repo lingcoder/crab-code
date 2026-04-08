@@ -33,7 +33,7 @@ impl FeatureFlags {
     ///
     /// Expects the `"featureFlags"` key to be an object of `{ "flag_name": bool }`.
     /// Unknown flags are preserved. Missing flags retain their defaults.
-    pub fn load_from_settings(settings: &serde_json::Value) -> Self {
+    pub fn load_from_settings(_settings: &serde_json::Value) -> Self {
         todo!()
     }
 
@@ -55,7 +55,7 @@ impl FeatureFlags {
     }
 
     /// Merge another set of flags on top, overriding existing values.
-    pub fn merge(&mut self, other: &FeatureFlags) {
+    pub fn merge(&mut self, _other: &Self) {
         todo!()
     }
 }
@@ -75,7 +75,7 @@ impl Default for FeatureFlags {
 pub mod flags {
     /// Enable WASM plugin support.
     pub const WASM_PLUGINS: &str = "wasm_plugins";
-    /// Enable MCP server authentication (OAuth2 / API keys).
+    /// Enable MCP server authentication (`OAuth2` / API keys).
     pub const MCP_AUTH: &str = "mcp_auth";
     /// Enable shared team memory.
     pub const TEAM_MEMORY: &str = "team_memory";

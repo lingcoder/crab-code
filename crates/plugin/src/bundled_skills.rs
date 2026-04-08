@@ -15,6 +15,7 @@ use super::skill::Skill;
 /// These are string literals containing the skill prompt templates.
 /// In production these will be multi-paragraph markdown instructions;
 /// placeholder values are used here during the skeleton phase.
+#[allow(dead_code)]
 mod definitions {
     /// `/commit` — Create a well-structured git commit.
     pub const COMMIT: &str =

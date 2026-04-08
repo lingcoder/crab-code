@@ -34,6 +34,7 @@ pub struct Tip {
 ///     registry.mark_shown(tip.id);
 /// }
 /// ```
+#[allow(dead_code)]
 pub struct TipRegistry {
     /// All registered tips.
     tips: Vec<Tip>,

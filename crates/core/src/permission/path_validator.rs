@@ -80,6 +80,7 @@ pub enum PathPermission {
 /// Maintains a set of allowed directories and denied path patterns, and
 /// checks candidate paths against them. Handles canonicalization, symlink
 /// resolution, and directory traversal detection.
+#[allow(dead_code)]
 pub struct PathValidator {
     /// Directories that are allowed for file operations.
     allowed_dirs: Vec<PathBuf>,
@@ -138,6 +139,7 @@ impl PathValidator {
     ///
     /// Returns the canonicalized path if it is within allowed directories,
     /// or a [`PathError`] if it escapes.
+    #[allow(dead_code)]
     fn resolve_safely(&self, path: &Path) -> Result<PathBuf, PathError> {
         todo!(
             "Safely resolve path {} checking for traversal and symlink escapes",
@@ -146,11 +148,13 @@ impl PathValidator {
     }
 
     /// Check whether a resolved path matches any denied pattern.
+    #[allow(dead_code)]
     fn matches_denied_pattern(&self, path: &Path) -> Option<String> {
         todo!("Check if {} matches any denied patterns", path.display())
     }
 
     /// Check whether a resolved path is inside any allowed directory.
+    #[allow(dead_code)]
     fn is_within_allowed_dirs(&self, path: &Path) -> bool {
         todo!("Check if {} is within allowed directories", path.display())
     }

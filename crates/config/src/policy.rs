@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Controls organizational-level restrictions on what the agent is allowed
 /// to do. Fields use `serde(default)` so that partial policy files work.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PolicyConfig {
     /// Tools that are completely disabled by policy.
@@ -41,7 +41,7 @@ pub struct PolicyConfig {
     /// Denied MCP server patterns (glob). Checked after `allowed_mcp_servers`.
     pub denied_mcp_servers: Vec<String>,
 
-    /// Whether network access tools (WebFetch, curl, etc.) are allowed.
+    /// Whether network access tools (`WebFetch`, curl, etc.) are allowed.
     pub allow_network_tools: bool,
 
     /// Whether file-write tools are allowed.
@@ -115,20 +115,15 @@ impl PolicyConfig {
 /// separately via [`load_project_policy`].
 #[must_use]
 pub fn policy_file_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
-    // 1. System-wide (Unix only)
-    #[cfg(unix)]
-    {
-        paths.push(PathBuf::from("/etc/crab-code/policy.json"));
-    }
-
-    // 2. Global user
-    paths.push(
+    let paths = vec![
+        // 1. System-wide (Unix only)
+        #[cfg(unix)]
+        PathBuf::from("/etc/crab-code/policy.json"),
+        // 2. Global user
         crab_common::path::home_dir()
             .join(".crab")
             .join("policy.json"),
-    );
+    ];
 
     paths
 }

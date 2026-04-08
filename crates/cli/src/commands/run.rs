@@ -23,20 +23,15 @@ use crab_core::permission::{PermissionMode, PermissionPolicy};
 use crab_tools::builtin::create_default_registry;
 
 /// Output format for non-interactive execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     /// Plain text — assistant response only (default).
+    #[default]
     Text,
     /// JSON — structured output with metadata.
     Json,
     /// Streaming — emit tokens as they arrive (NDJSON).
     Streaming,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 /// Configuration for non-interactive execution.
@@ -272,7 +267,7 @@ impl crab_tools::executor::PermissionHandler for PrintModePermissionHandler {
     }
 }
 
-/// Swap the session's event_rx with a fresh one, returning the old receiver.
+/// Swap the session's `event_rx` with a fresh one, returning the old receiver.
 fn take_event_rx(session: &mut AgentSession) -> tokio::sync::mpsc::Receiver<Event> {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     session.event_tx = tx;

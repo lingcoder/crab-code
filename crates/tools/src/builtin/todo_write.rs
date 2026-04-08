@@ -18,7 +18,7 @@ pub const TODO_WRITE_TOOL_NAME: &str = "TodoWrite";
 pub struct TodoItem {
     /// Description of the task.
     pub task: String,
-    /// Status: "pending", "in_progress", "completed", "cancelled".
+    /// Status: "pending", "`in_progress`", "completed", "cancelled".
     pub status: String,
 }
 

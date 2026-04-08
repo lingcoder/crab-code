@@ -1,7 +1,7 @@
 //! IDE bridge and IPC layer for Crab Code.
 //!
 //! Provides communication protocols and transports for IDE extensions
-//! (VS Code, JetBrains, etc.) to interact with running Crab Code sessions.
+//! (VS Code, `JetBrains`, etc.) to interact with running Crab Code sessions.
 //!
 //! # Architecture
 //!

@@ -3,7 +3,7 @@
 //! Orchestrates TUI + agent session + query loop for the main `crab` command.
 //! This module provides the high-level entry point that wires together:
 //! - Configuration loading and merging (settings, env, CLI overrides)
-//! - LLM backend creation (Anthropic / OpenAI / Ollama / etc.)
+//! - LLM backend creation (Anthropic / `OpenAI` / Ollama / etc.)
 //! - Tool registry setup (built-in tools + MCP adapters)
 //! - TUI terminal UI (when the `tui` feature is enabled)
 //! - Fallback line-based REPL (when TUI is unavailable)

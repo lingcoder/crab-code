@@ -4,7 +4,7 @@
 //! testing, and interactive automation. Supports navigation, clicking,
 //! typing, screenshots, and closing the browser session.
 //!
-//! The tool communicates with a browser instance via the Chrome DevTools
+//! The tool communicates with a browser instance via the Chrome `DevTools`
 //! Protocol (CDP) or Playwright server.
 
 use crab_common::Result;
@@ -35,7 +35,7 @@ pub enum BrowserAction {
     Close,
 }
 
-/// Parsed input for the WebBrowser tool.
+/// Parsed input for the `WebBrowser` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebBrowserInput {
     /// The browser action to perform.
@@ -71,7 +71,7 @@ impl Tool for WebBrowserTool {
         WEB_BROWSER_TOOL_NAME
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Control a headless browser for web automation. Supports navigating to URLs, \
          clicking elements, typing text, taking screenshots, and closing the session."
     }

@@ -64,7 +64,7 @@ impl std::fmt::Display for StopReason {
 /// conds.increment_turn();
 /// assert_eq!(conds.should_stop(), Some(StopReason::MaxTurns(3)));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StopConditions {
     /// Maximum number of turns before stopping. `None` = unlimited.
     pub max_turns: Option<u32>,
@@ -84,15 +84,15 @@ impl StopConditions {
     /// 2. Token budget exceeded
     #[must_use]
     pub fn should_stop(&self) -> Option<StopReason> {
-        if let Some(max) = self.max_turns {
-            if self.current_turn >= max {
-                return Some(StopReason::MaxTurns(max));
-            }
+        if let Some(max) = self.max_turns
+            && self.current_turn >= max
+        {
+            return Some(StopReason::MaxTurns(max));
         }
-        if let Some(max) = self.max_tokens {
-            if self.tokens_used >= max {
-                return Some(StopReason::TokenBudgetExceeded);
-            }
+        if let Some(max) = self.max_tokens
+            && self.tokens_used >= max
+        {
+            return Some(StopReason::TokenBudgetExceeded);
         }
         None
     }
@@ -105,17 +105,6 @@ impl StopConditions {
     /// Record token usage from the latest turn.
     pub fn record_tokens(&mut self, tokens: u64) {
         self.tokens_used = self.tokens_used.saturating_add(tokens);
-    }
-}
-
-impl Default for StopConditions {
-    fn default() -> Self {
-        Self {
-            max_turns: None,
-            max_tokens: None,
-            current_turn: 0,
-            tokens_used: 0,
-        }
     }
 }
 

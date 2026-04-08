@@ -17,7 +17,7 @@ use serde_json::Value;
 pub struct Migration {
     /// Target version number after this migration runs.
     pub version: u32,
-    /// Human-readable name for logging (e.g. "add_model_field").
+    /// Human-readable name for logging (e.g. "`add_model_field`").
     pub name: &'static str,
     /// The migration function. Receives a mutable reference to the data
     /// and returns `Ok(())` on success or `Err(description)` on failure.

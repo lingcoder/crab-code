@@ -52,12 +52,12 @@ impl ChannelPermissions {
     ///
     /// Returns `true` if no rules match (default-allow) or if the tool
     /// matches an allow pattern without matching any deny pattern.
-    pub fn is_tool_allowed(&self, server: &str, tool: &str) -> bool {
+    pub fn is_tool_allowed(&self, _server: &str, _tool: &str) -> bool {
         todo!()
     }
 
     /// Check whether a resource access is allowed for the given server.
-    pub fn is_resource_allowed(&self, server: &str, resource: &str) -> bool {
+    pub fn is_resource_allowed(&self, _server: &str, _resource: &str) -> bool {
         todo!()
     }
 

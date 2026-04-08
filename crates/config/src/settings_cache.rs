@@ -59,7 +59,7 @@ impl std::fmt::Debug for SettingsCache {
         f.debug_struct("SettingsCache")
             .field("project_dir", &self.project_dir)
             .field("is_loaded", &self.is_loaded())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

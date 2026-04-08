@@ -21,7 +21,7 @@ pub struct PermissionExplanation {
     /// The specific rule that matched, if any (formatted as a string).
     pub matched_rule: Option<String>,
     /// Optional suggestion for the user (e.g. "Add 'Bash(command:git*)'
-    /// to allowed_tools to auto-approve git commands").
+    /// to `allowed_tools` to auto-approve git commands").
     pub suggestion: Option<String>,
 }
 

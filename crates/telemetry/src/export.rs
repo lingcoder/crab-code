@@ -77,7 +77,7 @@ impl LocalExporter {
     ///
     /// Returns an error if the output directory cannot be created or the
     /// file cannot be written.
-    pub fn export_spans(&self, spans: &[SpanRecord]) -> crab_common::Result<()> {
+    pub fn export_spans(&self, _spans: &[SpanRecord]) -> crab_common::Result<()> {
         todo!()
     }
 
@@ -86,7 +86,7 @@ impl LocalExporter {
     /// # Errors
     ///
     /// Returns an error if the file cannot be written.
-    pub fn export_metrics(&self, metrics: &[MetricRecord]) -> crab_common::Result<()> {
+    pub fn export_metrics(&self, _metrics: &[MetricRecord]) -> crab_common::Result<()> {
         todo!()
     }
 
@@ -101,7 +101,7 @@ impl LocalExporter {
     }
 
     /// Delete telemetry files older than the given number of days.
-    pub fn cleanup_older_than(&self, days: u32) -> crab_common::Result<u32> {
+    pub fn cleanup_older_than(&self, _days: u32) -> crab_common::Result<u32> {
         todo!()
     }
 }

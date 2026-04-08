@@ -71,7 +71,7 @@ impl ElicitationResponse {
 /// # Current implementation
 ///
 /// Returns `todo!()` — will be wired to the TUI prompt system.
-pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse {
+pub async fn handle_elicitation(_req: ElicitationRequest) -> ElicitationResponse {
     todo!()
 }
 
@@ -81,8 +81,8 @@ pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse 
 ///
 /// Returns an error message if validation fails.
 pub fn validate_response(
-    req: &ElicitationRequest,
-    resp: &ElicitationResponse,
+    _req: &ElicitationRequest,
+    _resp: &ElicitationResponse,
 ) -> Result<(), String> {
     todo!()
 }

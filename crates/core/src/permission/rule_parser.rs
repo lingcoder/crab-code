@@ -103,7 +103,7 @@ impl fmt::Display for RuleContent {
 
 /// A parsed bash command pattern for shell-specific rule matching.
 ///
-/// E.g. `"git *"` -> command=`"git"`, args_glob=`Some("*")`.
+/// E.g. `"git *"` -> command=`"git"`, `args_glob`=`Some("*")`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BashPattern {
     /// The base command (e.g. `"git"`, `"npm"`).
@@ -239,18 +239,15 @@ pub fn matches_rule(rule: &PermissionRule, tool_name: &str, args: &serde_json::V
 
     // Then check content constraint
     match &rule.content {
-        None => true,
-        Some(RuleContent::Any) => true,
+        None | Some(RuleContent::Any) => true,
         Some(RuleContent::Glob { key, pattern }) => args
             .get(key)
             .and_then(|v| v.as_str())
-            .map(|s| super::glob_match(pattern, s))
-            .unwrap_or(false),
+            .is_some_and(|s| super::glob_match(pattern, s)),
         Some(RuleContent::Exact { key, value }) => args
             .get(key)
             .and_then(|v| v.as_str())
-            .map(|s| s == value)
-            .unwrap_or(false),
+            .is_some_and(|s| s == value),
         Some(RuleContent::Regex { key, pattern }) => {
             // Strip optional surrounding slashes for convenience
             let pat = pattern
@@ -262,8 +259,7 @@ pub fn matches_rule(rule: &PermissionRule, tool_name: &str, args: &serde_json::V
             };
             args.get(key)
                 .and_then(|v| v.as_str())
-                .map(|s| re.is_match(s))
-                .unwrap_or(false)
+                .is_some_and(|s| re.is_match(s))
         }
     }
 }

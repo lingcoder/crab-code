@@ -5,6 +5,7 @@
 //! context window usage.
 
 /// Default threshold in characters above which results should be summarized.
+#[allow(dead_code)]
 const DEFAULT_THRESHOLD: usize = 8000;
 
 /// Check whether a tool result exceeds the given threshold and should be summarized.

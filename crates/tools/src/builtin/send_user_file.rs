@@ -16,7 +16,7 @@ pub const SEND_USER_FILE_TOOL_NAME: &str = "SendUserFile";
 
 // ── Input types ───────────────────────────────────────────────────────
 
-/// Parsed input for the SendUserFile tool.
+/// Parsed input for the `SendUserFile` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendUserFileInput {
     /// Absolute or workspace-relative path to the file to send.
@@ -44,7 +44,7 @@ impl Tool for SendUserFileTool {
         SEND_USER_FILE_TOOL_NAME
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Send a file to the user for download or preview. Provide the file path \
          and an optional description. The file must exist in the workspace."
     }

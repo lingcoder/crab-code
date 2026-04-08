@@ -40,7 +40,7 @@ impl std::error::Error for ValidationError {}
 /// - `hooks` entries have valid trigger types
 ///
 /// Returns an empty `Vec` if the settings are valid.
-pub fn validate_settings(settings: &serde_json::Value) -> Vec<ValidationError> {
+pub fn validate_settings(_settings: &serde_json::Value) -> Vec<ValidationError> {
     todo!()
 }
 
@@ -52,7 +52,7 @@ pub fn validate_settings(settings: &serde_json::Value) -> Vec<ValidationError> {
 /// # Errors
 ///
 /// Returns `ValidationError` if the rule is syntactically invalid.
-pub fn validate_permission_rule(rule: &str) -> Result<(), ValidationError> {
+pub fn validate_permission_rule(_rule: &str) -> Result<(), ValidationError> {
     todo!()
 }
 
@@ -61,8 +61,8 @@ pub fn validate_permission_rule(rule: &str) -> Result<(), ValidationError> {
 /// Checks that required fields (`command` for stdio, `url` for SSE/WS) are present
 /// and have correct types.
 pub fn validate_mcp_server_config(
-    server_name: &str,
-    config: &serde_json::Value,
+    _server_name: &str,
+    _config: &serde_json::Value,
 ) -> Vec<ValidationError> {
     todo!()
 }
@@ -70,7 +70,7 @@ pub fn validate_mcp_server_config(
 /// Validate a hook configuration entry.
 ///
 /// Checks that the trigger type is known and the command is non-empty.
-pub fn validate_hook_entry(entry: &serde_json::Value) -> Vec<ValidationError> {
+pub fn validate_hook_entry(_entry: &serde_json::Value) -> Vec<ValidationError> {
     todo!()
 }
 

@@ -1,7 +1,7 @@
 //! Tool and resource name normalization for cross-server consistency.
 //!
 //! Different MCP servers may use varying naming conventions for their
-//! tools and resources (camelCase, snake_case, kebab-case, namespaced).
+//! tools and resources (camelCase, `snake_case`, kebab-case, namespaced).
 //! This module normalizes names to a canonical form so that tool lookups,
 //! permission rules, and logging are consistent.
 

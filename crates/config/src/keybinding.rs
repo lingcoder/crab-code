@@ -233,7 +233,7 @@ impl Chord {
 ///
 /// Returns `ParseError` if the input is empty, contains unknown modifiers,
 /// or has no recognizable key component.
-pub fn parse_keystroke(input: &str) -> Result<Keystroke, ParseError> {
+pub fn parse_keystroke(_input: &str) -> Result<Keystroke, ParseError> {
     todo!()
 }
 
@@ -242,7 +242,7 @@ pub fn parse_keystroke(input: &str) -> Result<Keystroke, ParseError> {
 /// # Errors
 ///
 /// Returns `ParseError` if any keystroke in the sequence is invalid.
-pub fn parse_chord(input: &str) -> Result<Chord, ParseError> {
+pub fn parse_chord(_input: &str) -> Result<Chord, ParseError> {
     todo!()
 }
 
@@ -290,7 +290,7 @@ impl KeybindingResolver {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or contains invalid JSON.
-    pub fn load_user_bindings(path: &Path) -> Result<Self, crab_common::Error> {
+    pub fn load_user_bindings(_path: &Path) -> Result<Self, crab_common::Error> {
         todo!()
     }
 
@@ -299,22 +299,31 @@ impl KeybindingResolver {
     /// Checks context-specific bindings first, then falls back to `Global`.
     /// Only matches single-keystroke chords; use `resolve_chord` for
     /// multi-keystroke sequences.
-    pub fn resolve(&self, ctx: KeybindingContext, key: &Keystroke) -> Option<KeybindingAction> {
+    pub fn resolve(&self, _ctx: KeybindingContext, _key: &Keystroke) -> Option<KeybindingAction> {
         todo!()
     }
 
     /// Resolve a full chord in the given context.
-    pub fn resolve_chord(&self, ctx: KeybindingContext, chord: &Chord) -> Option<KeybindingAction> {
+    pub fn resolve_chord(
+        &self,
+        _ctx: KeybindingContext,
+        _chord: &Chord,
+    ) -> Option<KeybindingAction> {
         todo!()
     }
 
     /// Return all bindings for a given context (including global fallbacks).
-    pub fn bindings_for_context(&self, ctx: KeybindingContext) -> Vec<&Binding> {
+    pub fn bindings_for_context(&self, _ctx: KeybindingContext) -> Vec<&Binding> {
         todo!()
     }
 
     /// Register or override a binding.
-    pub fn set_binding(&mut self, ctx: KeybindingContext, chord: Chord, action: KeybindingAction) {
+    pub fn set_binding(
+        &mut self,
+        _ctx: KeybindingContext,
+        _chord: Chord,
+        _action: KeybindingAction,
+    ) {
         todo!()
     }
 }
@@ -360,7 +369,7 @@ fn default_context() -> KeybindingContext {
 /// # Errors
 ///
 /// Returns `ParseError` if the chord is invalid.
-pub fn validate_config_entry(entry: &KeybindingConfigEntry) -> Result<(), ParseError> {
+pub fn validate_config_entry(_entry: &KeybindingConfigEntry) -> Result<(), ParseError> {
     todo!()
 }
 

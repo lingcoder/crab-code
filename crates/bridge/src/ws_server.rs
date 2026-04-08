@@ -87,6 +87,7 @@ impl WsServer {
 }
 
 /// Handle a single WebSocket connection.
+#[allow(dead_code)]
 async fn handle_connection(
     _conn_id: ConnectionId,
     _addr: SocketAddr,

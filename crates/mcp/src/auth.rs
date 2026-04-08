@@ -1,9 +1,9 @@
-//! MCP server authentication: OAuth2, API keys, token refresh.
+//! MCP server authentication: `OAuth2`, API keys, token refresh.
 //!
 //! Supports multiple authentication methods for MCP server connections:
 //! - No auth (default)
 //! - Static API key (passed as header or query parameter)
-//! - OAuth2 authorization code flow with PKCE and token refresh
+//! - `OAuth2` authorization code flow with PKCE and token refresh
 //!
 //! Gated behind the `mcp_auth` feature flag in settings.
 
@@ -14,21 +14,16 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Authentication method for an MCP server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpAuthMethod {
     /// No authentication required.
+    #[default]
     None,
     /// Static API key, sent as a header or query parameter.
     ApiKey(ApiKeyConfig),
-    /// OAuth2 authorization code flow.
+    /// `OAuth2` authorization code flow.
     OAuth2(OAuthConfig),
-}
-
-impl Default for McpAuthMethod {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Configuration for API key authentication.
@@ -52,12 +47,12 @@ fn default_header_name() -> String {
     "Authorization".into()
 }
 
-/// Configuration for OAuth2 authorization code flow.
+/// Configuration for `OAuth2` authorization code flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthConfig {
-    /// OAuth2 client ID.
+    /// `OAuth2` client ID.
     pub client_id: String,
-    /// OAuth2 client secret (optional for public clients).
+    /// `OAuth2` client secret (optional for public clients).
     pub client_secret: Option<String>,
     /// Authorization endpoint URL.
     pub auth_url: String,
@@ -84,11 +79,11 @@ fn default_redirect_uri() -> String {
 pub struct AuthToken {
     /// The bearer or API key token value.
     pub access_token: String,
-    /// Token type (e.g., "Bearer", "ApiKey").
+    /// Token type (e.g., "Bearer", "`ApiKey`").
     pub token_type: String,
     /// Expiry timestamp (seconds since epoch), if known.
     pub expires_at: Option<u64>,
-    /// Refresh token, if available (OAuth2 flows).
+    /// Refresh token, if available (`OAuth2` flows).
     pub refresh_token: Option<String>,
 }
 
@@ -130,8 +125,8 @@ impl McpAuthManager {
     /// error, network failure, etc.).
     pub async fn authenticate(
         &mut self,
-        server_name: &str,
-        method: &McpAuthMethod,
+        _server_name: &str,
+        _method: &McpAuthMethod,
     ) -> crab_common::Result<AuthToken> {
         todo!()
     }
@@ -144,14 +139,14 @@ impl McpAuthManager {
     /// request fails.
     pub async fn refresh_token(
         &mut self,
-        server_name: &str,
-        token: &AuthToken,
+        _server_name: &str,
+        _token: &AuthToken,
     ) -> crab_common::Result<AuthToken> {
         todo!()
     }
 
     /// Get the cached token for a server, if one exists and is not expired.
-    pub fn get_valid_token(&self, server_name: &str) -> Option<&AuthToken> {
+    pub fn get_valid_token(&self, _server_name: &str) -> Option<&AuthToken> {
         todo!()
     }
 

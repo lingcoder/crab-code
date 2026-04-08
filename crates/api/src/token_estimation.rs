@@ -2,7 +2,7 @@
 //!
 //! Uses heuristic rules (word splitting, punctuation counting) to provide
 //! a fast, good-enough estimate for context window management and cost
-//! tracking. Accuracy is ~85-90% for English text compared to cl100k_base.
+//! tracking. Accuracy is ~85-90% for English text compared to `cl100k_base`.
 
 use crab_core::message::Message;
 
@@ -17,14 +17,14 @@ pub fn estimate_tokens(text: &str) -> usize {
     // Heuristic: ~4 chars per token for English, ~2 chars per token for CJK/code
     let char_count = text.len();
     // Rough approximation: 1 token per 4 bytes, minimum 1
-    (char_count + 3) / 4
+    char_count.div_ceil(4)
 }
 
 /// Estimate the total token count across a slice of messages.
 ///
 /// Accounts for message framing overhead (role tags, content block wrappers)
 /// in addition to the raw text content.
-pub fn estimate_message_tokens(messages: &[Message]) -> usize {
+pub fn estimate_message_tokens(_messages: &[Message]) -> usize {
     todo!()
 }
 
@@ -32,7 +32,7 @@ pub fn estimate_message_tokens(messages: &[Message]) -> usize {
 ///
 /// JSON tends to be more token-dense than prose due to braces, quotes, and
 /// key names.
-pub fn estimate_json_tokens(value: &serde_json::Value) -> usize {
+pub fn estimate_json_tokens(_value: &serde_json::Value) -> usize {
     todo!()
 }
 

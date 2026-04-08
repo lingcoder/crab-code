@@ -36,6 +36,7 @@ pub struct SettingsChange {
 ///     println!("source {} changed keys: {:?}", change.source, change.changed_keys);
 /// }
 /// ```
+#[allow(dead_code)]
 pub struct ChangeDetector {
     /// Last-known fingerprint per source name.
     known_hashes: HashMap<String, u64>,

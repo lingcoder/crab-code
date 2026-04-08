@@ -46,7 +46,7 @@ impl Tool for WorkflowTool {
         WORKFLOW_TOOL_NAME
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Execute a predefined multi-step workflow by name. Workflows combine \
          multiple tool calls into a single high-level operation. Pass optional \
          arguments to customize behavior."

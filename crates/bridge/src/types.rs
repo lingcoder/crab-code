@@ -42,7 +42,7 @@ pub enum ConnectionState {
 pub enum ClientType {
     /// VS Code extension.
     VsCode,
-    /// JetBrains IDE plugin.
+    /// `JetBrains` IDE plugin.
     JetBrains,
     /// Generic editor via LSP.
     Lsp,

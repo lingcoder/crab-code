@@ -54,7 +54,7 @@ impl Tool for MonitorTool {
         MONITOR_TOOL_NAME
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Watch a file/directory for changes or monitor a process. Returns when \
          a change is detected, the process exits, or the timeout expires. \
          At least one of path or process_name must be provided."

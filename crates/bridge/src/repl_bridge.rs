@@ -90,7 +90,7 @@ impl ReplBridge {
     }
 
     /// Broadcast a notification to all connected clients.
-    pub fn broadcast(&self, notification: BridgeNotification) -> crab_common::Result<()> {
+    pub fn broadcast(&self, notification: &BridgeNotification) -> crab_common::Result<()> {
         let _ = notification;
         todo!("ReplBridge::broadcast — send notification via broadcast channel")
     }

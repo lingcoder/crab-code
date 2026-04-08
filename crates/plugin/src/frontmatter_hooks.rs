@@ -11,8 +11,9 @@ use super::hook_registry::HookRegistry;
 // ─── Frontmatter hook definition ───────────────────────────────────────
 
 /// A hook definition parsed from a skill file's YAML frontmatter.
+#[allow(dead_code)]
 struct FrontmatterHookDef {
-    /// The event this hook responds to (e.g. "pre_tool_use", "session_start").
+    /// The event this hook responds to (e.g. `pre_tool_use`, `session_start`).
     event: String,
     /// Shell command to execute (mutually exclusive with `prompt`).
     command: Option<String>,
@@ -57,6 +58,7 @@ pub fn register_frontmatter_hooks(
 ///
 /// Extracts an array of hook definitions from the JSON representation of
 /// the frontmatter. Returns an empty vec if no `hooks` key is present.
+#[allow(dead_code)]
 fn parse_hooks_section(_yaml: &serde_json::Value) -> Vec<FrontmatterHookDef> {
     todo!("parse_hooks_section: extract hooks array from YAML value and map to FrontmatterHookDef")
 }

@@ -1,4 +1,11 @@
+#[allow(dead_code, clippy::doc_markdown)]
 mod commands;
+#[allow(
+    dead_code,
+    clippy::let_unit_value,
+    clippy::ignored_unit_patterns,
+    clippy::map_unwrap_or
+)]
 mod setup;
 
 use std::fmt;

@@ -64,6 +64,7 @@ pub fn detect_shadowed_rules(rules: &[PermissionRule]) -> Vec<ShadowedRule> {
 ///
 /// A rule `a` shadows `b` if every tool invocation matched by `b` would
 /// also be matched by `a`.
+#[allow(dead_code)]
 fn rule_shadows(a: &PermissionRule, b: &PermissionRule) -> bool {
     todo!("Check if rule '{}' shadows rule '{}'", a, b)
 }
