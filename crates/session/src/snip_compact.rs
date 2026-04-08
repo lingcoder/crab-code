@@ -11,7 +11,7 @@
 //! `snip_compact` is a cheaper alternative that simply truncates the output
 //! and inserts a "[snipped]" marker — no LLM call required.
 
-use crab_core::message::Message;
+use crab_core::message::{ContentBlock, Message};
 
 // ─── Configuration ─────────────────────────────────────────────────────
 
@@ -48,15 +48,30 @@ impl SnipConfig {
 /// with a snip marker.
 ///
 /// Returns the number of tool results that were snipped.
-///
-/// # Arguments
-///
-/// * `messages` — Mutable slice of conversation messages to scan.
-/// * `config` — Snip configuration (threshold and marker).
-pub fn snip_large_outputs(_messages: &mut [Message], _config: &SnipConfig) -> usize {
-    todo!(
-        "snip_large_outputs: iterate messages, find ToolResult blocks exceeding max_result_chars, replace with snip_marker"
-    )
+pub fn snip_large_outputs(messages: &mut [Message], config: &SnipConfig) -> usize {
+    let mut snipped_count = 0;
+
+    for message in messages.iter_mut() {
+        for block in &mut message.content {
+            if let ContentBlock::ToolResult {
+                content, is_error, ..
+            } = block
+            {
+                // Never snip error results — they're important for debugging
+                if *is_error {
+                    continue;
+                }
+
+                if content.len() > config.max_result_chars {
+                    let marker = config.format_marker(content.len());
+                    *content = marker;
+                    snipped_count += 1;
+                }
+            }
+        }
+    }
+
+    snipped_count
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────
@@ -64,6 +79,7 @@ pub fn snip_large_outputs(_messages: &mut [Message], _config: &SnipConfig) -> us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crab_core::message::Role;
 
     #[test]
     fn default_config_values() {
@@ -87,5 +103,124 @@ mod tests {
             snip_marker: "SNIPPED({n})".into(),
         };
         assert_eq!(config.format_marker(12_345), "SNIPPED(12345)");
+    }
+
+    #[test]
+    fn snip_large_tool_result() {
+        let config = SnipConfig {
+            max_result_chars: 10,
+            snip_marker: "[snipped {n}]".into(),
+        };
+
+        let large_content = "a".repeat(20);
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::tool_result("id1", large_content, false)],
+        }];
+
+        let count = snip_large_outputs(&mut messages, &config);
+        assert_eq!(count, 1);
+
+        if let ContentBlock::ToolResult { content, .. } = &messages[0].content[0] {
+            assert!(content.contains("snipped"));
+            assert!(content.contains("20"));
+        } else {
+            panic!("expected ToolResult");
+        }
+    }
+
+    #[test]
+    fn does_not_snip_small_result() {
+        let config = SnipConfig {
+            max_result_chars: 100,
+            snip_marker: "[snipped {n}]".into(),
+        };
+
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::tool_result("id1", "short output", false)],
+        }];
+
+        let count = snip_large_outputs(&mut messages, &config);
+        assert_eq!(count, 0);
+
+        if let ContentBlock::ToolResult { content, .. } = &messages[0].content[0] {
+            assert_eq!(content, "short output");
+        }
+    }
+
+    #[test]
+    fn does_not_snip_error_results() {
+        let config = SnipConfig {
+            max_result_chars: 5,
+            snip_marker: "[snipped {n}]".into(),
+        };
+
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::tool_result(
+                "id1",
+                "this is a long error message that should be preserved",
+                true,
+            )],
+        }];
+
+        let count = snip_large_outputs(&mut messages, &config);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn snip_multiple_results() {
+        let config = SnipConfig {
+            max_result_chars: 5,
+            snip_marker: "[snipped {n}]".into(),
+        };
+
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::tool_result("id1", "long output here", false)],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::tool_result("id2", "ok", false)],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::tool_result(
+                    "id3",
+                    "another long output",
+                    false,
+                )],
+            },
+        ];
+
+        let count = snip_large_outputs(&mut messages, &config);
+        assert_eq!(count, 2); // id1 and id3 snipped, id2 preserved
+    }
+
+    #[test]
+    fn snip_skips_text_blocks() {
+        let config = SnipConfig {
+            max_result_chars: 5,
+            snip_marker: "[snipped {n}]".into(),
+        };
+
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::text(
+                "this is a long text block that should not be snipped",
+            )],
+        }];
+
+        let count = snip_large_outputs(&mut messages, &config);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn empty_messages_returns_zero() {
+        let config = SnipConfig::default();
+        let mut messages: Vec<Message> = vec![];
+        assert_eq!(snip_large_outputs(&mut messages, &config), 0);
     }
 }
