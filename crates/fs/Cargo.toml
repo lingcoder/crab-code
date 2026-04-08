@@ -18,6 +18,9 @@ similar.workspace = true
 toml.workspace = true
 fd-lock.workspace = true
 regex.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

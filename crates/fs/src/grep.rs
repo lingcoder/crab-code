@@ -1,10 +1,15 @@
-//! Content search using regex pattern matching.
+//! Content search using the ripgrep crate family.
 //!
-//! Uses [`regex`] for pattern compilation and [`ignore`] for directory
-//! traversal that respects `.gitignore` rules. Binary files are silently
-//! skipped.
+//! Uses [`grep_regex`] for pattern compilation, [`grep_searcher`] for efficient
+//! line-oriented searching (with binary detection and streaming I/O), and
+//! [`ignore`] for directory traversal that respects `.gitignore` rules.
 
 use std::path::{Path, PathBuf};
+
+use grep_matcher::Matcher;
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::sinks::UTF8;
+use grep_searcher::{BinaryDetection, SearcherBuilder};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,14 +55,17 @@ pub struct GrepOptions {
 
 /// Search file contents by regex pattern.
 ///
+/// Uses the ripgrep crate family (`grep-regex`, `grep-searcher`, `ignore`)
+/// for efficient, streaming search with built-in binary detection.
+///
 /// # Errors
 ///
 /// - Invalid regex pattern.
 /// - `path` does not exist or is inaccessible.
 pub fn search(opts: &GrepOptions) -> crab_common::Result<Vec<GrepMatch>> {
-    let re = regex::RegexBuilder::new(&opts.pattern)
+    let matcher = RegexMatcherBuilder::new()
         .case_insensitive(opts.case_insensitive)
-        .build()
+        .build(&opts.pattern)
         .map_err(|e| crab_common::Error::Other(format!("invalid regex: {e}")))?;
 
     let file_glob = if let Some(ref glob_pat) = opts.file_glob {
@@ -71,25 +79,23 @@ pub fn search(opts: &GrepOptions) -> crab_common::Result<Vec<GrepMatch>> {
         None
     };
 
-    let mut matches = Vec::new();
     let max = if opts.max_results == 0 {
         usize::MAX
     } else {
         opts.max_results
     };
 
+    let mut all_matches = Vec::new();
+
     if opts.path.is_file() {
-        // Single file search
-        if let Ok(file_matches) = search_file(&opts.path, &re, opts.context_lines) {
-            for m in file_matches {
-                if matches.len() >= max {
-                    break;
-                }
-                matches.push(m);
-            }
-        }
+        search_file_grep(
+            &opts.path,
+            &matcher,
+            opts.context_lines,
+            max,
+            &mut all_matches,
+        )?;
     } else {
-        // Directory walk
         let mut walker = ignore::WalkBuilder::new(&opts.path);
         walker
             .hidden(true)
@@ -99,7 +105,7 @@ pub fn search(opts: &GrepOptions) -> crab_common::Result<Vec<GrepMatch>> {
             .parents(opts.respect_gitignore);
 
         for entry in walker.build().flatten() {
-            if matches.len() >= max {
+            if all_matches.len() >= max {
                 break;
             }
 
@@ -119,61 +125,122 @@ pub fn search(opts: &GrepOptions) -> crab_common::Result<Vec<GrepMatch>> {
                 }
             }
 
-            if let Ok(file_matches) = search_file(path, &re, opts.context_lines) {
-                for m in file_matches {
-                    if matches.len() >= max {
-                        break;
-                    }
-                    matches.push(m);
-                }
-            }
+            let remaining = max - all_matches.len();
+            search_file_grep(
+                path,
+                &matcher,
+                opts.context_lines,
+                remaining,
+                &mut all_matches,
+            )?;
         }
     }
 
-    Ok(matches)
+    Ok(all_matches)
 }
 
-/// Search a single file and return all matches.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be read.
-pub(crate) fn search_file(
+// ---------------------------------------------------------------------------
+// Internal: file-level search using grep-searcher
+// ---------------------------------------------------------------------------
+
+/// Search a single file using `grep-searcher` with binary detection.
+fn search_file_grep(
     path: &Path,
-    regex: &regex::Regex,
+    matcher: &grep_regex::RegexMatcher,
     context_lines: usize,
-) -> crab_common::Result<Vec<GrepMatch>> {
+    max_matches: usize,
+    results: &mut Vec<GrepMatch>,
+) -> crab_common::Result<()> {
+    // When context is requested, we need a two-pass approach:
+    // first collect all matching line numbers, then re-read to extract context.
+    // For the no-context case, we stream directly.
+    if context_lines > 0 {
+        search_file_with_context(path, matcher, context_lines, max_matches, results)
+    } else {
+        search_file_no_context(path, matcher, max_matches, results)
+    }
+}
+
+/// Streaming search without context lines — uses `grep_searcher::Searcher`.
+fn search_file_no_context(
+    path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    max_matches: usize,
+    results: &mut Vec<GrepMatch>,
+) -> crab_common::Result<()> {
+    let mut searcher = SearcherBuilder::new()
+        .binary_detection(BinaryDetection::quit(0))
+        .line_number(true)
+        .build();
+
+    let path_buf = path.to_path_buf();
+
+    // grep_searcher errors are non-fatal (binary file quit, encoding, etc.)
+    let _ = searcher.search_path(
+        matcher,
+        path,
+        UTF8(|line_number, line_content| {
+            if results.len() >= max_matches {
+                return Ok(false); // stop searching
+            }
+            results.push(GrepMatch {
+                path: path_buf.clone(),
+                line_number: line_number as usize,
+                line_content: line_content.trim_end_matches('\n').to_string(),
+                context_before: Vec::new(),
+                context_after: Vec::new(),
+            });
+            Ok(true)
+        }),
+    );
+
+    Ok(())
+}
+
+/// Search with context lines. Reads the file to collect lines, then matches.
+///
+/// `grep-searcher` does support context via `SearcherBuilder::after_context()`
+/// and `before_context()`, but the sink API for context is more complex
+/// (`SinkContext`). We use a simpler approach: collect matches first, then
+/// extract context from the line buffer.
+fn search_file_with_context(
+    path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    context_lines: usize,
+    max_matches: usize,
+    results: &mut Vec<GrepMatch>,
+) -> crab_common::Result<()> {
+    // Read the file — grep-searcher handles binary detection
     let content = std::fs::read(path)?;
 
-    // Skip binary files (contain NUL bytes)
+    // Quick binary check (same heuristic as grep-searcher)
     if content.contains(&0) {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     let Ok(text) = String::from_utf8(content) else {
-        return Ok(Vec::new()); // Non-UTF8, skip
+        return Ok(());
     };
 
     let lines: Vec<&str> = text.lines().collect();
-    let mut matches = Vec::new();
 
     for (i, line) in lines.iter().enumerate() {
-        if regex.is_match(line) {
-            let context_before: Vec<String> = if context_lines > 0 {
+        if results.len() >= max_matches {
+            break;
+        }
+
+        if matcher.is_match(line.as_bytes()).unwrap_or(false) {
+            let context_before: Vec<String> = {
                 let start = i.saturating_sub(context_lines);
                 lines[start..i].iter().map(|&s| s.to_string()).collect()
-            } else {
-                Vec::new()
             };
 
-            let context_after: Vec<String> = if context_lines > 0 {
+            let context_after: Vec<String> = {
                 let end = (i + 1 + context_lines).min(lines.len());
                 lines[i + 1..end].iter().map(|&s| s.to_string()).collect()
-            } else {
-                Vec::new()
             };
 
-            matches.push(GrepMatch {
+            results.push(GrepMatch {
                 path: path.to_path_buf(),
                 line_number: i + 1, // 1-based
                 line_content: (*line).to_string(),
@@ -183,7 +250,7 @@ pub(crate) fn search_file(
         }
     }
 
-    Ok(matches)
+    Ok(())
 }
 
 #[cfg(test)]

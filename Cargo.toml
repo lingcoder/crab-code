@@ -56,6 +56,9 @@ notify = "8"
 ignore = "0.4"
 fd-lock = "4.0"
 dunce = "1"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
 
 # ─── 代码渲染 ───
 syntect = "5"
