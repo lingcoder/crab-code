@@ -646,15 +646,15 @@ fn render_header(model_name: &str, working_dir: &str, area: Rect, buf: &mut Buff
     }
 
     let fg = Style::default().fg(CRAB_COLOR);
-    let eye = Style::default().fg(Color::White);
     let fg_bg = Style::default().fg(CRAB_COLOR).bg(CRAB_BG);
 
     // Crab art — 3 rows: claws + eyes on top, shell in middle, legs below
+    // All elements use CRAB_COLOR (#DA7756) matching the project logo
     let art_lines: [Line<'_>; 3] = [
         // Row 1: claws and eyes
         Line::from(vec![
             Span::styled(" ╱▔╲", fg),
-            Span::styled(" ● ● ", eye),
+            Span::styled(" ● ● ", fg),
             Span::styled("╱▔╲ ", fg),
         ]),
         // Row 2: claws wrapping the shell
