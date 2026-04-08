@@ -91,7 +91,7 @@
 | **Development speed** | Fast, low learning curve | 2-3x slower, lifetime/ownership friction | Go wins |
 | **CLI ecosystem** | cobra is mature | clap is equally mature | Tie |
 | **TUI** | Charm (bubbletea) is excellent | ratatui is excellent | Tie |
-| **GUI extensibility** | Weak (fyne/gio are niche) | **Strong** (Tauri 2.0 desktop + mobile) | **Rust wins** |
+| **GUI extensibility** | Good (Wails WebView-based, fyne/gio native) | **Strong** (Tauri 2.0 desktop + mobile) | Slight Rust edge |
 | **WASM** | Go->WASM ~10MB+, poor performance | **First-class citizen**, small output, native perf | **Rust wins** |
 | **FFI/cross-language** | cgo has performance penalty | **Zero-overhead FFI**, native C ABI | **Rust wins** |
 | **AI/ML ecosystem** | Few bindings | candle, burn, ort (ONNX) | **Rust wins** |
