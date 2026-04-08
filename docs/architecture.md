@@ -161,13 +161,13 @@
 | # | Function | TypeScript Original | Rust Alternative | Docs |
 |---|----------|---------------------|------------------|------|
 | 15 | Glob | glob | globset | [docs.rs/globset](https://docs.rs/globset) |
-| 16 | Grep/search | ripgrep bindings | regex + ignore (ripgrep family) | [docs.rs/regex](https://docs.rs/regex) |
+| 16 | Grep/search | ripgrep bindings | regex + ignore | [docs.rs/regex](https://docs.rs/regex) |
 | 17 | Gitignore | -- | ignore | [docs.rs/ignore](https://docs.rs/ignore) |
 | 18 | File watching | chokidar | notify | [docs.rs/notify](https://docs.rs/notify) |
 | 19 | Diff | diff | similar | [docs.rs/similar](https://docs.rs/similar) |
 | 20 | File locking | proper-lockfile | fd-lock | [docs.rs/fd-lock](https://docs.rs/fd-lock) |
 
-> Note: #16 currently uses `regex` + `ignore` (both from the ripgrep project). For full ripgrep-compatible behavior (binary detection, encoding, context lines), consider upgrading to `grep-searcher` + `grep-regex` from the same project.
+> Note on #16: ripgrep is built from a family of crates by BurntSushi: `regex` (pattern engine), `ignore` (gitignore-aware directory walker), `grep-searcher` (binary detection + encoding + line matching), `grep-regex` (regex adapter). We currently use the lower-level `regex` + `ignore` directly. For full ripgrep-compatible behavior, upgrading to `grep-searcher` + `grep-regex` is a future option.
 
 ### 3.5 System / Process
 

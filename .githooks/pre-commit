@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-commit hook: enforces fmt + clippy before every commit.
+# Install: git config core.hooksPath .githooks
+set -e
+
+echo "==> Running cargo fmt --check..."
+cargo fmt --all --check || {
+    echo "ERROR: cargo fmt check failed. Run 'cargo fmt --all' to fix."
+    exit 1
+}
+
+echo "==> Running cargo clippy (warnings = errors)..."
+RUSTFLAGS="-Dwarnings" cargo clippy --workspace --quiet || {
+    echo "ERROR: clippy check failed. Fix all warnings before committing."
+    exit 1
+}
+
+echo "==> Pre-commit checks passed."
