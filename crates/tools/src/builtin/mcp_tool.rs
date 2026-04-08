@@ -296,6 +296,7 @@ mod tests {
             session_id: "test".into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: crab_core::permission::PermissionPolicy::default(),
+            ext: crab_core::tool::ToolContextExt::default(),
         };
 
         let output = adapter
@@ -339,6 +340,7 @@ mod tests {
             session_id: "test".into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: crab_core::permission::PermissionPolicy::default(),
+            ext: crab_core::tool::ToolContextExt::default(),
         };
 
         let output = adapter.execute(serde_json::json!({}), &ctx).await.unwrap();

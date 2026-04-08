@@ -164,6 +164,7 @@ mod tests {
             session_id: "test".into(),
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
+            ext: crab_core::tool::ToolContextExt::default(),
         }
     }
 

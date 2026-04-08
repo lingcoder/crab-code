@@ -408,6 +408,7 @@ mod tests {
             session_id: "sess_123".into(),
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
+            ext: crab_core::tool::ToolContextExt::default(),
         };
         assert_eq!(ctx.working_dir, std::path::Path::new("/tmp"));
         assert_eq!(ctx.permission_mode, PermissionMode::Default);

@@ -1,6 +1,7 @@
 //! App state machine and main event loop.
 
 use std::fmt::Write as _;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -39,6 +40,51 @@ pub enum AppState {
     Processing,
     /// Waiting for user to confirm a tool execution.
     Confirming,
+}
+
+/// Tracks whether the LLM is currently in a "thinking" phase (extended thinking / chain-of-thought).
+#[derive(Debug, Clone)]
+pub enum ThinkingState {
+    /// Not thinking.
+    Idle,
+    /// Currently thinking; tracks when thinking started.
+    Thinking { started_at: Instant },
+    /// Thinking finished; shows elapsed duration briefly before clearing.
+    ThoughtFor {
+        duration: Duration,
+        finished_at: Instant,
+    },
+}
+
+impl ThinkingState {
+    /// How long the "(thought for Ns)" label remains visible after thinking ends.
+    const DISPLAY_DURATION: Duration = Duration::from_secs(2);
+}
+
+/// The current prompt input mode — determines what the input area is used for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptInputMode {
+    /// Normal prompt input to the agent.
+    Prompt,
+    /// Bash / shell command input.
+    Bash,
+    /// Waiting for the user to accept or deny an orphaned permission request.
+    OrphanedPermission,
+    /// Displaying a task notification that needs acknowledgement.
+    TaskNotification,
+}
+
+impl PromptInputMode {
+    /// Short label for displaying in the input area indicator.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Bash => "bash",
+            Self::OrphanedPermission => "permission",
+            Self::TaskNotification => "task",
+        }
+    }
 }
 
 /// Action returned by the app's event handler to signal the outer loop.
@@ -106,6 +152,15 @@ pub struct App {
     pub output_styles: OutputStyles,
     /// Working directory (displayed in header).
     pub working_dir: String,
+    /// Current LLM thinking state (extended thinking / chain-of-thought).
+    pub thinking: ThinkingState,
+    /// Scroll anchor: when the user scrolls up, this holds the line index
+    /// where they anchored. `None` means following the tail (auto-scroll).
+    pub scroll_anchor: Option<usize>,
+    /// Number of new messages received while the user was scrolled up.
+    unseen_message_count: usize,
+    /// Current prompt input mode.
+    pub input_mode: PromptInputMode,
 }
 
 impl App {
@@ -136,6 +191,10 @@ impl App {
             context_collapse: ContextCollapse::new(Vec::new()),
             output_styles: OutputStyles::default_styles(),
             working_dir: String::new(),
+            thinking: ThinkingState::Idle,
+            scroll_anchor: None,
+            unseen_message_count: 0,
+            input_mode: PromptInputMode::Prompt,
         }
     }
 
@@ -164,6 +223,36 @@ impl App {
         self.autocomplete.set_cwd(cwd);
     }
 
+    /// Transition the thinking state.
+    ///
+    /// When `active` is `true`, enters `Thinking` with the current timestamp.
+    /// When `false`, transitions from `Thinking` to `ThoughtFor` so the elapsed
+    /// duration can be displayed briefly, or resets to `Idle` if not thinking.
+    pub fn set_thinking(&mut self, active: bool) {
+        if active {
+            self.thinking = ThinkingState::Thinking {
+                started_at: Instant::now(),
+            };
+        } else if let ThinkingState::Thinking { started_at } = self.thinking {
+            self.thinking = ThinkingState::ThoughtFor {
+                duration: started_at.elapsed(),
+                finished_at: Instant::now(),
+            };
+        } else {
+            self.thinking = ThinkingState::Idle;
+        }
+    }
+
+    /// Cycle to the next `PromptInputMode`.
+    pub fn cycle_input_mode(&mut self) {
+        self.input_mode = match self.input_mode {
+            PromptInputMode::Prompt => PromptInputMode::Bash,
+            PromptInputMode::Bash => PromptInputMode::Prompt,
+            // Non-cycleable modes stay put until explicitly cleared
+            other => other,
+        };
+    }
+
     /// Handle a TUI event and return an action for the outer loop.
     pub fn handle_event(&mut self, event: TuiEvent) -> AppAction {
         match event {
@@ -174,6 +263,12 @@ impl App {
             }
             TuiEvent::Tick => {
                 self.spinner.tick();
+                // Expire the "thought for Ns" display after the timeout
+                if let ThinkingState::ThoughtFor { finished_at, .. } = self.thinking
+                    && finished_at.elapsed() >= ThinkingState::DISPLAY_DURATION
+                {
+                    self.thinking = ThinkingState::Idle;
+                }
                 AppAction::None
             }
             TuiEvent::Resize { .. } => AppAction::None,
@@ -197,9 +292,6 @@ impl App {
                 Action::NewSession if self.state != AppState::Confirming => {
                     return AppAction::NewSession;
                 }
-                Action::NextSession | Action::PrevSession if self.state != AppState::Confirming => {
-                    return AppAction::None;
-                }
                 Action::ToggleSidebar => {
                     self.sidebar_visible = !self.sidebar_visible;
                     self.session_sidebar.visible = self.sidebar_visible;
@@ -207,10 +299,18 @@ impl App {
                 }
                 Action::ScrollUp if self.state != AppState::Confirming => {
                     self.content_scroll = self.content_scroll.saturating_add(10);
+                    // Set scroll anchor so we know user is scrolled up
+                    let total = self.content_buffer.lines().count();
+                    self.scroll_anchor = Some(total.saturating_sub(self.content_scroll));
                     return AppAction::None;
                 }
                 Action::ScrollDown if self.state != AppState::Confirming => {
                     self.content_scroll = self.content_scroll.saturating_sub(10);
+                    // Clear anchor when scrolled back to bottom
+                    if self.content_scroll == 0 {
+                        self.scroll_anchor = None;
+                        self.unseen_message_count = 0;
+                    }
                     return AppAction::None;
                 }
                 Action::ToggleFold if self.state != AppState::Confirming => {
@@ -240,6 +340,32 @@ impl App {
                 Action::SearchPrev if self.state != AppState::Confirming => {
                     self.search.prev_match();
                     self.scroll_to_search_match();
+                    return AppAction::None;
+                }
+                Action::CycleMode if self.state != AppState::Confirming => {
+                    self.cycle_input_mode();
+                    return AppAction::None;
+                }
+                Action::Redraw => {
+                    // Force redraw is handled by the outer loop re-rendering;
+                    // returning None triggers a repaint on the next frame.
+                    return AppAction::None;
+                }
+                // These actions are recognized but currently act as no-ops
+                // until the corresponding subsystems are wired up.
+                Action::NextSession
+                | Action::PrevSession
+                | Action::HistorySearch
+                | Action::ExternalEditor
+                | Action::Stash
+                | Action::ToggleTodos
+                | Action::ToggleTranscript
+                | Action::KillAgents
+                | Action::ModelPicker
+                | Action::ImagePaste
+                | Action::Undo
+                    if self.state != AppState::Confirming =>
+                {
                     return AppAction::None;
                 }
                 _ => {} // Fall through for non-matching states
@@ -297,6 +423,8 @@ impl App {
 
                 // Reset scroll to bottom on new input
                 self.content_scroll = 0;
+                self.scroll_anchor = None;
+                self.unseen_message_count = 0;
 
                 // ── Autocomplete popup is active ──
                 if self.autocomplete.is_active() {
@@ -425,8 +553,16 @@ impl App {
         use crab_core::event::Event;
         match event {
             Event::ContentDelta { delta, .. } => {
+                // Track unseen content when the user is scrolled up
+                if self.scroll_anchor.is_some() {
+                    // Count newlines in the delta as new "messages"
+                    let new_lines = delta.chars().filter(|&c| c == '\n').count();
+                    self.unseen_message_count =
+                        self.unseen_message_count.saturating_add(new_lines.max(1));
+                } else {
+                    self.content_scroll = 0; // auto-scroll on new content
+                }
                 self.content_buffer.push_str(&delta);
-                self.content_scroll = 0; // auto-scroll on new content
             }
             Event::MessageEnd { usage, .. } => {
                 self.spinner.stop();
@@ -585,17 +721,37 @@ impl App {
             buf,
         );
 
+        // Thinking state indicator (overlays into status area)
+        render_thinking_state(&self.thinking, layout.status, buf);
+
         // Status line / spinner
         Widget::render(&self.spinner, layout.status, buf);
 
         // Separator above input
         render_separator(layout.separator_top, buf);
 
-        // Input with ❯ prompt (no border box)
-        render_input_with_prompt(&self.input, layout.input, buf);
+        // Input with ❯ prompt and mode indicator (no border box)
+        render_input_with_prompt(&self.input, self.input_mode, layout.input, buf);
 
         // Separator below input
         render_separator(layout.separator_bottom, buf);
+
+        // Unseen message divider (when user is scrolled up and new content arrives)
+        if self.scroll_anchor.is_some() && self.unseen_message_count > 0 {
+            let divider_y = layout.content.y + layout.content.height.saturating_sub(2);
+            if divider_y > layout.content.y {
+                render_unseen_divider(
+                    self.unseen_message_count,
+                    Rect {
+                        x: layout.content.x,
+                        y: divider_y,
+                        width: layout.content.width,
+                        height: 1,
+                    },
+                    buf,
+                );
+            }
+        }
 
         // Search bar (overlays bottom of content when active)
         if self.search.is_active() {
@@ -758,30 +914,119 @@ fn render_separator(area: Rect, buf: &mut Buffer) {
     );
 }
 
-/// Render input with `❯` prompt — no border box (matches CC's flat style).
+/// Render the thinking state indicator.
+///
+/// When thinking is active, shows `"Thinking... (Ns)"` with elapsed time.
+/// After thinking finishes, shows `"(thought for Ns)"` for 2 seconds.
 #[allow(clippy::cast_possible_truncation)]
-fn render_input_with_prompt(input: &InputBox, area: Rect, buf: &mut Buffer) {
+fn render_thinking_state(thinking: &ThinkingState, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let text = match thinking {
+        ThinkingState::Idle => return,
+        ThinkingState::Thinking { started_at } => {
+            let elapsed = started_at.elapsed().as_secs();
+            format!("Thinking\u{2026} ({elapsed}s)")
+        }
+        ThinkingState::ThoughtFor { duration, .. } => {
+            format!("(thought for {}s)", duration.as_secs())
+        }
+    };
+
+    let style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::ITALIC);
+    let line = Line::from(Span::styled(text, style));
+    Widget::render(line, area, buf);
+}
+
+/// Render the unseen message divider when the user is scrolled up.
+///
+/// Displays something like `"─── 5 new messages ───"` centered in the area.
+#[allow(clippy::cast_possible_truncation)]
+fn render_unseen_divider(count: usize, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let label = if count == 1 {
+        " 1 new message ".to_string()
+    } else {
+        format!(" {count} new messages ")
+    };
+
+    let total_width = area.width as usize;
+    let label_len = label.len();
+    let side = total_width.saturating_sub(label_len) / 2;
+    let left_dashes = "\u{2500}".repeat(side);
+    let right_dashes = "\u{2500}".repeat(total_width.saturating_sub(side + label_len));
+
+    let line = Line::from(vec![
+        Span::styled(&*left_dashes, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(&*right_dashes, Style::default().fg(Color::DarkGray)),
+    ]);
+    Widget::render(line, area, buf);
+}
+
+/// Render input with `❯` prompt and mode indicator — no border box (matches CC's flat style).
+#[allow(clippy::cast_possible_truncation)]
+fn render_input_with_prompt(input: &InputBox, mode: PromptInputMode, area: Rect, buf: &mut Buffer) {
     if area.height == 0 || area.width < 4 {
         Widget::render(input, area, buf);
         return;
     }
 
+    // Mode indicator label: shown only for non-default modes
+    let mode_prefix = match mode {
+        PromptInputMode::Prompt => String::new(),
+        other => format!("[{}] ", other.label()),
+    };
+    let prefix_width = mode_prefix.len() as u16;
+
+    // Mode indicator
+    if !mode_prefix.is_empty() {
+        let mode_span = Span::styled(
+            &mode_prefix,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mode_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: prefix_width.min(area.width),
+            height: 1,
+        };
+        Widget::render(Line::from(mode_span), mode_area, buf);
+    }
+
+    // Prompt chevron
+    let prompt_x = area.x + prefix_width;
     let prompt_span = Span::styled(
-        "❯ ",
+        "\u{276f} ",
         Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
     );
     let prompt_area = Rect {
-        x: area.x,
+        x: prompt_x,
         y: area.y,
-        width: 2,
+        width: 2.min(area.width.saturating_sub(prefix_width)),
         height: 1,
     };
     Widget::render(Line::from(prompt_span), prompt_area, buf);
 
+    let input_x = prompt_x + 2;
     let input_area = Rect {
-        x: area.x + 2,
+        x: input_x,
         y: area.y,
-        width: area.width.saturating_sub(2),
+        width: area.width.saturating_sub(prefix_width + 2),
         height: area.height,
     };
     Widget::render(input, input_area, buf);
@@ -976,6 +1221,9 @@ mod tests {
         assert_eq!(app.total_input_tokens, 0);
         assert_eq!(app.total_output_tokens, 0);
         assert_eq!(app.content_scroll, 0);
+        assert!(matches!(app.thinking, ThinkingState::Idle));
+        assert!(app.scroll_anchor.is_none());
+        assert_eq!(app.input_mode, PromptInputMode::Prompt);
     }
 
     #[test]
@@ -1609,5 +1857,236 @@ mod tests {
         // Typing a character should dismiss and fall through
         app.handle_event(key(KeyCode::Char('x')));
         assert!(!app.autocomplete.is_active());
+    }
+
+    // ── Thinking state tests ──
+
+    #[test]
+    fn set_thinking_active() {
+        let mut app = App::new("test");
+        app.set_thinking(true);
+        assert!(matches!(app.thinking, ThinkingState::Thinking { .. }));
+    }
+
+    #[test]
+    fn set_thinking_inactive_transitions_to_thought_for() {
+        let mut app = App::new("test");
+        app.set_thinking(true);
+        // Small delay to ensure elapsed > 0
+        app.set_thinking(false);
+        assert!(matches!(app.thinking, ThinkingState::ThoughtFor { .. }));
+    }
+
+    #[test]
+    fn set_thinking_inactive_when_idle_stays_idle() {
+        let mut app = App::new("test");
+        app.set_thinking(false);
+        assert!(matches!(app.thinking, ThinkingState::Idle));
+    }
+
+    #[test]
+    fn thought_for_expires_after_tick() {
+        let mut app = App::new("test");
+        // Manually set a ThoughtFor state that's already expired
+        app.thinking = ThinkingState::ThoughtFor {
+            duration: Duration::from_secs(3),
+            finished_at: Instant::now() - Duration::from_secs(3),
+        };
+        app.handle_event(TuiEvent::Tick);
+        assert!(matches!(app.thinking, ThinkingState::Idle));
+    }
+
+    #[test]
+    fn thought_for_persists_within_timeout() {
+        let mut app = App::new("test");
+        app.thinking = ThinkingState::ThoughtFor {
+            duration: Duration::from_secs(1),
+            finished_at: Instant::now(),
+        };
+        app.handle_event(TuiEvent::Tick);
+        assert!(matches!(app.thinking, ThinkingState::ThoughtFor { .. }));
+    }
+
+    // ── Prompt input mode tests ──
+
+    #[test]
+    fn prompt_input_mode_labels() {
+        assert_eq!(PromptInputMode::Prompt.label(), "prompt");
+        assert_eq!(PromptInputMode::Bash.label(), "bash");
+        assert_eq!(PromptInputMode::OrphanedPermission.label(), "permission");
+        assert_eq!(PromptInputMode::TaskNotification.label(), "task");
+    }
+
+    #[test]
+    fn cycle_input_mode_toggles() {
+        let mut app = App::new("test");
+        assert_eq!(app.input_mode, PromptInputMode::Prompt);
+        app.cycle_input_mode();
+        assert_eq!(app.input_mode, PromptInputMode::Bash);
+        app.cycle_input_mode();
+        assert_eq!(app.input_mode, PromptInputMode::Prompt);
+    }
+
+    #[test]
+    fn cycle_input_mode_noop_for_special_modes() {
+        let mut app = App::new("test");
+        app.input_mode = PromptInputMode::OrphanedPermission;
+        app.cycle_input_mode();
+        assert_eq!(app.input_mode, PromptInputMode::OrphanedPermission);
+
+        app.input_mode = PromptInputMode::TaskNotification;
+        app.cycle_input_mode();
+        assert_eq!(app.input_mode, PromptInputMode::TaskNotification);
+    }
+
+    // ── Scroll anchor / unseen message tests ──
+
+    #[test]
+    fn scroll_up_sets_anchor() {
+        let mut app = App::new("test");
+        app.content_buffer = (0..50)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::empty(),
+        )));
+        assert!(app.scroll_anchor.is_some());
+        assert_eq!(app.content_scroll, 10);
+    }
+
+    #[test]
+    fn scroll_back_to_bottom_clears_anchor() {
+        let mut app = App::new("test");
+        app.content_buffer = (0..50)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Scroll up
+        app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::empty(),
+        )));
+        assert!(app.scroll_anchor.is_some());
+
+        // Scroll back down
+        app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::empty(),
+        )));
+        assert!(app.scroll_anchor.is_none());
+        assert_eq!(app.unseen_message_count, 0);
+    }
+
+    #[test]
+    fn content_delta_tracks_unseen_when_scrolled() {
+        let mut app = App::new("test");
+        app.scroll_anchor = Some(10);
+        app.content_scroll = 10;
+
+        app.handle_event(TuiEvent::Agent(crab_core::event::Event::ContentDelta {
+            index: 0,
+            delta: "line1\nline2\n".into(),
+        }));
+
+        // Should count newlines (2) as unseen
+        assert!(app.unseen_message_count >= 2);
+        // Should NOT reset scroll
+        assert_eq!(app.content_scroll, 10);
+    }
+
+    #[test]
+    fn typing_resets_scroll_anchor() {
+        let mut app = App::new("test");
+        app.scroll_anchor = Some(10);
+        app.content_scroll = 10;
+        app.unseen_message_count = 5;
+        app.state = AppState::WaitingForInput;
+
+        app.handle_event(key(KeyCode::Char('a')));
+        assert!(app.scroll_anchor.is_none());
+        assert_eq!(app.unseen_message_count, 0);
+        assert_eq!(app.content_scroll, 0);
+    }
+
+    // ── Render tests for new features ──
+
+    #[test]
+    fn render_thinking_state_does_not_panic() {
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = Buffer::empty(area);
+
+        render_thinking_state(&ThinkingState::Idle, area, &mut buf);
+        render_thinking_state(
+            &ThinkingState::Thinking {
+                started_at: Instant::now(),
+            },
+            area,
+            &mut buf,
+        );
+        render_thinking_state(
+            &ThinkingState::ThoughtFor {
+                duration: Duration::from_secs(5),
+                finished_at: Instant::now(),
+            },
+            area,
+            &mut buf,
+        );
+    }
+
+    #[test]
+    fn render_unseen_divider_does_not_panic() {
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = Buffer::empty(area);
+        render_unseen_divider(3, area, &mut buf);
+
+        let text: String = (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        assert!(text.contains("3 new messages"));
+    }
+
+    #[test]
+    fn render_unseen_divider_singular() {
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = Buffer::empty(area);
+        render_unseen_divider(1, area, &mut buf);
+
+        let text: String = (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        assert!(text.contains("1 new message"));
+        // Should NOT say "messages" (plural)
+        assert!(!text.contains("messages"));
+    }
+
+    #[test]
+    fn render_input_with_bash_mode() {
+        let input = InputBox::new();
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        render_input_with_prompt(&input, PromptInputMode::Bash, area, &mut buf);
+
+        let text: String = (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        assert!(text.contains("[bash]"));
+    }
+
+    #[test]
+    fn render_input_with_prompt_mode_no_prefix() {
+        let input = InputBox::new();
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        render_input_with_prompt(&input, PromptInputMode::Prompt, area, &mut buf);
+
+        let text: String = (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        // Should NOT contain a mode prefix
+        assert!(!text.contains("[prompt]"));
     }
 }

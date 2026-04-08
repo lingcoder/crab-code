@@ -172,6 +172,7 @@ async fn agent_tool_produces_spawn_request() {
         session_id: "e2e_test".into(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
+        ext: crab_core::tool::ToolContextExt::default(),
     };
 
     let input = serde_json::json!({
@@ -291,6 +292,7 @@ async fn tool_chain_write_then_edit() {
         session_id: "chain_test".into(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
+        ext: crab_core::tool::ToolContextExt::default(),
     };
 
     // Step 1: Write a file
@@ -337,6 +339,7 @@ async fn tool_chain_glob_then_read() {
         session_id: "glob_test".into(),
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
+        ext: crab_core::tool::ToolContextExt::default(),
     };
 
     // Step 1: Glob for .rs files
@@ -379,6 +382,7 @@ async fn permission_denied_tool_blocked() {
             allowed_tools: Vec::new(),
             denied_tools: vec![BASH_TOOL_NAME.into()],
         },
+        ext: crab_core::tool::ToolContextExt::default(),
     };
 
     let output = executor

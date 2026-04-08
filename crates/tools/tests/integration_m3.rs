@@ -32,6 +32,7 @@ fn make_ctx(working_dir: &Path, mode: PermissionMode) -> ToolContext {
             allowed_tools: vec![],
             denied_tools: vec![],
         },
+        ext: crab_core::tool::ToolContextExt::default(),
     }
 }
 

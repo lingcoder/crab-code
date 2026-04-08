@@ -52,6 +52,28 @@ pub enum Action {
     TabCompleteNext,
     /// Cycle to previous completion candidate.
     TabCompletePrev,
+    /// Search through input history.
+    HistorySearch,
+    /// Open an external editor for the current input.
+    ExternalEditor,
+    /// Stash the current input for later retrieval.
+    Stash,
+    /// Toggle the to-do list panel.
+    ToggleTodos,
+    /// Toggle the transcript panel.
+    ToggleTranscript,
+    /// Force a full terminal redraw.
+    Redraw,
+    /// Kill all running agents.
+    KillAgents,
+    /// Cycle between prompt input modes.
+    CycleMode,
+    /// Open the model picker.
+    ModelPicker,
+    /// Paste an image from the clipboard.
+    ImagePaste,
+    /// Undo the last edit in the input box.
+    Undo,
 }
 
 /// A key combination (modifier + key code).
@@ -152,6 +174,82 @@ impl Keybindings {
         map.insert(
             KeyCombo::new(KeyCode::PageDown, KeyModifiers::empty()),
             Action::ScrollDown,
+        );
+
+        // History search
+        map.insert(
+            KeyCombo::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            Action::HistorySearch,
+        );
+
+        // External editor
+        map.insert(
+            KeyCombo::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            Action::ExternalEditor,
+        );
+
+        // Stash current input
+        map.insert(
+            KeyCombo::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            Action::Stash,
+        );
+
+        // Toggle to-do list panel
+        map.insert(
+            KeyCombo::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            Action::ToggleTodos,
+        );
+
+        // Toggle transcript panel
+        map.insert(
+            KeyCombo::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            Action::ToggleTranscript,
+        );
+
+        // Force terminal redraw
+        map.insert(
+            KeyCombo::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            Action::Redraw,
+        );
+
+        // Kill all agents (Ctrl+K as simplified chord)
+        map.insert(
+            KeyCombo::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            Action::KillAgents,
+        );
+
+        // Cycle prompt input mode
+        map.insert(
+            KeyCombo::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            Action::CycleMode,
+        );
+
+        // Model picker
+        map.insert(
+            KeyCombo::new(KeyCode::Char('p'), KeyModifiers::ALT),
+            Action::ModelPicker,
+        );
+
+        // Image paste (platform-dependent)
+        #[cfg(target_os = "windows")]
+        map.insert(
+            KeyCombo::new(KeyCode::Char('v'), KeyModifiers::ALT),
+            Action::ImagePaste,
+        );
+        #[cfg(not(target_os = "windows"))]
+        map.insert(
+            KeyCombo::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            Action::ImagePaste,
+        );
+
+        // Undo (Ctrl+Z primary, Ctrl+_ alias)
+        map.insert(
+            KeyCombo::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            Action::Undo,
+        );
+        map.insert(
+            KeyCombo::new(KeyCode::Char('_'), KeyModifiers::CONTROL),
+            Action::Undo,
         );
 
         Self { map }
@@ -388,6 +486,17 @@ mod tests {
             Action::TabComplete,
             Action::TabCompleteNext,
             Action::TabCompletePrev,
+            Action::HistorySearch,
+            Action::ExternalEditor,
+            Action::Stash,
+            Action::ToggleTodos,
+            Action::ToggleTranscript,
+            Action::Redraw,
+            Action::KillAgents,
+            Action::CycleMode,
+            Action::ModelPicker,
+            Action::ImagePaste,
+            Action::Undo,
         ];
         for action in actions {
             let json = serde_json::to_string(&action).unwrap();
@@ -409,6 +518,71 @@ mod tests {
         assert_eq!(
             kb.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL),
             Some(Action::Quit)
+        );
+    }
+
+    #[test]
+    fn defaults_has_new_bindings() {
+        let kb = Keybindings::defaults();
+        assert_eq!(
+            kb.resolve(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            Some(Action::HistorySearch)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            Some(Action::ExternalEditor)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            Some(Action::Stash)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            Some(Action::ToggleTodos)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            Some(Action::ToggleTranscript)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            Some(Action::Redraw)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            Some(Action::KillAgents)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::BackTab, KeyModifiers::SHIFT),
+            Some(Action::CycleMode)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('p'), KeyModifiers::ALT),
+            Some(Action::ModelPicker)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            Some(Action::Undo)
+        );
+        assert_eq!(
+            kb.resolve(KeyCode::Char('_'), KeyModifiers::CONTROL),
+            Some(Action::Undo)
+        );
+    }
+
+    #[test]
+    fn defaults_has_image_paste() {
+        let kb = Keybindings::defaults();
+        // Platform-dependent: on Windows it's Alt+V, on others it's Ctrl+V
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            kb.resolve(KeyCode::Char('v'), KeyModifiers::ALT),
+            Some(Action::ImagePaste)
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            kb.resolve(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            Some(Action::ImagePaste)
         );
     }
 }
