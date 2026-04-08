@@ -22,55 +22,13 @@ pub fn is_shutdown_requested() -> bool {
 
 /// Install signal handlers for graceful shutdown.
 ///
-/// - First Ctrl+C (SIGINT): sets the shutdown flag so the agent loop can
-///   exit gracefully.
-/// - Second Ctrl+C: force-exits with code 130 (standard SIGINT exit code).
-/// - On Unix, SIGTERM triggers an immediate graceful shutdown.
+/// Signal delivery is handled by [`spawn_async_signal_handlers`] once the
+/// Tokio runtime is running. There is no synchronous pre-runtime handler here
+/// because the build forbids `unsafe` code.
 pub fn install_signal_handlers() {
-    // Use tokio's ctrl_c / signal support is async-only.
-    // For synchronous setup we use std::process + ctrlc-style handler
-    // via the tokio::signal API at runtime. Here we install a simple
-    // atomic flag approach using Rust's built-in set_handler.
-    //
-    // Note: std::panic::set_hook is separate; this only handles OS signals.
-
-    // On all platforms, handle Ctrl+C via a closure that checks SIGINT count.
-    let _ = ctrlc_handler();
-}
-
-/// Register a Ctrl+C handler using platform-appropriate mechanisms.
-fn ctrlc_handler() {
-    // We cannot use tokio::signal here because we need a sync handler
-    // that works before the runtime is up. Instead, spawn a background
-    // thread that blocks on tokio::signal::ctrl_c once the runtime starts.
-    //
-    // For the sync path: use std's set_handler (unsafe but standard).
-    #[cfg(unix)]
-    {
-        // On Unix, also listen for SIGTERM
-        unsafe {
-            libc_signal_handler();
-        }
-    }
-
-    // Cross-platform Ctrl+C via std (works on Windows too)
-    #[cfg(not(unix))]
-    {
-        // On Windows, we rely on the tokio signal handler installed later.
-        // Set a basic handler here for pre-runtime coverage.
-        let _ = std::panic::catch_unwind(|| {
-            // No-op: Windows Ctrl+C is handled by the async runtime.
-        });
-    }
-}
-
-#[cfg(unix)]
-unsafe fn libc_signal_handler() {
-    // Best-effort: if this fails, the async handler will still work.
-    let _ = std::panic::catch_unwind(|| {
-        // SIGINT and SIGTERM are handled by tokio signal in async context.
-        // This function is a placeholder for future low-level signal work.
-    });
+    // The CLI relies on the async signal listeners installed after runtime
+    // startup. Keeping this function lets initialization stay symmetric even
+    // when no synchronous handler is registered.
 }
 
 /// Spawn the async signal listener tasks. Call this after the tokio runtime starts.
