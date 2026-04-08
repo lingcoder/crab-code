@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write;
 use std::net::IpAddr;
 
 // ─── Hook types ─────────────────────────────────────────────────────────
@@ -163,52 +164,117 @@ impl HookResult {
     }
 }
 
-// ─── Hook execution (stubs) ────────────────────────────────────────────
+// ─── Hook execution ────────────────────────────────────────────────────
 
 /// Execute a command hook.
 ///
 /// Runs the shell command with event context passed via environment variables,
-/// similar to `HookExecutor::run` in `hook.rs`.
+/// using `crab_process::spawn::run`. The event JSON is passed as the
+/// `CRAB_HOOK_EVENT` environment variable.
 pub async fn execute_command_hook(
-    _hook: &CommandHook,
-    _event_json: &serde_json::Value,
+    hook: &CommandHook,
+    event_json: &serde_json::Value,
 ) -> crab_common::Result<HookResult> {
-    todo!("execute_command_hook: delegate to crab_process::spawn")
+    let mut opts = crab_process::spawn::shell_command(&hook.command);
+
+    // Pass event data via environment variable
+    opts.env
+        .push(("CRAB_HOOK_EVENT".into(), event_json.to_string()));
+
+    // Extract tool_name/input/output from event for convenience env vars
+    if let Some(tool_name) = event_json.get("tool_name").and_then(|v| v.as_str()) {
+        opts.env
+            .push(("CRAB_TOOL_NAME".into(), tool_name.to_string()));
+    }
+    if let Some(input) = event_json.get("input") {
+        opts.env.push(("CRAB_TOOL_INPUT".into(), input.to_string()));
+    }
+
+    if hook.timeout_secs > 0 {
+        opts.timeout = Some(std::time::Duration::from_secs(hook.timeout_secs));
+    }
+
+    let output = crab_process::spawn::run(opts).await?;
+
+    Ok(HookResult {
+        exit_code: output.exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 /// Execute an agent hook.
 ///
-/// Spawns a sub-agent with the expanded prompt template and returns
-/// the agent's output.
+/// Expands the prompt template with event data and returns the expanded
+/// prompt as the hook result. The actual sub-agent spawning is handled
+/// by the agent layer (Phase 9); this function prepares the prompt.
 pub async fn execute_agent_hook(
-    _hook: &AgentHook,
-    _event_json: &serde_json::Value,
+    hook: &AgentHook,
+    event_json: &serde_json::Value,
 ) -> crab_common::Result<HookResult> {
-    todo!("execute_agent_hook: spawn sub-agent with expanded prompt")
+    let expanded_prompt = expand_template(&hook.prompt_template, event_json);
+
+    // For now, return the expanded prompt as stdout. The agent orchestrator
+    // (Phase 9: Swarm/Team) will use this to spawn a sub-agent.
+    Ok(HookResult::success(format!(
+        "[agent:{}] {}",
+        hook.agent_type, expanded_prompt
+    )))
 }
 
 /// Execute an HTTP hook.
 ///
-/// Validates the URL against the SSRF guard, then sends the HTTP request
-/// with the event JSON as the body.
+/// Validates the URL against the SSRF guard, then sends the HTTP POST
+/// request with the event JSON as the body.
+///
+/// Uses `crab_process::spawn::run` to delegate to `curl` as a subprocess,
+/// avoiding the need for an HTTP client dependency in this crate.
 pub async fn execute_http_hook(
     hook: &HttpHook,
-    _event_json: &serde_json::Value,
+    event_json: &serde_json::Value,
 ) -> crab_common::Result<HookResult> {
     // Validate URL against SSRF guard first.
     validate_http_hook_url(&hook.url)?;
-    todo!("execute_http_hook: send HTTP request with event body")
+
+    // Build curl command with headers and JSON body
+    let body = event_json.to_string();
+    let mut cmd_parts = format!(
+        "curl -s -S -X {} -H \"Content-Type: application/json\"",
+        hook.method
+    );
+    for (key, value) in &hook.headers {
+        let _ = write!(cmd_parts, " -H \"{key}: {value}\"");
+    }
+    let escaped_body = body.replace('\'', "'\\''");
+    let _ = write!(cmd_parts, " -d '{escaped_body}' \"{}\"", hook.url);
+
+    let mut opts = crab_process::spawn::shell_command(&cmd_parts);
+    opts.timeout = Some(std::time::Duration::from_secs(600)); // 10 min default
+
+    let output = crab_process::spawn::run(opts).await?;
+
+    Ok(HookResult {
+        exit_code: output.exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 /// Execute a prompt hook.
 ///
-/// Expands the prompt template with event data and passes it through
-/// the LLM, returning the model's response.
+/// Expands the prompt template with event data and returns the expanded
+/// prompt. The actual LLM call is handled by the agent layer; this function
+/// prepares the prompt for the caller to send to the LLM.
 pub async fn execute_prompt_hook(
-    _hook: &PromptHook,
-    _event_json: &serde_json::Value,
+    hook: &PromptHook,
+    event_json: &serde_json::Value,
 ) -> crab_common::Result<HookResult> {
-    todo!("execute_prompt_hook: expand template and call LLM")
+    let expanded = expand_template(&hook.prompt_template, event_json);
+
+    // Return the expanded prompt. The caller (hook executor in hook.rs or
+    // the agent loop) is responsible for sending this to the LLM and
+    // interpreting the response.
+    Ok(HookResult::success(expanded))
 }
 
 /// Expand placeholder variables in a prompt template.
