@@ -71,20 +71,43 @@ impl ElicitationResponse {
 /// # Current implementation
 ///
 /// Returns `todo!()` — will be wired to the TUI prompt system.
-pub async fn handle_elicitation(_req: ElicitationRequest) -> ElicitationResponse {
-    todo!()
+pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse {
+    // In non-interactive mode (or until TUI integration in Phase 11),
+    // auto-deny elicitation requests. The TUI will override this
+    // with a real prompt dialog.
+    tracing::info!(
+        server = %req.server_name,
+        message = %req.message,
+        "elicitation request auto-denied (non-interactive mode)"
+    );
+    ElicitationResponse::deny(Some(
+        "non-interactive mode: elicitation requests are auto-denied".into(),
+    ))
 }
 
 /// Validate that a response conforms to the request's schema, if one was provided.
-///
-/// # Errors
-///
-/// Returns an error message if validation fails.
 pub fn validate_response(
-    _req: &ElicitationRequest,
-    _resp: &ElicitationResponse,
+    req: &ElicitationRequest,
+    resp: &ElicitationResponse,
 ) -> Result<(), String> {
-    todo!()
+    // If no schema, any response is valid
+    let Some(ref _schema) = req.schema else {
+        return Ok(());
+    };
+
+    // If denied, no data validation needed
+    if !resp.approved {
+        return Ok(());
+    }
+
+    // If approved but schema expects data, check data is present
+    if resp.data.is_none() && !req.is_confirmation {
+        return Err("approved response requires data when schema is provided".into());
+    }
+
+    // Full JSON Schema validation would use the `jsonschema` crate.
+    // For now, we just verify data is present when required.
+    Ok(())
 }
 
 #[cfg(test)]

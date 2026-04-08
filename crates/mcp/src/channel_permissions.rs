@@ -28,53 +28,78 @@ pub struct ServerPermissions {
 
 /// Manages channel-level permissions across all connected MCP servers.
 ///
-/// Permissions are evaluated in order: deny rules take precedence over allow
-/// rules. If no rules match, the default is to allow.
+/// Deny rules take precedence over allow rules. If no rules match, default is allow.
 pub struct ChannelPermissions {
-    /// Per-server permission configurations.
     servers: HashMap<String, ServerPermissions>,
 }
 
 impl ChannelPermissions {
-    /// Create with no permission restrictions.
     pub fn new() -> Self {
         Self {
             servers: HashMap::new(),
         }
     }
 
-    /// Create from a map of server name to permissions.
     pub fn from_config(servers: HashMap<String, ServerPermissions>) -> Self {
         Self { servers }
     }
 
     /// Check whether a tool call is allowed for the given server.
-    ///
-    /// Returns `true` if no rules match (default-allow) or if the tool
-    /// matches an allow pattern without matching any deny pattern.
-    pub fn is_tool_allowed(&self, _server: &str, _tool: &str) -> bool {
-        todo!()
+    pub fn is_tool_allowed(&self, server: &str, tool: &str) -> bool {
+        let Some(perms) = self.servers.get(server) else {
+            return true; // No rules → default allow
+        };
+        check_allowed(tool, &perms.allowed_tools, &perms.denied_tools)
     }
 
     /// Check whether a resource access is allowed for the given server.
-    pub fn is_resource_allowed(&self, _server: &str, _resource: &str) -> bool {
-        todo!()
+    pub fn is_resource_allowed(&self, server: &str, resource: &str) -> bool {
+        let Some(perms) = self.servers.get(server) else {
+            return true;
+        };
+        check_allowed(resource, &perms.allowed_resources, &perms.denied_resources)
     }
 
-    /// Set permissions for a server, replacing any existing rules.
     pub fn set_server_permissions(&mut self, server: String, perms: ServerPermissions) {
         self.servers.insert(server, perms);
     }
 
-    /// Remove all permission rules for a server.
     pub fn remove_server(&mut self, server: &str) {
         self.servers.remove(server);
     }
 
-    /// Get the current permissions for a server, if configured.
     pub fn get_server_permissions(&self, server: &str) -> Option<&ServerPermissions> {
         self.servers.get(server)
     }
+}
+
+/// Check if a name is allowed by the allow/deny pattern lists.
+/// Deny takes precedence. Empty allow list = allow all.
+fn check_allowed(name: &str, allowed: &[String], denied: &[String]) -> bool {
+    // Deny takes precedence
+    if denied.iter().any(|p| glob_match(p, name)) {
+        return false;
+    }
+    // Empty allow list = allow all
+    if allowed.is_empty() {
+        return true;
+    }
+    // Must match at least one allow pattern
+    allowed.iter().any(|p| glob_match(p, name))
+}
+
+/// Simple glob matching supporting `*` wildcard.
+fn glob_match(pattern: &str, input: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return input.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return input.ends_with(suffix);
+    }
+    pattern == input
 }
 
 impl Default for ChannelPermissions {
@@ -98,9 +123,8 @@ mod tests {
     #[test]
     fn empty_permissions_allows_everything() {
         let perms = ChannelPermissions::new();
-        // No rules configured → default-allow.
-        // (Once `is_tool_allowed` is implemented, this should return true.)
-        assert!(perms.servers.is_empty());
+        assert!(perms.is_tool_allowed("any-server", "any-tool"));
+        assert!(perms.is_resource_allowed("any-server", "any-resource"));
     }
 
     #[test]
@@ -132,5 +156,49 @@ mod tests {
         cp.set_server_permissions("srv".into(), ServerPermissions::default());
         cp.remove_server("srv");
         assert!(cp.get_server_permissions("srv").is_none());
+    }
+
+    #[test]
+    fn deny_takes_precedence() {
+        let mut cp = ChannelPermissions::new();
+        cp.set_server_permissions(
+            "srv".into(),
+            ServerPermissions {
+                allowed_tools: vec!["*".into()],
+                denied_tools: vec!["dangerous_tool".into()],
+                ..Default::default()
+            },
+        );
+        assert!(cp.is_tool_allowed("srv", "safe_tool"));
+        assert!(!cp.is_tool_allowed("srv", "dangerous_tool"));
+    }
+
+    #[test]
+    fn allow_list_restricts() {
+        let mut cp = ChannelPermissions::new();
+        cp.set_server_permissions(
+            "srv".into(),
+            ServerPermissions {
+                allowed_tools: vec!["read_*".into()],
+                ..Default::default()
+            },
+        );
+        assert!(cp.is_tool_allowed("srv", "read_file"));
+        assert!(!cp.is_tool_allowed("srv", "write_file"));
+    }
+
+    #[test]
+    fn resource_permissions() {
+        let mut cp = ChannelPermissions::new();
+        cp.set_server_permissions(
+            "srv".into(),
+            ServerPermissions {
+                denied_resources: vec!["secret://*".into()],
+                ..Default::default()
+            },
+        );
+        assert!(cp.is_resource_allowed("srv", "file://readme"));
+        // Exact match only for our simple glob
+        assert!(!cp.is_resource_allowed("srv", "secret://key"));
     }
 }

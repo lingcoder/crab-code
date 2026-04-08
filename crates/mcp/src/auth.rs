@@ -88,9 +88,17 @@ pub struct AuthToken {
 }
 
 impl AuthToken {
-    /// Check whether the token has expired (with a grace window).
+    /// Check whether the token has expired (with a 60-second grace window).
     pub fn is_expired(&self) -> bool {
-        todo!()
+        let Some(expires_at) = self.expires_at else {
+            return false; // No expiry = never expires
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        // Grace window: consider expired 60s before actual expiry
+        now + 60 >= expires_at
     }
 }
 
@@ -125,29 +133,61 @@ impl McpAuthManager {
     /// error, network failure, etc.).
     pub async fn authenticate(
         &mut self,
-        _server_name: &str,
-        _method: &McpAuthMethod,
+        server_name: &str,
+        method: &McpAuthMethod,
     ) -> crab_common::Result<AuthToken> {
-        todo!()
+        let token = match method {
+            McpAuthMethod::None => AuthToken {
+                access_token: String::new(),
+                token_type: "None".into(),
+                expires_at: None,
+                refresh_token: None,
+            },
+            McpAuthMethod::ApiKey(config) => {
+                // Expand env vars in the key
+                let key = crate::env_expansion::expand_env_vars(&config.key);
+                AuthToken {
+                    access_token: key,
+                    token_type: "ApiKey".into(),
+                    expires_at: None, // API keys don't expire
+                    refresh_token: None,
+                }
+            }
+            McpAuthMethod::OAuth2(_config) => {
+                // Full OAuth2 PKCE flow requires HTTP client + browser.
+                // This will be implemented with the Bridge/IDE layer (Phase 10).
+                return Err(crab_common::Error::Config(
+                    "OAuth2 authentication not yet implemented — use API key auth for now".into(),
+                ));
+            }
+        };
+
+        self.tokens.insert(server_name.to_string(), token.clone());
+        Ok(token)
     }
 
     /// Refresh an expired token using its refresh token.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the refresh token is missing or the refresh
-    /// request fails.
     pub async fn refresh_token(
         &mut self,
-        _server_name: &str,
-        _token: &AuthToken,
+        server_name: &str,
+        token: &AuthToken,
     ) -> crab_common::Result<AuthToken> {
-        todo!()
+        let Some(ref _refresh) = token.refresh_token else {
+            return Err(crab_common::Error::Config(
+                "no refresh token available".into(),
+            ));
+        };
+
+        // Full OAuth2 token refresh requires HTTP client.
+        // For now, return error — will be implemented with reqwest in Phase 10.
+        Err(crab_common::Error::Config(format!(
+            "token refresh for '{server_name}' not yet implemented"
+        )))
     }
 
     /// Get the cached token for a server, if one exists and is not expired.
-    pub fn get_valid_token(&self, _server_name: &str) -> Option<&AuthToken> {
-        todo!()
+    pub fn get_valid_token(&self, server_name: &str) -> Option<&AuthToken> {
+        self.tokens.get(server_name).filter(|t| !t.is_expired())
     }
 
     /// Remove the cached token for a server.
