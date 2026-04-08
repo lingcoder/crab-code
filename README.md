@@ -17,7 +17,7 @@
 
 ---
 
-> **Status: Active Development** -- 32 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, and 3100+ tests across 16 crates.
+> **Status: Active Development** -- 46 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, and 3500+ tests across 17 crates.
 
 ## What is Crab Code?
 

@@ -124,6 +124,7 @@ crab-agent = { path = "crates/agent" }
 crab-tui = { path = "crates/tui" }
 crab-plugin = { path = "crates/plugin" }
 crab-telemetry = { path = "crates/telemetry" }
+crab-bridge = { path = "crates/bridge" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

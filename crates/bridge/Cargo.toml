@@ -1,0 +1,23 @@
+[package]
+name = "crab-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "IDE bridge and IPC layer for Crab Code"
+
+[dependencies]
+crab-core.workspace = true
+crab-common.workspace = true
+crab-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "net"] }
+tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

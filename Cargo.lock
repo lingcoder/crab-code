@@ -613,6 +613,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "crab-bridge"
+version = "0.1.0"
+dependencies = [
+ "crab-common",
+ "crab-config",
+ "crab-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "crab-cli"
 version = "0.1.0"
 dependencies = [
@@ -680,6 +696,7 @@ name = "crab-core"
 version = "0.1.0"
 dependencies = [
  "crab-common",
+ "regex",
  "serde",
  "serde_json",
  "tokio-util",

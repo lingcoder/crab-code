@@ -13,7 +13,7 @@
 |------|-------|------|
 | **Layer 4** 入口层 | `crates/cli` `crates/daemon` | CLI 入口 (clap)、后台守护进程 |
 | **Layer 3** 引擎层 | `agent` `session` | 多 Agent 协调、会话管理、上下文压缩 |
-| **Layer 2** 服务层 | `tools` `mcp` `api` `fs` `process` `plugin` `telemetry` `tui` | 工具系统、MCP 协议栈、多模型 API 客户端、文件/进程操作、TUI 21 组件 |
+| **Layer 2** 服务层 | `tools` `mcp` `api` `fs` `process` `plugin` `telemetry` `tui` `bridge` | 工具系统、MCP 协议栈、多模型 API 客户端、文件/进程操作、TUI 组件、IDE 桥接 |
 | **Layer 1** 基础层 | `core` `common` `config` `auth` | 领域模型、配置热重载、Auth 认证 |
 
 > 依赖方向：上层依赖下层，禁止反向依赖。`core` 定义 `Tool` trait 避免 tools/agent 循环依赖。
@@ -211,7 +211,13 @@ crab-code/
 │   │       ├── conversation.rs        # Conversation, Turn
 │   │       ├── tool.rs                # trait Tool + ToolContext + ToolOutput
 │   │       ├── model.rs               # ModelId, TokenUsage, CostTracker
-│   │       ├── permission.rs          # PermissionMode, PermissionPolicy
+│   │       ├── permission/            # 权限系统（模块目录）
+│   │       │   ├── mod.rs             # PermissionMode, PermissionPolicy, re-exports
+│   │       │   ├── rule_parser.rs     # [P0] 规则 AST 解析："Bash(cmd:git*)" 格式
+│   │       │   ├── path_validator.rs  # [P0] 文件路径权限引擎、symlink 解析
+│   │       │   ├── denial_tracker.rs  # [P1] 连续拒绝计数、模式检测
+│   │       │   ├── explainer.rs       # [P1] 人类可读的权限决策解释
+│   │       │   └── shadowed_rules.rs  # [P2] 被遮蔽规则检测
 │   │       ├── config.rs              # trait ConfigSource
 │   │       ├── event.rs               # 领域事件枚举（crate 间解耦通信）
 │   │       └── capability.rs          # Agent 能力声明
@@ -223,12 +229,16 @@ crab-code/
 │   │       ├── settings.rs            # settings.json 读写、层级合并
 │   │       ├── crab_md.rs             # CRAB.md 解析（项目/用户/全局）
 │   │       ├── hooks.rs               # Hook 定义与触发
-│   │       ├── feature_flag.rs        # Feature Flag 集成
-│   │       ├── policy.rs              # 权限策略、限制
-│   │       ├── keybinding.rs          # 快捷键配置
+│   │       ├── feature_flag.rs        # [P1] 运行时 Feature Flag 管理（本地评估）
+│   │       ├── policy.rs              # [P0] 权限策略限制、MDM/managed-path
+│   │       ├── keybinding.rs          # [P1] 快捷键 schema/解析/校验/resolver
 │   │       ├── config_toml.rs         # config.toml 多提供商配置
 │   │       ├── hot_reload.rs          # settings.json 热重载监听
-│   │       └── permissions.rs         # 权限决策统一入口
+│   │       ├── permissions.rs         # 权限决策统一入口
+│   │       ├── validation.rs          # [P1] Settings 校验引擎
+│   │       ├── settings_cache.rs      # [P1] 记忆化 settings 缓存
+│   │       ├── change_detector.rs     # [P2] 按 source 的变更检测
+│   │       └── mdm.rs                 # [P2] 企业 MDM managed settings
 │   │
 │   ├── auth/                          # crab-auth: 认证
 │   │   ├── Cargo.toml
@@ -268,7 +278,11 @@ crab-code/
 │   │       ├── capabilities.rs        # 模型能力协商与发现
 │   │       ├── context_optimizer.rs   # 上下文窗口优化 + 智能截断
 │   │       ├── retry_strategy.rs      # 增强重试策略
-│   │       └── error_classifier.rs    # 错误分类（可重试/不可重试）
+│   │       ├── error_classifier.rs    # 错误分类（可重试/不可重试）
+│   │       ├── token_estimation.rs    # [P1] Token 数量近似估算
+│   │       ├── ttft_tracker.rs        # [P1] Time-to-first-token 延迟统计
+│   │       ├── fast_mode.rs           # [P1] 快速模式切换
+│   │       └── usage_tracker.rs       # [P1] 使用量聚合（per-session/model）
 │   │
 │   ├── mcp/                           # crab-mcp: MCP façade + 协议适配层
 │   │   ├── Cargo.toml
@@ -294,7 +308,13 @@ crab-code/
 │   │       ├── notification.rs        # 服务端通知推送
 │   │       ├── progress.rs            # 进度报告
 │   │       ├── cancellation.rs        # 请求取消机制
-│   │       └── health.rs              # 健康检查 + 心跳
+│   │       ├── health.rs              # 健康检查 + 心跳
+│   │       ├── auth.rs                # [P1] MCP OAuth2/API key 认证
+│   │       ├── channel_permissions.rs # [P1] Channel 级工具/资源权限
+│   │       ├── elicitation.rs         # [P1] 用户输入请求处理
+│   │       ├── env_expansion.rs       # [P1] 配置中 ${VAR} 环境变量展开
+│   │       ├── official_registry.rs   # [P2] 官方 MCP server 注册表
+│   │       └── normalization.rs       # [P2] 工具/资源名称规范化
 │   │
 │   ├── fs/                            # crab-fs: 文件系统
 │   │   ├── Cargo.toml
@@ -327,30 +347,52 @@ crab-code/
 │   │       ├── builtin/
 │   │       │   ├── mod.rs
 │   │       │   ├── bash.rs            # BashTool
+│   │       │   ├── bash_security.rs   # Bash 安全检查
+│   │       │   ├── bash_classifier.rs # [P0] Bash 命令分类（read-only/write/dangerous）
 │   │       │   ├── read.rs            # ReadTool
+│   │       │   ├── read_enhanced.rs   # 增强文件读取（PDF/图片/Notebook）
 │   │       │   ├── edit.rs            # EditTool (diff-based)
 │   │       │   ├── write.rs           # WriteTool
 │   │       │   ├── glob.rs            # GlobTool
 │   │       │   ├── grep.rs            # GrepTool
+│   │       │   ├── lsp.rs             # LSP 集成工具
 │   │       │   ├── web_search.rs      # WebSearchTool
 │   │       │   ├── web_fetch.rs       # WebFetchTool
+│   │       │   ├── web_cache.rs       # 网页缓存
+│   │       │   ├── web_formatter.rs   # 网页格式化
+│   │       │   ├── web_browser.rs     # [P2] Playwright/CDP 浏览器自动化
 │   │       │   ├── agent.rs           # AgentTool (子 Agent)
+│   │       │   ├── send_message.rs    # [P0] SendMessageTool（跨 Agent 消息）
+│   │       │   ├── skill.rs           # [P0] SkillTool（按名称调用 skill）
 │   │       │   ├── notebook.rs        # NotebookTool
 │   │       │   ├── task.rs            # TaskCreate/Get/List/Update
+│   │       │   ├── todo_write.rs      # [P1] TodoWriteTool（结构化 TODO）
+│   │       │   ├── team.rs            # TeamCreate/Delete
 │   │       │   ├── mcp_tool.rs        # MCP 工具适配器
-│   │       │   ├── lsp.rs            # LSP 集成工具
-│   │       │   ├── worktree.rs       # Git Worktree 工具
-│   │       │   ├── ask_user.rs       # 用户交互工具
-│   │       │   ├── image_read.rs     # 图片读取工具
-│   │       │   ├── read_enhanced.rs  # 增强文件读取
-│   │       │   ├── bash_security.rs  # Bash 安全检查
-│   │       │   ├── plan_mode.rs      # 计划模式工具
-│   │       │   ├── plan_file.rs      # 计划文件操作
-│   │       │   ├── plan_approval.rs  # 计划审批工具
-│   │       │   ├── web_cache.rs      # 网页缓存
-│   │       │   └── web_formatter.rs  # 网页格式化
+│   │       │   ├── mcp_resource.rs    # [P1] ListMcpResources + ReadMcpResource
+│   │       │   ├── mcp_auth.rs        # [P1] MCP 服务器认证工具
+│   │       │   ├── worktree.rs        # Git Worktree 工具
+│   │       │   ├── ask_user.rs        # 用户交互工具
+│   │       │   ├── image_read.rs      # 图片读取工具
+│   │       │   ├── plan_mode.rs       # 计划模式工具
+│   │       │   ├── plan_file.rs       # 计划文件操作
+│   │       │   ├── plan_approval.rs   # 计划审批工具
+│   │       │   ├── verify_plan.rs     # [P1] 计划执行验证
+│   │       │   ├── config_tool.rs     # [P1] ConfigTool（编程式 settings 读写）
+│   │       │   ├── brief.rs           # [P1] BriefTool（对话摘要）
+│   │       │   ├── snip.rs            # [P1] SnipTool（裁剪大工具输出）
+│   │       │   ├── sleep.rs           # [P1] SleepTool（异步等待）
+│   │       │   ├── tool_search.rs     # [P1] ToolSearchTool（搜索可用工具）
+│   │       │   ├── monitor.rs         # [P2] MonitorTool（文件/进程监控）
+│   │       │   ├── workflow.rs        # [P2] WorkflowTool（多步工作流）
+│   │       │   ├── send_user_file.rs  # [P2] SendUserFileTool
+│   │       │   ├── powershell.rs      # PowerShellTool
+│   │       │   ├── cron.rs            # CronCreate/Delete/List
+│   │       │   └── remote_trigger.rs  # RemoteTriggerTool
 │   │       ├── permission.rs          # 工具权限检查逻辑
-│   │       └── schema.rs             # 工具 schema 转换
+│   │       ├── sandbox.rs             # 工具沙箱策略
+│   │       ├── schema.rs              # 工具 schema 转换
+│   │       └── tool_use_summary.rs    # [P1] 工具结果摘要生成
 │   │
 │   ├── session/                       # crab-session: 会话管理
 │   │   ├── Cargo.toml
@@ -359,10 +401,19 @@ crab-code/
 │   │       ├── conversation.rs        # 对话状态机，多轮管理
 │   │       ├── context.rs             # 上下文窗口管理
 │   │       ├── compaction.rs          # 消息压缩策略（5 级）
+│   │       ├── micro_compact.rs       # [P0] 微压缩：逐条替换大工具结果
+│   │       ├── auto_compact.rs        # [P1] 自动压缩触发器 + 清理
+│   │       ├── snip_compact.rs        # [P1] Snip 压缩："[snipped]" 标记
 │   │       ├── history.rs             # 会话持久化、恢复、搜索、导出
 │   │       ├── memory.rs              # 记忆系统 (文件持久化)
+│   │       ├── memory_types.rs        # [P1] 记忆类型 schema (user/project/feedback)
+│   │       ├── memory_relevance.rs    # [P1] 记忆相关性匹配与评分
+│   │       ├── memory_extract.rs      # [P2] 自动记忆提取
+│   │       ├── memory_age.rs          # [P2] 记忆老化与衰减
+│   │       ├── team_memory.rs         # [P2] 团队记忆路径与加载
 │   │       ├── cost.rs                # token 计数、费用追踪
-│   │       └── template.rs            # 会话模板 + 快速恢复
+│   │       ├── template.rs            # 会话模板 + 快速恢复
+│   │       └── migration.rs           # [P2] 数据迁移系统
 │   │
 │   ├── agent/                         # crab-agent: 多 Agent 系统
 │   │   ├── Cargo.toml
@@ -375,12 +426,24 @@ crab-code/
 │   │       ├── message_bus.rs         # Agent 间消息 (tokio::mpsc)
 │   │       ├── message_router.rs      # Agent 间消息路由
 │   │       ├── worker.rs              # 子 Agent worker
-│   │       ├── system_prompt.rs       # 系统提示构建 + CRAB.md 注入
+│   │       ├── system_prompt/         # 系统提示（模块目录）
+│   │       │   ├── mod.rs             # re-exports
+│   │       │   ├── builder.rs         # [重构] 主组装逻辑（原 system_prompt.rs）
+│   │       │   ├── sections.rs        # [P0] 模块化 section 架构 + 动态边界
+│   │       │   └── cache.rs           # [P1] per-section 记忆化缓存
+│   │       ├── token_budget.rs        # [P1] Token 预算管理
+│   │       ├── stop_hooks.rs          # [P1] 停止条件钩子
 │   │       ├── summarizer.rs          # 对话摘要生成
 │   │       ├── rollback.rs            # 回滚机制
 │   │       ├── error_recovery.rs      # 错误恢复策略
 │   │       ├── retry.rs               # 自动重试机制
-│   │       └── repl_commands.rs       # REPL 命令（/undo /branch /fork）
+│   │       ├── slash_commands.rs      # 斜杠命令注册与执行
+│   │       ├── repl_commands.rs       # REPL 命令（/undo /branch /fork）
+│   │       ├── effort.rs              # 模型 effort 级别
+│   │       ├── git_context.rs         # Git 上下文收集
+│   │       ├── pr_context.rs          # PR 上下文收集
+│   │       ├── prompt_suggestion.rs   # [P2] 后续 prompt 建议
+│   │       └── tips.rs                # [P2] 上下文提示
 │   │
 │   ├── tui/                           # crab-tui: 终端 UI（21 组件）
 │   │   ├── Cargo.toml
@@ -413,7 +476,11 @@ crab-code/
 │   │       │   ├── search.rs          # 全局搜索面板
 │   │       │   ├── shortcut_hint.rs   # 快捷键提示栏
 │   │       │   ├── status_bar.rs      # 增强状态栏
-│   │       │   └── tool_output.rs     # 工具输出折叠显示
+│   │       │   ├── tool_output.rs     # 工具输出折叠显示
+│   │       │   ├── output_styles.rs   # [P1] 输出格式化样式配置
+│   │       │   ├── permission_dialog.rs # [P1] 专用权限提示对话框
+│   │       │   ├── session_sidebar.rs # [P1] 会话侧边栏
+│   │       │   └── context_collapse.rs # [P2] 上下文折叠/展开
 │   │       ├── vim/
 │   │       │   ├── mod.rs
 │   │       │   ├── motion.rs
@@ -426,18 +493,38 @@ crab-code/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── skill.rs               # Skill 发现、加载、执行
+│   │       ├── skill_builder.rs       # [P1] Skill builder API + MCP skill 加载
+│   │       ├── bundled_skills.rs      # [P1] 内置 skill（commit/review/debug 等）
 │   │       ├── wasm_runtime.rs        # WASM 沙箱 (feature = "wasm")
 │   │       ├── manifest.rs            # 插件清单解析
-│   │       └── hook.rs                # 生命周期钩子
+│   │       ├── manager.rs             # 插件生命周期管理
+│   │       ├── hook.rs                # 生命周期钩子执行
+│   │       ├── hook_registry.rs       # [P0] 异步钩子注册表 + 事件广播
+│   │       ├── hook_types.rs          # [P0] Agent/Http/Prompt 钩子 + SSRF guard
+│   │       ├── hook_watchers.rs       # [P1] 文件变更触发钩子重注册
+│   │       └── frontmatter_hooks.rs   # [P1] Frontmatter YAML 钩子注册
 │   │
-│   └── telemetry/                     # crab-telemetry: 可观测性
+│   ├── telemetry/                     # crab-telemetry: 可观测性
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── tracer.rs              # OpenTelemetry tracer
+│   │       ├── metrics.rs             # 自定义 metrics
+│   │       ├── cost.rs                # 费用追踪
+│   │       ├── export.rs              # [P1] 本地 OTLP 导出（无远程）
+│   │       └── session_recorder.rs    # [P2] 会话录制（本地 transcript）
+│   │
+│   └── bridge/                        # [P1] crab-bridge: IDE 桥接/IPC
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
-│           ├── tracer.rs              # OpenTelemetry tracer
-│           ├── metrics.rs             # 自定义 metrics
-│           ├── cost.rs                # 费用追踪
-│           └── export.rs              # OTLP 导出
+│           ├── protocol.rs            # JSON-RPC IDE 通信消息类型
+│           ├── repl_bridge.rs         # REPL 中继：IDE ↔ session
+│           ├── remote_bridge.rs       # 远程连接：连接 daemon session
+│           ├── ws_server.rs           # WebSocket server
+│           ├── session_token.rs       # JWT session token
+│           ├── trusted_device.rs      # 可信设备注册/验证
+│           └── types.rs               # 共享类型
 │
 │   ├── cli/                           # crab-cli: 终端入口 (binary crate)
 │   │   ├── Cargo.toml
@@ -471,12 +558,14 @@ crab-code/
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| Library crate | 14 | `crates/*` |
+| Library crate | 15 | `crates/*`（含新增 `bridge`） |
 | Binary crate | 2 | `crates/cli` `crates/daemon` |
 | 辅助 crate | 1 | `xtask` |
-| **合计** | **17** | — |
-| 模块总数 | ~176 | 分布于 14 个 library crate |
+| **合计** | **18** | — |
+| 模块总数 | ~241 | 分布于 15 个 library crate（含 65 个新增文件） |
 | 测试总数 | ~2654 | `cargo test --workspace`（2026-04-06） |
+
+> 注：[P0]/[P1]/[P2] 标记表示 CCB 功能对齐优先级。未标记文件为已实现。
 
 ---
 
@@ -534,6 +623,9 @@ crab-code/
                    ┌────────────┐
                    │ telemetry  │ ←── 独立旁路，任意 crate 可选依赖
                    └────────────┘
+                   ┌────────────┐
+                   │  bridge    │ ←── Layer 2 服务层，IDE 桥接
+                   └────────────┘
 ```
 
 ### 5.2 依赖清单（自底向上）
@@ -549,13 +641,14 @@ crab-code/
 | 7 | **process** | common | 子进程管理 |
 | 8 | **mcp** | core, common | MCP 协议客户端/服务端 |
 | 9 | **telemetry** | common | 独立旁路，可选 |
-| 10 | **tools** | core, fs, process, mcp, config, common | 21+ 内置工具 |
-| 11 | **session** | core, api, config, common | 会话 + 上下文压缩 |
-| 12 | **agent** | core, session, tools, common | Agent 编排 |
-| 13 | **plugin** | core, common | 技能/WASM 沙箱 |
-| 14 | **tui** | core, session, config, common | 终端 UI（不直接依赖 tools，通过 core::Event 接收工具状态） |
-| 15 | **cli** (bin) | 所有 crate | 极薄入口 |
-| 16 | **daemon** (bin) | core, session, api, tools, config, agent, common | 后台服务 |
+| 10 | **bridge** | core, config, common | [P1] IDE 桥接 / WebSocket IPC |
+| 11 | **tools** | core, fs, process, mcp, config, common | 40+ 内置工具 |
+| 12 | **session** | core, api, config, common | 会话 + 上下文压缩 + 记忆系统 |
+| 13 | **agent** | core, session, tools, common | Agent 编排 |
+| 14 | **plugin** | core, common | 技能/WASM 沙箱 + 钩子系统 |
+| 15 | **tui** | core, session, config, common | 终端 UI（不直接依赖 tools，通过 core::Event 接收工具状态） |
+| 16 | **cli** (bin) | 所有 crate | 极薄入口 |
+| 17 | **daemon** (bin) | core, session, api, tools, config, agent, bridge, common | 后台服务 |
 
 ### 5.3 依赖方向原则
 
