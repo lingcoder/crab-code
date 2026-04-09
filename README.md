@@ -17,7 +17,7 @@
 
 ---
 
-> **Status: Active Development** -- 49 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, TUI with 187 spinner verbs, and 3500+ tests across 17 crates. Zero `todo!()` macros.
+> **Status: Active Development** -- 49 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, structured message TUI with 187 spinner verbs, 3800+ tests across 17 crates, 110k+ LOC. Zero `todo!()` macros.
 
 ## What is Crab Code?
 
@@ -209,7 +209,7 @@ crab auth login                   # Configure authentication
 
 ```bash
 cargo build --workspace                    # Build all
-cargo test --workspace                     # Run all tests (3500+)
+cargo test --workspace                     # Run all tests (3800+)
 cargo clippy --workspace -- -D warnings    # Lint
 cargo fmt --all --check                    # Check formatting
 cargo run --bin crab                       # Run CLI
