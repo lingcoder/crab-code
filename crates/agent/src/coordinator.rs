@@ -126,6 +126,8 @@ pub struct AgentSession {
     pub session_history: Option<SessionHistory>,
     /// Cost accumulator for tracking API usage.
     pub cost: CostAccumulator,
+    /// Query engine (new unified API — optional during migration).
+    pub engine: Option<crate::engine::QueryEngine>,
 }
 
 impl AgentSession {
@@ -229,6 +231,7 @@ impl AgentSession {
             memory_store,
             session_history,
             cost: CostAccumulator::default(),
+            engine: None,
         }
     }
 

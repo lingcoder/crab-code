@@ -154,7 +154,7 @@ pub async fn query_loop(
         }
 
         // Extract tool calls and execute them (with hook integration + plan mode)
-        let tool_results = execute_tool_calls(
+        let tool_results = crate::engine::tool_orchestration::execute_tool_calls(
             &assistant_msg,
             executor,
             tool_ctx,
@@ -178,7 +178,7 @@ pub async fn query_loop(
         }
 
         // Build tool result message and add to conversation
-        let result_msg = tool_results_message(tool_results);
+        let result_msg = crate::engine::tool_orchestration::tool_results_message(tool_results);
         conversation.push(result_msg);
     }
 }
@@ -427,10 +427,9 @@ async fn check_and_compact(
     }
 }
 
-/// Execute all tool calls from an assistant message.
-///
-/// Read-only tools are executed concurrently; write tools sequentially.
-/// `PreToolUse` / `PostToolUse` hooks are invoked around each tool execution.
+/// Legacy — now delegates to `engine::tool_orchestration::execute_tool_calls`.
+/// Kept for test compatibility; will be removed in future cleanup.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_calls(
     assistant_msg: &Message,
@@ -737,6 +736,7 @@ pub fn tool_results_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::tool_orchestration::{partition_tool_calls, tool_results_message};
     use crab_core::message::ContentBlock;
 
     #[test]

@@ -24,6 +24,8 @@ pub mod worker;
 
 pub use coordinator::{AgentCoordinator, AgentHandle, AgentSession, SessionConfig};
 pub use effort::{EffortLevel, ThinkingMode};
+pub use engine::streaming::StreamingToolExecutor;
+pub use engine::tool_orchestration::{ToolCallRef, partition_tool_calls, tool_results_message};
 pub use engine::{QueryEngine, QueryEngineConfig, QuerySource};
 pub use error_recovery::{
     CircuitBreaker, CircuitBreakerConfig, CircuitState, DegradableFeature, ErrorCategory,
@@ -31,7 +33,7 @@ pub use error_recovery::{
 };
 pub use message_bus::{AgentMessage, AgentStatus, Envelope, event_channel};
 pub use message_router::MessageRouter;
-pub use query_loop::{QueryLoopConfig, StreamingToolExecutor, query_loop};
+pub use query_loop::{QueryLoopConfig, query_loop};
 pub use repl_commands::{CommandResult, ReplCommand};
 pub use retry::{RetryDecision, RetryPolicy, RetryTracker};
 pub use rollback::{ActionType, RollbackEntry, RollbackManager, UndoStack};

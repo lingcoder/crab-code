@@ -129,10 +129,28 @@ impl QueryEngine {
     /// Execute post-response lifecycle hooks (memory extraction, etc.).
     ///
     /// Called after the query loop returns. Runs background tasks that
-    /// don't block the next user turn.
-    pub async fn post_response_hooks(&self, _conversation: &Conversation) {
-        // Future: memory extraction, prompt suggestion, auto-dream
-        // These run as fire-and-forget background tasks (like CC's handleStopHooks)
+    /// don't block the next user turn. Corresponds to CC's `handleStopHooks`.
+    pub fn post_response_hooks(&self, conversation: &Conversation) {
+        // Fire-and-forget background tasks (non-blocking)
+        let messages = conversation.messages().to_vec();
+        let source = self.config.source.clone();
+
+        tokio::spawn(async move {
+            // Memory extraction (only for REPL/Agent queries, not compact/print)
+            if matches!(source, QuerySource::Repl | QuerySource::Agent { .. }) {
+                let extraction =
+                    crab_session::memory_extract::extract_memories_from_conversation(&messages);
+                if !extraction.memories.is_empty() {
+                    tracing::debug!(
+                        count = extraction.memories.len(),
+                        "post-response: extracted memories"
+                    );
+                }
+            }
+
+            // Prompt suggestion (placeholder — needs LLM integration)
+            // Auto-dream (placeholder — needs time/session gating)
+        });
     }
 }
 
