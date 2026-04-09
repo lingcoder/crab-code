@@ -104,6 +104,29 @@ pub enum AppAction {
     SwitchSession(String),
 }
 
+/// A single message in the conversation, structurally typed for rendering.
+///
+/// Replaces the flat `content_buffer: String` with a typed message list.
+/// Each variant maps to a distinct visual representation in the TUI.
+#[derive(Debug, Clone)]
+pub enum ChatMessage {
+    /// User input — rendered as `❯ {text}`.
+    User { text: String },
+    /// Assistant text response — rendered with `●` prefix + markdown.
+    /// `text` is appended incrementally during streaming.
+    Assistant { text: String },
+    /// Tool invocation start — rendered as `● {name}` in dim style.
+    ToolUse { name: String },
+    /// Tool execution result — collapsible, rendered as output text.
+    ToolResult {
+        tool_name: String,
+        output: String,
+        is_error: bool,
+    },
+    /// System/informational message — rendered in dim gray.
+    System { text: String },
+}
+
 /// Main TUI application.
 pub struct App {
     /// Current application state.
@@ -166,7 +189,10 @@ pub struct App {
     /// Current permission mode (cycled via Shift+Tab).
     pub permission_mode: crab_core::permission::PermissionMode,
     /// Whether the ● response marker has been added for the current turn.
+    #[allow(dead_code)]
     response_started: bool,
+    /// Structured message list — the source of truth for conversation display.
+    pub messages: Vec<ChatMessage>,
 }
 
 impl App {
@@ -204,6 +230,7 @@ impl App {
             last_interrupt: None,
             permission_mode: crab_core::permission::PermissionMode::Default,
             response_started: false,
+            messages: Vec::new(),
         }
     }
 
@@ -507,10 +534,8 @@ impl App {
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     if !self.input.is_empty() {
                         let text = self.input.submit();
-                        // Show user prompt in content area (no divider — CC doesn't have one)
-                        let _ = writeln!(self.content_buffer, "\n❯ {text}\n");
+                        self.messages.push(ChatMessage::User { text: text.clone() });
                         self.state = AppState::Processing;
-                        self.response_started = false;
                         self.spinner.start_with_random_verb();
                         return AppAction::Submit(text);
                     }
@@ -587,81 +612,66 @@ impl App {
         use crab_core::event::Event;
         match event {
             Event::ContentDelta { delta, .. } => {
-                // Add ● marker once at the start of a new assistant response.
-                // The marker is added when transitioning from "just submitted" to
-                // "first content arriving". We detect this by checking if the last
-                // non-whitespace content ends with the user prompt echo line.
-                if !self.response_started {
-                    self.content_buffer.push_str("● ");
-                    self.response_started = true;
+                // Structured: append to last Assistant message or create one
+                if let Some(ChatMessage::Assistant { text }) = self.messages.last_mut() {
+                    text.push_str(&delta);
+                } else {
+                    self.messages.push(ChatMessage::Assistant {
+                        text: delta.clone(),
+                    });
                 }
-                // Track unseen content when the user is scrolled up
+                // Track unseen / auto-scroll
                 if self.scroll_anchor.is_some() {
-                    // Count newlines in the delta as new "messages"
                     let new_lines = delta.chars().filter(|&c| c == '\n').count();
                     self.unseen_message_count =
                         self.unseen_message_count.saturating_add(new_lines.max(1));
                 } else {
-                    self.content_scroll = 0; // auto-scroll on new content
+                    self.content_scroll = 0;
                 }
-                self.content_buffer.push_str(&delta);
-                // Approximate token count for spinner display (~4 chars per token)
                 self.spinner.response_tokens += (delta.len() as u64).div_ceil(4);
             }
             Event::MessageEnd { usage, .. } => {
                 self.spinner.stop();
                 self.current_tool = None;
                 self.state = AppState::Idle;
-                // Accumulate token usage (displayed in status bar, not inline)
                 self.total_input_tokens += usage.input_tokens;
                 self.total_output_tokens += usage.output_tokens;
-                // Turn separator after assistant response
-                let _ = writeln!(self.content_buffer, "\n");
             }
             Event::ToolUseStart { name, .. } => {
                 self.current_tool = Some(name.clone());
-                self.spinner.set_message(format!("Running {name}…"));
-                let _ = write!(self.content_buffer, "\n[tool] {name}\n");
+                self.messages.push(ChatMessage::ToolUse { name });
+                self.spinner.set_message(format!(
+                    "Running {}…",
+                    self.current_tool.as_deref().unwrap_or("tool")
+                ));
             }
             Event::ToolResult { output, .. } => {
                 let tool_name = self.current_tool.take().unwrap_or_default();
                 self.spinner.clear_override();
-                // Show tool result summary in content area
                 let text = output.text();
+                // Structured message
+                self.messages.push(ChatMessage::ToolResult {
+                    tool_name: tool_name.clone(),
+                    output: text.clone(),
+                    is_error: output.is_error,
+                });
+                // Also populate auxiliary tracking structures
+                self.tool_outputs.push(ToolOutputEntry::new(
+                    &tool_name,
+                    text.clone(),
+                    output.is_error,
+                ));
                 if output.is_error {
-                    let _ = writeln!(self.content_buffer, "[tool error] {text}");
-                    self.tool_outputs
-                        .push(ToolOutputEntry::new(&tool_name, text.clone(), true));
-                    // Add to context collapse as a collapsible error section
                     let mut section =
-                        CollapsibleSection::new(format!("Tool error: {tool_name}"), text.clone());
+                        CollapsibleSection::new(format!("Tool error: {tool_name}"), text);
                     section.collapsed = true;
                     self.context_collapse.push_section(section);
-                } else if !text.is_empty() {
-                    // Truncate long output for display
-                    if text.len() > 500 {
-                        let _ = writeln!(
-                            self.content_buffer,
-                            "[{tool_name} result] {}...",
-                            &text[..500]
-                        );
-                    } else {
-                        let _ = writeln!(self.content_buffer, "[{tool_name} result] {text}");
-                    }
-                    self.tool_outputs
-                        .push(ToolOutputEntry::new(&tool_name, text.clone(), false));
-                    // Add long tool outputs to context collapse (auto-collapsed)
-                    if text.lines().count() > 5 {
-                        let mut section = CollapsibleSection::new(
-                            format!("Tool output: {tool_name}"),
-                            text.clone(),
-                        );
-                        section.collapsed = true;
-                        self.context_collapse.push_section(section);
-                    }
+                } else if text.lines().count() > 5 {
+                    let mut section =
+                        CollapsibleSection::new(format!("Tool output: {tool_name}"), text);
+                    section.collapsed = true;
+                    self.context_collapse.push_section(section);
                 }
-                // Update code block detection
-                self.code_blocks.update(&self.content_buffer);
             }
             Event::PermissionRequest {
                 request_id,
@@ -680,48 +690,47 @@ impl App {
                 ));
             }
             Event::CompactStart { strategy, .. } => {
-                let _ = writeln!(
-                    self.content_buffer,
-                    "\n[compact] Starting compaction: {strategy}"
-                );
+                self.messages.push(ChatMessage::System {
+                    text: format!("Compacting: {strategy}"),
+                });
             }
             Event::CompactEnd {
                 after_tokens,
                 removed_messages,
             } => {
-                let _ = writeln!(
-                    self.content_buffer,
-                    "[compact] Removed {removed_messages} messages, now {after_tokens} tokens"
-                );
+                self.messages.push(ChatMessage::System {
+                    text: format!("Removed {removed_messages} messages, now {after_tokens} tokens"),
+                });
             }
             Event::TokenWarning {
                 usage_pct,
                 used,
                 limit,
             } => {
-                let _ = writeln!(
-                    self.content_buffer,
-                    "[warn] Token usage {:.0}% ({used}/{limit})",
-                    usage_pct * 100.0,
-                );
+                self.messages.push(ChatMessage::System {
+                    text: format!("Token usage {:.0}% ({used}/{limit})", usage_pct * 100.0),
+                });
             }
             Event::SessionSaved { session_id } => {
-                let _ = writeln!(self.content_buffer, "[session] Saved: {session_id}");
+                self.messages.push(ChatMessage::System {
+                    text: format!("Session saved: {session_id}"),
+                });
             }
             Event::SessionResumed {
                 session_id,
                 message_count,
             } => {
-                let _ = writeln!(
-                    self.content_buffer,
-                    "[session] Resumed {session_id} ({message_count} messages)"
-                );
+                self.messages.push(ChatMessage::System {
+                    text: format!("Resumed {session_id} ({message_count} messages)"),
+                });
             }
             Event::Error { message } => {
                 self.spinner.stop();
                 self.current_tool = None;
-                let _ = writeln!(self.content_buffer, "\n[Error: {message}]");
                 self.state = AppState::Idle;
+                self.messages.push(ChatMessage::System {
+                    text: format!("Error: {message}"),
+                });
             }
             _ => {}
         }
@@ -745,14 +754,8 @@ impl App {
             Widget::render(&self.session_sidebar, sidebar_area, buf);
         }
 
-        // Content area with scroll support
-        render_content_scrolled(
-            &self.content_buffer,
-            self.content_scroll,
-            &self.output_styles,
-            layout.content,
-            buf,
-        );
+        // Content area: structured message rendering
+        render_messages(&self.messages, self.content_scroll, layout.content, buf);
 
         // Status line: only show spinner when active (CC leaves this blank when idle)
         if self.spinner.is_active() {
@@ -1075,7 +1078,110 @@ fn render_input_with_prompt(
     }
 }
 
+/// Render structured messages list — each `ChatMessage` gets its own visual treatment.
 #[allow(clippy::cast_possible_truncation)]
+fn render_messages(messages: &[ChatMessage], scroll_offset: usize, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 {
+        return;
+    }
+
+    let theme = crate::theme::Theme::dark();
+    let highlighter = crate::components::syntax::SyntaxHighlighter::new();
+    let md_renderer = crate::components::markdown::MarkdownRenderer::new(&theme, &highlighter);
+
+    let mut rendered_lines: Vec<Line<'static>> = Vec::new();
+
+    for msg in messages {
+        match msg {
+            ChatMessage::User { text } => {
+                rendered_lines.push(Line::from(vec![
+                    Span::styled(
+                        "❯ ",
+                        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(text.clone(), Style::default().fg(Color::White)),
+                ]));
+                rendered_lines.push(Line::default()); // breathing room
+            }
+            ChatMessage::Assistant { text } => {
+                if text.is_empty() {
+                    continue;
+                }
+                // ● prefix on first line, then markdown-rendered content
+                let md_lines = md_renderer.render(text);
+                if let Some(first) = md_lines.first() {
+                    let mut spans = vec![Span::styled("● ", Style::default().fg(CRAB_COLOR))];
+                    spans.extend(first.spans.iter().cloned());
+                    rendered_lines.push(Line::from(spans));
+                    rendered_lines.extend(md_lines.into_iter().skip(1));
+                }
+                rendered_lines.push(Line::default());
+            }
+            ChatMessage::ToolUse { name } => {
+                rendered_lines.push(Line::from(Span::styled(
+                    format!("● {name}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            ChatMessage::ToolResult {
+                output, is_error, ..
+            } => {
+                let style = if *is_error {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                // Show up to 10 lines, truncate rest
+                let lines: Vec<&str> = output.lines().collect();
+                let show = lines.len().min(10);
+                for line in &lines[..show] {
+                    rendered_lines.push(Line::from(Span::styled(format!("  {line}"), style)));
+                }
+                if lines.len() > 10 {
+                    rendered_lines.push(Line::from(Span::styled(
+                        format!("  ... ({} more lines)", lines.len() - 10),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                rendered_lines.push(Line::default());
+            }
+            ChatMessage::System { text } => {
+                rendered_lines.push(Line::from(Span::styled(
+                    text.clone(),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+    }
+
+    // Scroll and render visible lines (auto-follow bottom)
+    let visible = area.height as usize;
+    let end = rendered_lines.len().saturating_sub(scroll_offset);
+    let start = end.saturating_sub(visible);
+
+    for (i, line) in rendered_lines
+        .iter()
+        .skip(start)
+        .take(visible.min(end.saturating_sub(start)))
+        .enumerate()
+    {
+        let y = area.y + i as u16;
+        Widget::render(
+            line.clone(),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+}
+
+#[allow(dead_code, clippy::cast_possible_truncation)]
 fn render_content_scrolled(
     text: &str,
     scroll_offset: usize,
@@ -1393,13 +1499,26 @@ mod tests {
         TuiEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
     }
 
+    /// Check if any message in the list contains the given text.
+    fn messages_contain(messages: &[ChatMessage], needle: &str) -> bool {
+        messages.iter().any(|m| match m {
+            ChatMessage::User { text }
+            | ChatMessage::Assistant { text }
+            | ChatMessage::System { text } => text.contains(needle),
+            ChatMessage::ToolUse { name } => name.contains(needle),
+            ChatMessage::ToolResult {
+                tool_name, output, ..
+            } => tool_name.contains(needle) || output.contains(needle),
+        })
+    }
+
     #[test]
     fn app_initial_state() {
         let app = App::new("gpt-4o");
         assert_eq!(app.state, AppState::Idle);
         assert!(app.input.is_empty());
         assert!(!app.spinner.is_active());
-        assert!(app.content_buffer.is_empty());
+        assert!(app.messages.is_empty());
         assert_eq!(app.model_name, "gpt-4o");
         assert!(!app.should_quit);
         assert!(!app.sidebar_visible);
@@ -1486,7 +1605,7 @@ mod tests {
             index: 0,
             delta: "world".into(),
         }));
-        assert!(app.content_buffer.ends_with("Hello world"));
+        assert!(messages_contain(&app.messages, "Hello world"));
         assert_eq!(app.content_scroll, 0); // auto-scrolled
     }
 
@@ -1639,7 +1758,7 @@ mod tests {
 
         assert_eq!(app.state, AppState::Idle);
         assert!(!app.spinner.is_active());
-        assert!(app.content_buffer.contains("rate limit"));
+        assert!(messages_contain(&app.messages, "rate limit"));
     }
 
     #[test]
@@ -1681,8 +1800,8 @@ mod tests {
             output: crab_core::tool::ToolOutput::success("file1.txt\nfile2.txt"),
         }));
 
-        assert!(app.content_buffer.contains("file1.txt"));
-        assert!(app.content_buffer.contains("bash result"));
+        assert!(messages_contain(&app.messages, "file1.txt"));
+        assert!(messages_contain(&app.messages, "bash"));
     }
 
     #[test]
@@ -1696,8 +1815,13 @@ mod tests {
             output: crab_core::tool::ToolOutput::error("command not found"),
         }));
 
-        assert!(app.content_buffer.contains("tool error"));
-        assert!(app.content_buffer.contains("command not found"));
+        assert!(messages_contain(&app.messages, "command not found"));
+        // Verify it's marked as an error
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| matches!(m, ChatMessage::ToolResult { is_error: true, .. }))
+        );
     }
 
     #[test]
@@ -1711,7 +1835,7 @@ mod tests {
             name: "read".into(),
         }));
 
-        assert!(app.content_buffer.contains("[tool] read"));
+        assert!(messages_contain(&app.messages, "read"));
         assert_eq!(app.current_tool.as_deref(), Some("read"));
     }
 
@@ -1761,7 +1885,7 @@ mod tests {
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::SessionSaved {
             session_id: "sess_abc".into(),
         }));
-        assert!(app.content_buffer.contains("[session] Saved: sess_abc"));
+        assert!(messages_contain(&app.messages, "sess_abc"));
     }
 
     #[test]
@@ -1772,7 +1896,7 @@ mod tests {
             used: 90000,
             limit: 100_000,
         }));
-        assert!(app.content_buffer.contains("90%"));
+        assert!(messages_contain(&app.messages, "90%"));
     }
 
     #[test]
