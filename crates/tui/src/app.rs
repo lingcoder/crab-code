@@ -1054,16 +1054,17 @@ fn render_input_with_prompt(
         height: area.height,
     };
 
-    // Show placeholder only when input is completely empty
     if input.is_empty() {
+        // Placeholder — only rendered when truly empty, mutually exclusive with input
         let placeholder = Line::from(Span::styled(
             "Type a message...",
             Style::default().fg(Color::DarkGray),
         ));
         Widget::render(placeholder, input_area, buf);
+    } else {
+        // Actual input content — no placeholder underneath
+        Widget::render(input, input_area, buf);
     }
-    // Always render input on top (when non-empty, overwrites placeholder)
-    Widget::render(input, input_area, buf);
 }
 
 #[allow(clippy::cast_possible_truncation)]
