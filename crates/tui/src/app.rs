@@ -163,6 +163,8 @@ pub struct App {
     pub input_mode: PromptInputMode,
     /// Timestamp of last Ctrl+C press for double-press detection.
     last_interrupt: Option<Instant>,
+    /// Current permission mode (cycled via Shift+Tab).
+    pub permission_mode: crab_core::permission::PermissionMode,
 }
 
 impl App {
@@ -199,6 +201,7 @@ impl App {
             unseen_message_count: 0,
             input_mode: PromptInputMode::Prompt,
             last_interrupt: None,
+            permission_mode: crab_core::permission::PermissionMode::Default,
         }
     }
 
@@ -362,9 +365,19 @@ impl App {
                     self.scroll_to_search_match();
                     return AppAction::None;
                 }
-                // CycleMode: CC cycles permission modes. Needs agent integration.
+                Action::CycleMode if self.state != AppState::Confirming => {
+                    // CC cycles: default → acceptEdits → plan → default
+                    use crab_core::permission::PermissionMode;
+                    self.permission_mode = match self.permission_mode {
+                        PermissionMode::Default => PermissionMode::AcceptEdits,
+                        PermissionMode::AcceptEdits => PermissionMode::Plan,
+                        // All other modes cycle back to Default
+                        _ => PermissionMode::Default,
+                    };
+                    return AppAction::None;
+                }
                 // Redraw: handled by outer loop on next frame.
-                Action::CycleMode | Action::Redraw => {
+                Action::Redraw => {
                     return AppAction::None;
                 }
                 // These actions are recognized but currently act as no-ops
@@ -492,9 +505,8 @@ impl App {
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     if !self.input.is_empty() {
                         let text = self.input.submit();
-                        // Turn separator: show user prompt then divider
-                        let _ = writeln!(self.content_buffer, "❯ {text}");
-                        let _ = writeln!(self.content_buffer, "────────────────────────────────");
+                        // Show user prompt in content area (no divider — CC doesn't have one)
+                        let _ = writeln!(self.content_buffer, "\n❯ {text}\n");
                         self.state = AppState::Processing;
                         self.spinner.start_with_random_verb();
                         return AppAction::Submit(text);
@@ -737,6 +749,7 @@ impl App {
         } else {
             render_status_line(
                 &self.model_name,
+                self.permission_mode,
                 self.total_input_tokens,
                 self.total_output_tokens,
                 &self.thinking,
@@ -1230,6 +1243,7 @@ fn classify_tool_risk(tool_name: &str) -> RiskLevel {
 /// Matches CC's `StatusLine` component showing operational data.
 fn render_status_line(
     model: &str,
+    perm_mode: crab_core::permission::PermissionMode,
     input_tokens: u64,
     output_tokens: u64,
     thinking: &ThinkingState,
@@ -1242,6 +1256,8 @@ fn render_status_line(
 
     let mut spans = vec![
         Span::styled(model, Style::default().fg(Color::Cyan)),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(perm_mode.to_string(), Style::default().fg(Color::Yellow)),
         Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
     ];
 
