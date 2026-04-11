@@ -391,15 +391,20 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
 mod tests {
     use super::*;
 
-    fn temp_store_path() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "crab-perm-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        dir.join("permissions.json")
+    /// Create a unique temporary directory + `permissions.json` path under it.
+    ///
+    /// Returns `(TempDir, PathBuf)` — the caller MUST keep `TempDir` alive for
+    /// the duration of the test, otherwise the directory is removed on drop.
+    /// Uses `tempfile` (OS-level uniqueness) to avoid race conditions when
+    /// multiple nextest processes hit the same nanosecond-based path on
+    /// coarse-clock CI runners (observed on macOS).
+    fn temp_store() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::Builder::new()
+            .prefix("crab-perm-test-")
+            .tempdir()
+            .expect("create tempdir");
+        let path = dir.path().join("permissions.json");
+        (dir, path)
     }
 
     fn make_rule(pattern: &str, verdict: RuleVerdict, scope: RuleScope) -> PermissionRule {
@@ -500,7 +505,8 @@ mod tests {
 
     #[test]
     fn add_rule_and_list() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("read", RuleVerdict::Allow, RuleScope::Permanent));
 
@@ -511,7 +517,8 @@ mod tests {
 
     #[test]
     fn add_rule_replaces_same_pattern_and_scope() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("bash", RuleVerdict::Deny, RuleScope::Session));
 
@@ -521,7 +528,8 @@ mod tests {
 
     #[test]
     fn add_rule_different_scopes_coexist() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("bash", RuleVerdict::Deny, RuleScope::Permanent));
 
@@ -530,7 +538,8 @@ mod tests {
 
     #[test]
     fn remove_rules_by_pattern() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("bash", RuleVerdict::Deny, RuleScope::Permanent));
         set.add_rule(make_rule("read", RuleVerdict::Allow, RuleScope::Session));
@@ -543,7 +552,8 @@ mod tests {
 
     #[test]
     fn remove_rules_by_scope() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("bash", RuleVerdict::Deny, RuleScope::Permanent));
 
@@ -555,13 +565,15 @@ mod tests {
 
     #[test]
     fn remove_nonexistent_returns_zero() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         assert_eq!(set.remove_rules("nonexistent"), 0);
     }
 
     #[test]
     fn clear_session_rules() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
         set.add_rule(make_rule("read", RuleVerdict::Allow, RuleScope::Permanent));
         set.add_rule(make_rule("write", RuleVerdict::Deny, RuleScope::Session));
@@ -575,7 +587,8 @@ mod tests {
 
     #[test]
     fn check_exact_match() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
 
         let result = set.check("bash");
@@ -585,7 +598,8 @@ mod tests {
 
     #[test]
     fn check_glob_match() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("mcp__*", RuleVerdict::Deny, RuleScope::Permanent));
 
         let result = set.check("mcp__playwright_click");
@@ -595,7 +609,8 @@ mod tests {
 
     #[test]
     fn check_exact_takes_priority_over_glob() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("mcp__*", RuleVerdict::Deny, RuleScope::Permanent));
         set.add_rule(make_rule(
             "mcp__safe_tool",
@@ -610,7 +625,8 @@ mod tests {
 
     #[test]
     fn check_no_match_returns_none() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("bash", RuleVerdict::Allow, RuleScope::Session));
 
         assert!(set.check("write").is_none());
@@ -620,7 +636,8 @@ mod tests {
 
     #[test]
     fn record_audit_entries() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.record_audit("bash", RuleVerdict::Allow, AuditSource::Interactive, None);
         set.record_audit(
             "write",
@@ -638,7 +655,8 @@ mod tests {
 
     #[test]
     fn audit_entry_has_timestamp() {
-        let mut set = PermissionRuleSet::new(temp_store_path());
+        let (_tmp, path) = temp_store();
+        let mut set = PermissionRuleSet::new(path);
         set.record_audit("bash", RuleVerdict::Allow, AuditSource::Policy, None);
 
         let entry = &set.audit_log()[0];
@@ -651,7 +669,7 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip() {
-        let path = temp_store_path();
+        let (_tmp, path) = temp_store();
         let mut set = PermissionRuleSet::new(path.clone());
 
         // Add rules of both scopes
@@ -663,7 +681,7 @@ mod tests {
         set.save().unwrap();
 
         // Load into a fresh rule set
-        let mut set2 = PermissionRuleSet::new(path.clone());
+        let mut set2 = PermissionRuleSet::new(path);
         set2.load().unwrap();
 
         // Only permanent rules should be loaded
@@ -671,17 +689,11 @@ mod tests {
         assert!(set2.list_session_rules().is_empty());
         assert_eq!(set2.list_permanent_rules().len(), 2);
         assert_eq!(set2.audit_log().len(), 1);
-
-        // Cleanup
-        let _ = std::fs::remove_file(&path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
     }
 
     #[test]
     fn load_preserves_session_rules() {
-        let path = temp_store_path();
+        let (_tmp, path) = temp_store();
 
         // Save a permanent rule
         let store = PermissionStore {
@@ -691,7 +703,7 @@ mod tests {
         save_permission_store(&path, &store).unwrap();
 
         // Create a rule set with a session rule, then load
-        let mut set = PermissionRuleSet::new(path.clone());
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(make_rule("write", RuleVerdict::Deny, RuleScope::Session));
         set.load().unwrap();
 
@@ -699,11 +711,6 @@ mod tests {
         assert_eq!(set.list_rules().len(), 2);
         assert!(set.check("bash").is_some());
         assert!(set.check("write").is_some());
-
-        let _ = std::fs::remove_file(&path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
     }
 
     #[test]
@@ -715,22 +722,17 @@ mod tests {
 
     #[test]
     fn save_creates_parent_dirs() {
-        let path = temp_store_path();
+        let (_tmp, path) = temp_store();
         let set = PermissionRuleSet::new(path.clone());
         assert!(set.save().is_ok());
         assert!(path.exists());
-
-        let _ = std::fs::remove_file(&path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
     }
 
     // ── File I/O helpers ──────────────────────────────────────────────
 
     #[test]
     fn load_invalid_json_returns_error() {
-        let path = temp_store_path();
+        let (_tmp, path) = temp_store();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -738,11 +740,6 @@ mod tests {
 
         let result = load_permission_store(&path);
         assert!(result.is_err());
-
-        let _ = std::fs::remove_file(&path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
     }
 
     // ── Path helpers ──────────────────────────────────────────────────
