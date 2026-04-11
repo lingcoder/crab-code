@@ -478,9 +478,7 @@ mod tests {
         let expected = format!("crab_ac_test{}testfile.txt", std::path::MAIN_SEPARATOR);
         assert!(
             texts.contains(&expected.as_str()),
-            "Expected {:?} in {:?}",
-            expected,
-            texts
+            "Expected {expected:?} in {texts:?}"
         );
 
         let _ = std::fs::remove_dir_all(&test_dir);

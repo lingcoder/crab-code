@@ -51,6 +51,12 @@ impl Tool for McpAuthTool {
         true
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let server = input["server_name"].as_str().unwrap_or("?");
+        let action = input["action"].as_str().unwrap_or("?");
+        Some(format!("McpAuth ({server}: {action})"))
+    }
+
     fn execute(
         &self,
         input: Value,

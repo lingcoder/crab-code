@@ -33,7 +33,10 @@ use crab_tools::builtin::create_default_registry;
 use crab_tools::executor::{PermissionHandler, ToolExecutor};
 
 use crate::app::{App, AppAction};
+use crate::app_event::AppEvent;
 use crate::event::spawn_event_loop;
+use crate::event_broker::EventBroker;
+use crate::frame_requester::FrameRequester;
 
 /// Configuration for launching the TUI REPL.
 pub struct TuiConfig {
@@ -50,9 +53,10 @@ pub struct TuiConfig {
 #[allow(clippy::too_many_lines)]
 pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     // Build tool registry and executor
-    let registry = create_default_registry();
+    let registry = Arc::new(create_default_registry());
     let tool_schemas = registry.tool_schemas();
-    let mut executor = ToolExecutor::new(Arc::new(registry));
+    let registry_for_app = Arc::clone(&registry);
+    let mut executor = ToolExecutor::new(registry);
 
     let session_id = config.session_config.session_id.clone();
 
@@ -148,9 +152,18 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     let (agent_ui_tx, agent_ui_rx) = mpsc::unbounded_channel::<Event>();
     spawn_event_forwarder(event_rx, agent_ui_tx);
 
+    // EventBroker controls whether crossterm events flow into the TUI loop.
+    // We pause it during the external editor (Ctrl+G) so $EDITOR can own the
+    // terminal, then resume.
+    let event_broker = Arc::new(EventBroker::new());
+
+    // FrameRequester lets background tasks request a redraw without waiting
+    // for the next tick.
+    let frame_requester = FrameRequester::default();
+
     // Spawn the TUI event loop (merges crossterm + agent events + ticks)
     let tick_rate = std::time::Duration::from_millis(100);
-    let mut tui_rx = spawn_event_loop(agent_ui_rx, tick_rate);
+    let mut tui_rx = spawn_event_loop(agent_ui_rx, tick_rate, Arc::clone(&event_broker));
 
     // Set up terminal
     enable_raw_mode()?;
@@ -161,6 +174,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
 
     let model_name = loop_config.model.as_str().to_string();
     let mut app = App::new(&model_name);
+    app.tool_registry = Some(registry_for_app);
     if let Ok(cwd) = std::env::current_dir() {
         app.set_working_dir(cwd.display().to_string());
         app.set_completion_cwd(cwd);
@@ -257,6 +271,8 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         &skill_registry,
         session_history.as_ref(),
         &session_id,
+        Arc::clone(&event_broker),
+        frame_requester.clone(),
     )
     .await;
 
@@ -345,10 +361,15 @@ async fn run_loop(
     skill_registry: &SkillRegistry,
     session_history: Option<&SessionHistory>,
     session_id: &str,
+    event_broker: Arc<EventBroker>,
+    frame_requester: FrameRequester,
 ) -> anyhow::Result<()> {
     // Channel to get conversation back from agent task
     let mut conv_return: Option<tokio::sync::oneshot::Receiver<AgentTaskResult>> = None;
     let mut cancel = tool_ctx.cancellation_token.clone();
+
+    // Subscribe once — receivers must be live before any send to observe it.
+    let mut frame_rx = frame_requester.subscribe();
 
     loop {
         // Render
@@ -356,13 +377,18 @@ async fn run_loop(
             app.render(frame.area(), frame.buffer_mut());
         })?;
 
-        // Wait for TUI event or agent task completion
+        // Wait for TUI event, agent task completion, or an explicit redraw request
         let event = tokio::select! {
             ev = tui_rx.recv() => {
                 match ev {
                     Some(e) => Some(e),
                     None => break,
                 }
+            }
+            // A redraw signal alone is enough to loop back and re-render. We use
+            // `recv()`'s `Lagged` variant as benign — drain and re-render.
+            _ = frame_rx.recv() => {
+                continue;
             }
             result = async {
                 match conv_return.as_mut() {
@@ -492,11 +518,117 @@ async fn run_loop(
                         .push_str("\n[session] New session requested (not yet wired)\n");
                 }
             }
+            AppAction::ExternalEditor(initial_text) => {
+                // Hand the terminal off to $EDITOR. We must restore raw mode etc.
+                // before spawning, then re-enter after.
+                disable_raw_mode().ok();
+                execute!(
+                    terminal.backend_mut(),
+                    DisableBracketedPaste,
+                    LeaveAlternateScreen
+                )
+                .ok();
+
+                let editor_result = run_external_editor(&event_broker, &initial_text, None).await;
+
+                // Always re-enter the alt screen + raw mode, even on error.
+                enable_raw_mode().ok();
+                execute!(
+                    terminal.backend_mut(),
+                    EnterAlternateScreen,
+                    EnableBracketedPaste
+                )
+                .ok();
+                terminal.clear().ok();
+
+                match editor_result {
+                    Ok(text) => {
+                        app.apply_event(AppEvent::ExternalEditorClosed(text));
+                    }
+                    Err(e) => {
+                        use std::fmt::Write as _;
+                        let _ = write!(app.content_buffer, "\n[external editor error: {e}]\n");
+                    }
+                }
+                frame_requester.request_frame();
+            }
             AppAction::None => {}
         }
     }
 
     Ok(())
+}
+
+/// RAII guard that resumes an `EventBroker` when dropped — used by the external
+/// editor flow so the broker is never left paused on an early-return path.
+struct ResumeGuard<'a>(&'a EventBroker);
+
+impl Drop for ResumeGuard<'_> {
+    fn drop(&mut self) {
+        self.0.resume();
+    }
+}
+
+/// Spawn `$EDITOR` against a tempfile seeded with `initial_text` and return the
+/// resulting file contents.
+///
+/// `editor_override` lets tests force a specific command (e.g. `cmd /c exit`)
+/// instead of resolving from the environment.
+///
+/// Always pauses the broker on entry and resumes on exit (even on error), so
+/// crossterm input is never silently swallowed after a failure.
+async fn run_external_editor(
+    broker: &Arc<EventBroker>,
+    initial_text: &str,
+    editor_override: Option<&str>,
+) -> anyhow::Result<String> {
+    use std::io::Write as _;
+
+    broker.pause();
+    let _guard = ResumeGuard(broker.as_ref());
+
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let path = std::env::temp_dir().join(format!("crab_edit_{id}.txt"));
+
+    // Seed the file with the current input text so $EDITOR opens with it.
+    {
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(initial_text.as_bytes())?;
+    }
+
+    let editor: String = match editor_override {
+        Some(s) => s.to_string(),
+        None => std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "notepad".to_string()
+                } else {
+                    "vi".to_string()
+                }
+            }),
+    };
+
+    // Split editor into command + leading args (so `code -w` style works).
+    let mut parts = editor.split_whitespace();
+    let cmd = parts.next().unwrap_or("vi");
+    let leading_args: Vec<&str> = parts.collect();
+
+    let status = tokio::process::Command::new(cmd)
+        .args(&leading_args)
+        .arg(&path)
+        .status()
+        .await;
+
+    let result = match status {
+        Ok(_) => std::fs::read_to_string(&path).map_err(anyhow::Error::from),
+        Err(e) => Err(anyhow::Error::from(e)),
+    };
+
+    // Best-effort cleanup; ignore failure (e.g. file already gone).
+    let _ = std::fs::remove_file(&path);
+
+    result
 }
 
 /// Resolve `/command` input to skill content if a matching skill exists.
@@ -628,6 +760,45 @@ mod tests {
         let result = resolve_slash_command("/review src/main.rs", &reg);
         assert!(result.contains("Review the code."));
         assert!(result.contains("src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn run_external_editor_roundtrip_with_noop_editor() {
+        // Use a no-op "editor": on Windows `cmd /c exit`, on Unix `true`.
+        // The editor exits immediately without modifying the file, so we
+        // expect to get back exactly what we seeded.
+        let broker = Arc::new(EventBroker::new());
+        let initial = "hello from crab";
+
+        #[cfg(windows)]
+        let fake_editor = "cmd /c exit";
+        #[cfg(not(windows))]
+        let fake_editor = "true";
+
+        let result = run_external_editor(&broker, initial, Some(fake_editor)).await;
+
+        assert!(result.is_ok(), "editor flow returned error: {result:?}");
+        assert_eq!(result.unwrap(), initial);
+        // Broker must be resumed after the editor returns.
+        assert!(!broker.is_paused(), "broker not resumed after editor");
+    }
+
+    #[tokio::test]
+    async fn run_external_editor_resumes_broker_on_failure() {
+        // A nonexistent editor must still resume the broker — otherwise the
+        // TUI would be stuck silently dropping all keystrokes.
+        let broker = Arc::new(EventBroker::new());
+        let result = run_external_editor(
+            &broker,
+            "data",
+            Some("definitely-not-an-editor-binary-xyzzy"),
+        )
+        .await;
+        assert!(result.is_err(), "expected spawn failure");
+        assert!(
+            !broker.is_paused(),
+            "broker must be resumed even when editor spawn fails"
+        );
     }
 
     #[test]

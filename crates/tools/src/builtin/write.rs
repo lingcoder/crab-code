@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 use std::future::Future;
 use std::path::Path;
@@ -113,6 +113,48 @@ impl Tool for WriteTool {
 
     fn requires_confirmation(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: userFacingName="Write", message = file path
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("Write ({filename})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        // CCB: "Wrote N lines to filename" (N and filename bold)
+        let line_count = text.lines().count();
+        // Show first 10 lines of content as preview (CCB: MAX_LINES_TO_RENDER=10)
+        let preview_lines: Vec<&str> = text.lines().take(10).collect();
+        let mut lines = vec![ToolDisplayLine::new(
+            format!("Wrote {line_count} lines"),
+            ToolDisplayStyle::Muted,
+        )];
+        for pl in &preview_lines {
+            lines.push(ToolDisplayLine::new(*pl, ToolDisplayStyle::Normal));
+        }
+        let total = text.lines().count();
+        if total > 10 {
+            lines.push(ToolDisplayLine::new(
+                format!("… +{} lines", total - 10),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 1, // condensed: just the summary
+        })
+    }
+
+    fn format_rejected_summary(&self, input: &Value) -> Option<String> {
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("Write rejected ({filename})"))
     }
 }
 

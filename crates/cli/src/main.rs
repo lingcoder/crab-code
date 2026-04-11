@@ -891,7 +891,8 @@ async fn run_single_shot(
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
     let event_rx = take_event_rx(session);
-    let printer = tokio::spawn(print_events(event_rx, output_format));
+    let registry = session.executor.registry_arc();
+    let printer = tokio::spawn(print_events(event_rx, output_format, registry));
 
     let result = session.handle_user_input(prompt).await;
     // Replace the event_tx with a dummy so the printer's rx sees all senders dropped.
@@ -943,7 +944,8 @@ async fn run_repl(
         let effective_input = resolve_slash_command(input, skill_registry);
 
         let event_rx = take_event_rx(session);
-        let printer = tokio::spawn(print_events(event_rx, OutputFormat::Text));
+        let registry = session.executor.registry_arc();
+        let printer = tokio::spawn(print_events(event_rx, OutputFormat::Text, registry));
 
         match session.handle_user_input(&effective_input).await {
             Ok(()) => {}
@@ -975,7 +977,11 @@ fn take_event_rx(session: &mut AgentSession) -> mpsc::Receiver<Event> {
 ///
 /// `OutputFormat::Json` and `StreamJson` emit NDJSON to stdout.
 /// `OutputFormat::Text` uses colored human-readable output.
-async fn print_events(mut rx: mpsc::Receiver<Event>, output_format: OutputFormat) {
+async fn print_events(
+    mut rx: mpsc::Receiver<Event>,
+    output_format: OutputFormat,
+    registry: Arc<crab_tools::registry::ToolRegistry>,
+) {
     let mut stdout = std::io::stdout();
     let mut spinner: Option<Spinner> = None;
 
@@ -993,18 +999,25 @@ async fn print_events(mut rx: mpsc::Receiver<Event>, output_format: OutputFormat
         }
 
         match event {
-            Event::ContentDelta { delta, .. } => {
-                if let Some(mut s) = spinner.take() {
-                    s.stop();
+            Event::ContentDelta { index, delta } => {
+                // Only print text content (index 0), not tool arguments (index 1000+)
+                if index == 0 {
+                    if let Some(mut s) = spinner.take() {
+                        s.stop();
+                    }
+                    print!("{delta}");
+                    let _ = stdout.flush();
                 }
-                print!("{delta}");
-                let _ = stdout.flush();
             }
-            Event::ToolUseStart { name, .. } => {
+            Event::ToolUseStart { name, input, .. } => {
                 if let Some(mut s) = spinner.take() {
                     s.stop();
                 }
-                eprintln!("{} {}", "tool:".cyan().bold(), name.cyan());
+                let summary = registry
+                    .get(&name)
+                    .and_then(|tool| tool.format_use_summary(&input))
+                    .unwrap_or_else(|| name.clone());
+                eprintln!("{} {}", "tool:".cyan().bold(), summary.cyan());
                 spinner = Some(Spinner::start(&format!("running {name}...")));
             }
             Event::ToolOutputDelta { id: _, delta } => {
@@ -1161,10 +1174,11 @@ fn event_to_json(event: &Event) -> Option<Value> {
                 "cache_creation_tokens": usage.cache_creation_tokens,
             },
         })),
-        Event::ToolUseStart { name, id } => Some(json!({
+        Event::ToolUseStart { name, id, input } => Some(json!({
             "type": "tool_use_start",
             "tool": name,
             "id": id,
+            "input": input,
         })),
         Event::ToolUseInput { id, input } => Some(json!({
             "type": "tool_use_input",
@@ -1622,6 +1636,7 @@ mod tests {
             Event::ToolUseStart {
                 id: "t".into(),
                 name: "n".into(),
+                input: Value::Null,
             },
             Event::ToolUseInput {
                 id: "t".into(),

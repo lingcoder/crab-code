@@ -1,10 +1,12 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 use std::fmt::Write;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+
+use crate::str_utils::truncate_chars;
 
 /// Diff-based file editing tool.
 pub const EDIT_TOOL_NAME: &str = "Edit";
@@ -181,6 +183,66 @@ impl Tool for EditTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: userFacingName = "Update" (if old_string non-empty) or "Create" (if empty)
+        // message = file path
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        let verb = if input["old_string"].as_str().is_some_and(|s| !s.is_empty()) {
+            "Update"
+        } else {
+            "Create"
+        };
+        Some(format!("{verb} ({filename})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        if text.is_empty() {
+            return None;
+        }
+
+        // CCB: summary "Added N lines, Removed M lines" + colored diff below
+        let mut added = 0usize;
+        let mut removed = 0usize;
+        let mut diff_lines: Vec<ToolDisplayLine> = Vec::new();
+
+        for line in text.lines() {
+            if line.starts_with('+') {
+                added += 1;
+                diff_lines.push(ToolDisplayLine::new(line, ToolDisplayStyle::DiffAdd));
+            } else if line.starts_with('-') {
+                removed += 1;
+                diff_lines.push(ToolDisplayLine::new(line, ToolDisplayStyle::DiffRemove));
+            } else if line.starts_with("@@") {
+                diff_lines.push(ToolDisplayLine::new(line, ToolDisplayStyle::Highlight));
+            } else {
+                diff_lines.push(ToolDisplayLine::new(line, ToolDisplayStyle::DiffContext));
+            }
+        }
+
+        // Summary line first (CCB style: "Added N lines, Removed M lines")
+        let mut result_lines = vec![ToolDisplayLine::new(
+            format!("Added {added} lines, Removed {removed} lines"),
+            ToolDisplayStyle::Muted,
+        )];
+        result_lines.extend(diff_lines);
+
+        Some(ToolDisplayResult {
+            lines: result_lines,
+            preview_lines: 1, // condensed: show summary only
+        })
+    }
+
+    fn format_rejected_summary(&self, input: &Value) -> Option<String> {
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("Update rejected ({filename})"))
+    }
 }
 
 /// Resolve the match target: try exact match first, then fuzzy if enabled.
@@ -277,12 +339,10 @@ fn find_match_locations(content: &str, needle: &str) -> Vec<(usize, String)> {
             .find('\n')
             .map_or(content.len(), |p| abs_pos + p);
         let context_line = content[line_start..line_end].trim();
-        // Truncate long context lines
-        let display = if context_line.len() > 80 {
-            format!("{}...", &context_line[..77])
-        } else {
-            context_line.to_owned()
-        };
+        // Truncate long context lines. File content may contain multi-byte
+        // UTF-8 (CJK, emoji in comments/strings); truncate_chars counts
+        // codepoints to avoid panics on non-ASCII input.
+        let display = truncate_chars(context_line, 80, "...");
         locations.push((line_num, display));
         search_from = abs_pos + needle.len();
     }

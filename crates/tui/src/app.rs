@@ -10,11 +10,16 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::components::approval_queue::ApprovalQueue;
 use crate::components::autocomplete::{AutoComplete, CommandInfo};
+use crate::components::bottom_bar::BottomBar;
 use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
 use crate::components::context_collapse::{CollapsibleSection, ContextCollapse};
+use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
-use crate::components::output_styles::{ContentType, OutputStyles};
+use crate::components::input_area::InputArea;
+use crate::components::message_list::MessageList;
+use crate::components::output_styles::OutputStyles;
 use crate::components::permission::{PermissionCard, PermissionResponse};
 use crate::components::search::{self, SearchState};
 use crate::components::session_sidebar::SessionSidebar;
@@ -23,6 +28,7 @@ use crate::components::tool_output::{ToolOutputEntry, ToolOutputList};
 use crate::event::TuiEvent;
 use crate::keybindings::{Action, Keybindings};
 use crate::layout::AppLayout;
+use crate::traits::Renderable;
 
 /// Application state phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +103,10 @@ pub enum AppAction {
     NewSession,
     /// User wants to switch to a different session by ID.
     SwitchSession(String),
+    /// User pressed Ctrl+G to open the external editor with the given input text.
+    /// Runner pauses the event loop, spawns `$EDITOR`, then injects
+    /// `AppEvent::ExternalEditorClosed(text)` once the editor exits.
+    ExternalEditor(String),
 }
 
 /// A single message in the conversation, structurally typed for rendering.
@@ -110,13 +120,19 @@ pub enum ChatMessage {
     /// Assistant text response — rendered with `●` prefix + markdown.
     /// `text` is appended incrementally during streaming.
     Assistant { text: String },
-    /// Tool invocation start — rendered as `● {name}` in dim style.
-    ToolUse { name: String },
+    /// Tool invocation start — rendered as `● {summary}` or `● {name}`.
+    ToolUse {
+        name: String,
+        /// Custom summary from `Tool::format_use_summary()`.
+        summary: Option<String>,
+    },
     /// Tool execution result — collapsible, rendered as output text.
     ToolResult {
         tool_name: String,
         output: String,
         is_error: bool,
+        /// Custom display from `Tool::format_result()`.
+        display: Option<crab_core::tool::ToolDisplayResult>,
     },
     /// System/informational message — rendered in dim gray.
     System { text: String },
@@ -124,6 +140,8 @@ pub enum ChatMessage {
 
 /// Main TUI application.
 pub struct App {
+    /// Tool registry — used to call rendering hooks (`format_use_summary`, `format_result`).
+    pub tool_registry: Option<std::sync::Arc<crab_tools::registry::ToolRegistry>>,
     /// Current application state.
     pub state: AppState,
     /// Text input component.
@@ -134,11 +152,39 @@ pub struct App {
     pub content_buffer: String,
     /// Model name (displayed in top bar).
     pub model_name: String,
-    /// Current pending permission card, if any (CC-style inline card).
-    permission_card: Option<PermissionCard>,
+    /// FIFO queue of pending permission approvals (CC-style inline cards).
+    pub approval_queue: ApprovalQueue,
     /// Whether the app should exit.
     pub should_quit: bool,
     /// Name of the tool currently executing (for display).
+    ///
+    /// Loaded in `apply_event(ToolStart)` and cleared via `Option::take()` in
+    /// `apply_event(ToolFinished)`, `MessageComplete`, or `AgentError`. The
+    /// `take()` in `ToolFinished` is the only production reader — see the
+    /// `#13` regression test `apply_event_tool_finished_resolves_name_from_current_tool`.
+    ///
+    /// ## Limitation — sequential tool calls only
+    ///
+    /// This is `Option<String>` (single-slot) because today's `agent/query_loop`
+    /// runs tools strictly sequentially: one `Event::ToolUseStart` is always
+    /// followed by its matching `Event::ToolResult` before the next
+    /// `ToolUseStart` is emitted. Under that contract the invariant holds —
+    /// the name set at `ToolStart` is always the name consumed at `ToolFinished`.
+    ///
+    /// If the backend ever emits two `ToolUseStart` events before their matching
+    /// `ToolResult`s (e.g. parallel tool-call streaming from Anthropic's API,
+    /// or concurrent tool execution in the agent loop), the second start will
+    /// silently overwrite the first, and the first tool's `ToolFinished` will
+    /// be misattributed to the second tool's name. The `#9` regression test
+    /// guards the empty-name edge case but not this overwrite scenario.
+    ///
+    /// ## Migration path for parallel tool calls
+    ///
+    /// Change the field to `HashMap<ToolUseId, String>` keyed by the tool-use
+    /// ID carried in `Event::ToolUseStart`, and look up by ID in the matching
+    /// `ToolResult`. This also requires `crab_core::event::Event::ToolResult`
+    /// to carry the `tool_use_id` (it currently does not — see the `#13`
+    /// audit brief, section 2, for the contract gap).
     current_tool: Option<String>,
     /// Whether the sidebar is visible.
     pub sidebar_visible: bool,
@@ -183,11 +229,14 @@ pub struct App {
     last_interrupt: Option<Instant>,
     /// Current permission mode (cycled via Shift+Tab).
     pub permission_mode: crab_core::permission::PermissionMode,
-    /// Whether the ● response marker has been added for the current turn.
-    #[allow(dead_code)]
-    response_started: bool,
     /// Structured message list — the source of truth for conversation display.
     pub messages: Vec<ChatMessage>,
+    /// Stashed input text (Ctrl+S to save/restore).
+    pub stash: Option<String>,
+    /// Input history for history search (Ctrl+R).
+    pub input_history_list: Vec<String>,
+    /// Overlay stack for modal views (command palette, history search, etc.).
+    pub overlay_stack: crate::overlay::OverlayStack,
 }
 
 impl App {
@@ -195,12 +244,13 @@ impl App {
     #[must_use]
     pub fn new(model_name: impl Into<String>) -> Self {
         Self {
+            tool_registry: None,
             state: AppState::Idle,
             input: InputBox::new(),
             spinner: Spinner::new(),
             content_buffer: String::new(),
             model_name: model_name.into(),
-            permission_card: None,
+            approval_queue: ApprovalQueue::new(),
             should_quit: false,
             current_tool: None,
             sidebar_visible: false,
@@ -224,8 +274,10 @@ impl App {
             input_mode: PromptInputMode::Prompt,
             last_interrupt: None,
             permission_mode: crab_core::permission::PermissionMode::Default,
-            response_started: false,
             messages: Vec::new(),
+            stash: None,
+            input_history_list: Vec::new(),
+            overlay_stack: crate::overlay::OverlayStack::new(),
         }
     }
 
@@ -286,28 +338,49 @@ impl App {
 
     /// Handle a TUI event and return an action for the outer loop.
     pub fn handle_event(&mut self, event: TuiEvent) -> AppAction {
+        // Key events stay on the dedicated `handle_key` path — their
+        // interpretation depends on overlay stack, search mode, autocomplete,
+        // and `AppState`, which is too much conditional state to model as a
+        // pure translator today. Everything else goes through the
+        // `translate_event` → `apply_event` pipeline (the Elm-style reducer).
         match event {
             TuiEvent::Key(key) => self.handle_key(key),
-            TuiEvent::Agent(agent_event) => {
-                self.handle_agent_event(agent_event);
-                AppAction::None
-            }
-            TuiEvent::Tick => {
-                self.spinner.tick();
-                // Expire the "thought for Ns" display after the timeout
-                if let ThinkingState::ThoughtFor { finished_at, .. } = self.thinking
-                    && finished_at.elapsed() >= ThinkingState::DISPLAY_DURATION
-                {
-                    self.thinking = ThinkingState::Idle;
+            other => {
+                let app_events = self.translate_event(&other);
+                let mut action = AppAction::None;
+                for app_event in app_events {
+                    // The translator currently produces at most one `AppEvent`
+                    // per `TuiEvent`, but the shape is kept for future growth.
+                    // Apply each in order; the last non-`None` action wins.
+                    let next = self.apply_event(app_event);
+                    if !matches!(next, AppAction::None) {
+                        action = next;
+                    }
                 }
-                AppAction::None
+                action
             }
-            TuiEvent::Resize { .. } => AppAction::None,
         }
     }
 
     #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
+        // Overlay stack gets first priority
+        if !self.overlay_stack.is_empty() {
+            if let Some(action) = self.overlay_stack.handle_key(key) {
+                match action {
+                    crate::overlay::OverlayAction::Execute(app_event) => {
+                        return self.apply_event(app_event);
+                    }
+                    crate::overlay::OverlayAction::Consumed
+                    | crate::overlay::OverlayAction::Dismiss => {
+                        return AppAction::None;
+                    }
+                    crate::overlay::OverlayAction::Passthrough => {}
+                }
+            }
+            return AppAction::None;
+        }
+
         // Search mode intercepts all keys except Esc and Enter
         if self.search.is_active() {
             return self.handle_search_key(key);
@@ -404,21 +477,95 @@ impl App {
                 Action::Redraw => {
                     return AppAction::None;
                 }
-                // These actions are recognized but currently act as no-ops
-                // until the corresponding subsystems are wired up.
-                Action::NextSession
-                | Action::PrevSession
-                | Action::HistorySearch
-                | Action::ExternalEditor
-                | Action::Stash
-                | Action::ToggleTodos
-                | Action::ToggleTranscript
-                | Action::KillAgents
-                | Action::ModelPicker
-                | Action::ImagePaste
-                | Action::Undo
-                    if self.state != AppState::Confirming =>
-                {
+                Action::HistorySearch if self.state != AppState::Confirming => {
+                    let overlay = crate::components::history_search::HistorySearchOverlay::new(
+                        self.input_history_list.clone(),
+                    );
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
+                Action::ToggleTranscript if self.state != AppState::Confirming => {
+                    let overlay = crate::components::transcript_overlay::TranscriptOverlay::new(
+                        &self.messages,
+                    );
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
+                Action::Stash if self.state != AppState::Confirming => {
+                    if let Some(stashed) = self.stash.take() {
+                        // Restore stashed text
+                        let current = self.input.text();
+                        if !current.is_empty() {
+                            self.stash = Some(current);
+                        }
+                        self.input.set_text(&stashed);
+                    } else if !self.input.is_empty() {
+                        // Stash current text
+                        self.stash = Some(self.input.text());
+                        self.input.set_text("");
+                    }
+                    return AppAction::None;
+                }
+                Action::Undo if self.state != AppState::Confirming => {
+                    self.input.undo();
+                    return AppAction::None;
+                }
+                Action::KillAgents if self.state != AppState::Confirming => {
+                    if self.state == AppState::Processing {
+                        self.spinner.stop();
+                        self.state = AppState::Idle;
+                        self.messages.push(ChatMessage::System {
+                            text: "[agents killed]".into(),
+                        });
+                    }
+                    return AppAction::None;
+                }
+                Action::ModelPicker if self.state != AppState::Confirming => {
+                    let models = vec![
+                        "claude-opus-4-6".to_string(),
+                        "claude-sonnet-4-6".to_string(),
+                        "claude-haiku-4-5-20251001".to_string(),
+                        "gpt-4o".to_string(),
+                        "deepseek-chat".to_string(),
+                    ];
+                    let overlay = crate::components::model_picker::ModelPickerOverlay::new(
+                        models,
+                        self.model_name.clone(),
+                    );
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
+                Action::ToggleTodos if self.state != AppState::Confirming => {
+                    // Toggle todos: show as system message for now
+                    self.messages.push(ChatMessage::System {
+                        text: "[todos panel toggled]".into(),
+                    });
+                    return AppAction::None;
+                }
+                Action::NextSession if self.state != AppState::Confirming => {
+                    if let Some(next_id) = self.session_sidebar.next_session_id() {
+                        return AppAction::SwitchSession(next_id);
+                    }
+                    return AppAction::None;
+                }
+                Action::PrevSession if self.state != AppState::Confirming => {
+                    if let Some(prev_id) = self.session_sidebar.prev_session_id() {
+                        return AppAction::SwitchSession(prev_id);
+                    }
+                    return AppAction::None;
+                }
+                Action::ExternalEditor if self.state != AppState::Confirming => {
+                    // Hand the current input text off to the runner. The runner
+                    // pauses the EventBroker, spawns `$EDITOR` against a tempfile
+                    // seeded with this text, and on exit injects
+                    // `AppEvent::ExternalEditorClosed(text)` back into the app.
+                    return AppAction::ExternalEditor(self.input.text());
+                }
+                Action::ImagePaste if self.state != AppState::Confirming => {
+                    // Image paste: placeholder (requires clipboard image access)
+                    self.messages.push(ChatMessage::System {
+                        text: "[image paste: clipboard image not available]".into(),
+                    });
                     return AppAction::None;
                 }
                 _ => {} // Fall through for non-matching states
@@ -529,6 +676,8 @@ impl App {
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     if !self.input.is_empty() {
                         let text = self.input.submit();
+                        // Track in history for Ctrl+R history search
+                        self.input_history_list.push(text.clone());
                         self.messages.push(ChatMessage::User { text: text.clone() });
                         self.state = AppState::Processing;
                         self.spinner.start_with_random_verb();
@@ -580,34 +729,186 @@ impl App {
     }
 
     fn handle_confirming_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
-        if let Some(ref mut card) = self.permission_card {
-            if let Some(response) = card.handle_key(key.code) {
-                let request_id = card.request_id.clone();
-                let allowed = matches!(
-                    response,
-                    PermissionResponse::Allow | PermissionResponse::AllowAlways
-                );
-                self.permission_card = None;
+        // Ctrl+E / Ctrl+D toggle the current pending approval's explanation / debug panels.
+        if key.modifiers == KeyModifiers::CONTROL {
+            match key.code {
+                KeyCode::Char('e') => {
+                    if let Some(current) = self.approval_queue.current_mut() {
+                        current.toggle_explanation();
+                    }
+                    return AppAction::None;
+                }
+                KeyCode::Char('d') => {
+                    if let Some(current) = self.approval_queue.current_mut() {
+                        current.toggle_debug();
+                    }
+                    return AppAction::None;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some((request_id, response)) = self.approval_queue.handle_key(key.code) {
+            let allowed = matches!(
+                response,
+                PermissionResponse::Allow | PermissionResponse::AllowAlways
+            );
+            // If more approvals are queued, stay in Confirming; otherwise return to Processing.
+            if self.approval_queue.is_empty() {
                 self.state = AppState::Processing;
                 if allowed {
                     self.spinner.start_with_random_verb();
                 }
-                return AppAction::PermissionResponse {
-                    request_id,
-                    allowed,
-                };
             }
-            return AppAction::None;
+            return AppAction::PermissionResponse {
+                request_id,
+                allowed,
+            };
         }
         AppAction::None
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn handle_agent_event(&mut self, event: crab_core::event::Event) {
+    /// Translate a `TuiEvent` into zero or more `AppEvent`s.
+    ///
+    /// Pure translation — no state mutation, no registry lookups. Registry-
+    /// dependent work (tool result formatting, summary rendering) is done in
+    /// `apply_event` instead, where `&mut self` gives access to both state
+    /// and `tool_registry`.
+    ///
+    /// Key events (`TuiEvent::Key`) are NOT translated here — they go through
+    /// `handle_key` directly because their interpretation depends on complex
+    /// state (overlay stack, search mode, autocomplete, `AppState`). A later
+    /// task will migrate key routing to `AppEvent` too.
+    #[allow(clippy::unused_self)]
+    pub fn translate_event(&self, event: &TuiEvent) -> Vec<crate::app_event::AppEvent> {
+        use crate::app_event::AppEvent;
         use crab_core::event::Event;
+
         match event {
-            Event::ContentDelta { delta, .. } => {
-                // Structured: append to last Assistant message or create one
+            TuiEvent::Tick => vec![AppEvent::Tick],
+            TuiEvent::Resize { width, height } => vec![AppEvent::Resize(*width, *height)],
+            TuiEvent::Key(_) => {
+                // Key translation is complex (depends on state, search, autocomplete).
+                // For now, key events go through the existing handle_key path.
+                Vec::new()
+            }
+            TuiEvent::Agent(agent_event) => match agent_event {
+                Event::ContentDelta { index, delta } => {
+                    // Skip tool-argument content blocks (indices >= TOOL_ARG_INDEX_BASE)
+                    // to avoid leaking raw tool-call JSON into the assistant message.
+                    // See `crab_core::event::TOOL_ARG_INDEX_BASE` for background.
+                    if *index >= crab_core::event::TOOL_ARG_INDEX_BASE {
+                        Vec::new()
+                    } else {
+                        vec![AppEvent::ContentAppend(delta.clone())]
+                    }
+                }
+                Event::MessageEnd { usage, .. } => {
+                    vec![AppEvent::MessageComplete {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                    }]
+                }
+                Event::ToolUseStart { name, input, .. } => {
+                    vec![AppEvent::ToolStart {
+                        name: name.clone(),
+                        input: input.clone(),
+                    }]
+                }
+                Event::ToolResult { output, .. } => {
+                    vec![AppEvent::ToolFinished {
+                        output: output.clone(),
+                    }]
+                }
+                Event::PermissionRequest {
+                    request_id,
+                    tool_name,
+                    input_summary,
+                } => {
+                    vec![AppEvent::PermissionRequested {
+                        request_id: request_id.clone(),
+                        tool_name: tool_name.clone(),
+                        summary: input_summary.clone(),
+                    }]
+                }
+                Event::CompactStart { strategy, .. } => {
+                    vec![AppEvent::CompactStart {
+                        strategy: strategy.clone(),
+                    }]
+                }
+                Event::CompactEnd {
+                    after_tokens,
+                    removed_messages,
+                } => {
+                    vec![AppEvent::CompactEnd {
+                        after_tokens: *after_tokens,
+                        removed_messages: *removed_messages,
+                    }]
+                }
+                Event::TokenWarning {
+                    usage_pct,
+                    used,
+                    limit,
+                } => {
+                    vec![AppEvent::TokenWarning {
+                        usage_pct: f64::from(*usage_pct),
+                        used: *used,
+                        limit: *limit,
+                    }]
+                }
+                Event::SessionSaved { session_id } => {
+                    vec![AppEvent::SessionSaved {
+                        session_id: session_id.clone(),
+                    }]
+                }
+                Event::SessionResumed {
+                    session_id,
+                    message_count,
+                } => {
+                    vec![AppEvent::SessionResumed {
+                        session_id: session_id.clone(),
+                        message_count: *message_count,
+                    }]
+                }
+                Event::Error { message } => {
+                    vec![AppEvent::AgentError(message.clone())]
+                }
+                // Events with no TUI representation today — dropped silently
+                // to match the legacy `handle_agent_event` catch-all behavior.
+                // Candidates for future AppEvent variants:
+                //   TurnStart, MessageStart, ContentBlockStop, ThinkingDelta,
+                //   ToolUseInput, ToolOutputDelta, PermissionResponse,
+                //   MemoryLoaded, MemorySaved,
+                //   AgentWorkerStarted, AgentWorkerCompleted
+                _ => Vec::new(),
+            },
+        }
+    }
+
+    /// Apply a single `AppEvent` to mutate state and optionally produce an `AppAction`.
+    ///
+    /// This is the state-mutation half of the event bus pattern.
+    ///
+    /// `#[allow(clippy::match_same_arms)]`: the no-op catch-all legitimately
+    /// groups many unrelated variants under a single `AppAction::None` return
+    /// (pending key-event migration). Clippy's suggestion to merge them with
+    /// `Redraw` would erase the semantic distinction between "genuine no-op"
+    /// and "not yet wired up", which is load-bearing for the WHY comments.
+    #[allow(clippy::match_same_arms)]
+    pub fn apply_event(&mut self, event: crate::app_event::AppEvent) -> AppAction {
+        use crate::app_event::AppEvent;
+        match event {
+            AppEvent::Tick => {
+                self.spinner.tick();
+                if let ThinkingState::ThoughtFor { finished_at, .. } = self.thinking
+                    && finished_at.elapsed() >= ThinkingState::DISPLAY_DURATION
+                {
+                    self.thinking = ThinkingState::Idle;
+                }
+                AppAction::None
+            }
+            AppEvent::Resize(..) => AppAction::None,
+            AppEvent::ContentAppend(delta) => {
                 if let Some(ChatMessage::Assistant { text }) = self.messages.last_mut() {
                     text.push_str(&delta);
                 } else {
@@ -615,7 +916,15 @@ impl App {
                         text: delta.clone(),
                     });
                 }
-                // Track unseen / auto-scroll
+                // Mirror the delta into `content_buffer` so the legacy
+                // flat-string readers still see it. After #13 the render
+                // path iterates `self.messages` directly, but Ctrl+F search,
+                // Ctrl+Y code-block copy, and the scroll-anchor math at
+                // app.rs:399/701/994 still read `content_buffer`. Until
+                // ticket #27 rewrites those read sites to iterate
+                // `self.messages`, this mirror keeps those features alive.
+                // Tracked by `apply_event_content_append_mirrors_into_content_buffer`.
+                self.content_buffer.push_str(&delta);
                 if self.scroll_anchor.is_some() {
                     let new_lines = delta.chars().filter(|&c| c == '\n').count();
                     self.unseen_message_count =
@@ -624,39 +933,52 @@ impl App {
                     self.content_scroll = 0;
                 }
                 self.spinner.response_tokens += (delta.len() as u64).div_ceil(4);
+                AppAction::None
             }
-            Event::MessageEnd { usage, .. } => {
-                self.spinner.stop();
-                self.current_tool = None;
-                self.state = AppState::Idle;
-                self.total_input_tokens += usage.input_tokens;
-                self.total_output_tokens += usage.output_tokens;
-            }
-            Event::ToolUseStart { name, .. } => {
+            AppEvent::ToolStart { name, input } => {
+                // Call the tool registry's rendering hook for the invocation summary
+                // (e.g. `BashTool` → `$ ls -la`). Falls back to `None` when no registry
+                // is attached or the tool is unknown — the renderer then shows `● {name}`.
+                let summary = self
+                    .tool_registry
+                    .as_ref()
+                    .and_then(|reg| reg.get(&name))
+                    .and_then(|tool| tool.format_use_summary(&input));
                 self.current_tool = Some(name.clone());
-                self.messages.push(ChatMessage::ToolUse { name });
-                self.spinner.set_message(format!(
-                    "Running {}…",
-                    self.current_tool.as_deref().unwrap_or("tool")
-                ));
+                self.messages.push(ChatMessage::ToolUse {
+                    name: name.clone(),
+                    summary,
+                });
+                self.spinner.set_message(format!("Running {name}…"));
+                AppAction::None
             }
-            Event::ToolResult { output, .. } => {
+            AppEvent::ToolFinished { output } => {
+                // `Event::ToolResult` doesn't carry a tool name. The authoritative
+                // tool name for the streaming sequence lives in `current_tool`,
+                // which was set when the matching `AppEvent::ToolStart` was applied.
+                // Using `take()` atomically reads-and-clears — no stale state between
+                // tool invocations.
                 let tool_name = self.current_tool.take().unwrap_or_default();
                 self.spinner.clear_override();
+                // Call the tool registry's rendering hook for the result display
+                // (e.g. `BashTool` → styled stdout/stderr). Falls back to `None` for
+                // the default 10-line plain-text truncation.
+                let display = self
+                    .tool_registry
+                    .as_ref()
+                    .and_then(|reg| reg.get(&tool_name))
+                    .and_then(|tool| tool.format_result(&output));
                 let text = output.text();
-                // Structured message
+                let is_error = output.is_error;
                 self.messages.push(ChatMessage::ToolResult {
                     tool_name: tool_name.clone(),
                     output: text.clone(),
-                    is_error: output.is_error,
+                    is_error,
+                    display,
                 });
-                // Also populate auxiliary tracking structures
-                self.tool_outputs.push(ToolOutputEntry::new(
-                    &tool_name,
-                    text.clone(),
-                    output.is_error,
-                ));
-                if output.is_error {
+                self.tool_outputs
+                    .push(ToolOutputEntry::new(&tool_name, text.clone(), is_error));
+                if is_error {
                     let mut section =
                         CollapsibleSection::new(format!("Tool error: {tool_name}"), text);
                     section.collapsed = true;
@@ -667,34 +989,114 @@ impl App {
                     section.collapsed = true;
                     self.context_collapse.push_section(section);
                 }
+                AppAction::None
             }
-            Event::PermissionRequest {
+            AppEvent::MessageComplete {
+                input_tokens,
+                output_tokens,
+            } => {
+                self.spinner.stop();
+                self.current_tool = None;
+                self.state = AppState::Idle;
+                self.total_input_tokens += input_tokens;
+                self.total_output_tokens += output_tokens;
+                AppAction::None
+            }
+            AppEvent::AgentError(message) => {
+                self.spinner.stop();
+                self.current_tool = None;
+                self.state = AppState::Idle;
+                self.messages.push(ChatMessage::System {
+                    text: format!("Error: {message}"),
+                });
+                AppAction::None
+            }
+            AppEvent::PermissionRequested {
                 request_id,
                 tool_name,
-                input_summary,
+                summary,
             } => {
                 self.spinner.stop();
                 self.state = AppState::Confirming;
-                self.permission_card = Some(PermissionCard::from_event(
-                    &tool_name,
-                    &input_summary,
-                    request_id,
-                ));
+                self.approval_queue
+                    .push(PermissionCard::from_event(&tool_name, &summary, request_id));
+                AppAction::None
             }
-            Event::CompactStart { strategy, .. } => {
+            AppEvent::ScrollUp(n) => {
+                self.content_scroll = self.content_scroll.saturating_add(n as usize);
+                let total = self.content_buffer.lines().count();
+                self.scroll_anchor = Some(total.saturating_sub(self.content_scroll));
+                AppAction::None
+            }
+            AppEvent::ScrollDown(n) => {
+                self.content_scroll = self.content_scroll.saturating_sub(n as usize);
+                if self.content_scroll == 0 {
+                    self.scroll_anchor = None;
+                    self.unseen_message_count = 0;
+                }
+                AppAction::None
+            }
+            AppEvent::ScrollToBottom => {
+                self.content_scroll = 0;
+                self.scroll_anchor = None;
+                self.unseen_message_count = 0;
+                AppAction::None
+            }
+            AppEvent::ToggleSidebar => {
+                self.sidebar_visible = !self.sidebar_visible;
+                self.session_sidebar.visible = self.sidebar_visible;
+                AppAction::None
+            }
+            AppEvent::ToggleFold => {
+                self.tool_outputs.toggle_selected();
+                AppAction::None
+            }
+            AppEvent::CyclePermissionMode => {
+                use crab_core::permission::PermissionMode;
+                self.permission_mode = match self.permission_mode {
+                    PermissionMode::Default => PermissionMode::AcceptEdits,
+                    PermissionMode::AcceptEdits => PermissionMode::Plan,
+                    _ => PermissionMode::Default,
+                };
+                AppAction::None
+            }
+            AppEvent::OpenSearch => {
+                self.search.activate();
+                AppAction::None
+            }
+            AppEvent::CloseSearch => {
+                self.search.deactivate();
+                AppAction::None
+            }
+            AppEvent::NewSession => AppAction::NewSession,
+            AppEvent::SwitchSession(id) => AppAction::SwitchSession(id),
+            AppEvent::SwitchModel(model) => {
+                self.messages.push(ChatMessage::System {
+                    text: format!("[model switched to {model}]"),
+                });
+                self.model_name = model;
+                AppAction::None
+            }
+            AppEvent::Quit => {
+                self.should_quit = true;
+                AppAction::Quit
+            }
+            AppEvent::CompactStart { strategy } => {
                 self.messages.push(ChatMessage::System {
                     text: format!("Compacting: {strategy}"),
                 });
+                AppAction::None
             }
-            Event::CompactEnd {
+            AppEvent::CompactEnd {
                 after_tokens,
                 removed_messages,
             } => {
                 self.messages.push(ChatMessage::System {
                     text: format!("Removed {removed_messages} messages, now {after_tokens} tokens"),
                 });
+                AppAction::None
             }
-            Event::TokenWarning {
+            AppEvent::TokenWarning {
                 usage_pct,
                 used,
                 limit,
@@ -702,33 +1104,74 @@ impl App {
                 self.messages.push(ChatMessage::System {
                     text: format!("Token usage {:.0}% ({used}/{limit})", usage_pct * 100.0),
                 });
+                AppAction::None
             }
-            Event::SessionSaved { session_id } => {
+            AppEvent::SessionSaved { session_id } => {
                 self.messages.push(ChatMessage::System {
                     text: format!("Session saved: {session_id}"),
                 });
+                AppAction::None
             }
-            Event::SessionResumed {
+            AppEvent::SessionResumed {
                 session_id,
                 message_count,
             } => {
                 self.messages.push(ChatMessage::System {
                     text: format!("Resumed {session_id} ({message_count} messages)"),
                 });
+                AppAction::None
             }
-            Event::Error { message } => {
-                self.spinner.stop();
-                self.current_tool = None;
-                self.state = AppState::Idle;
-                self.messages.push(ChatMessage::System {
-                    text: format!("Error: {message}"),
-                });
+            AppEvent::ThinkingChanged { active } => {
+                self.set_thinking(active);
+                AppAction::None
             }
-            _ => {}
+            // Both variants replace the input box contents outright; they
+            // differ only in provenance (history-search pick vs. external
+            // editor result) which does not matter at the state-mutation layer.
+            AppEvent::InsertInputText(text) | AppEvent::ExternalEditorClosed(text) => {
+                self.input.set_text(&text);
+                AppAction::None
+            }
+            // Genuine no-op: the renderer always draws on the next frame, so
+            // there is no state to mutate here. Kept as an explicit variant
+            // so key bindings can still emit it as a signal.
+            AppEvent::Redraw => AppAction::None,
+
+            // Pending key-event migration: these variants exist in the
+            // vocabulary but are NOT yet emitted by any AppEvent producer.
+            // The key-event path (`handle_key` / `handle_confirming_key`)
+            // still interprets the matching keys directly and returns the
+            // corresponding `AppAction` inline, so the bus never sees them.
+            // A future task will move key translation into the bus, at
+            // which point each of these arms needs a real handler.
+            //
+            // Input lifecycle (submitted/cancelled via InputBox key path)
+            AppEvent::InputSubmit(_)
+            | AppEvent::InputCancel
+            // Permission response (handle_confirming_key emits AppAction::PermissionResponse directly)
+            | AppEvent::PermissionAllow(_)
+            | AppEvent::PermissionDeny(_)
+            | AppEvent::PermissionAllowAlways(_)
+            // Overlay open/close (handle_key pushes overlays directly onto overlay_stack)
+            | AppEvent::OpenCommandPalette
+            | AppEvent::OpenHistorySearch
+            | AppEvent::OpenModelPicker
+            | AppEvent::OpenTranscript
+            | AppEvent::CloseOverlay
+            // Content actions (handle_key mutates state directly)
+            | AppEvent::CopyCodeBlock
+            | AppEvent::ExternalEditorOpen
+            | AppEvent::Stash
+            | AppEvent::KillAgents
+            | AppEvent::Undo
+            | AppEvent::ToggleTodos
+            | AppEvent::ImagePaste => AppAction::None,
         }
     }
 
     /// Render the full app into a ratatui frame.
+    ///
+    /// Delegates to `Renderable` components (Phase 1 refactor).
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         #[allow(clippy::cast_possible_truncation)]
         let layout = AppLayout::compute_with_sidebar(
@@ -738,32 +1181,43 @@ impl App {
             crate::layout::DEFAULT_SIDEBAR_WIDTH,
         );
 
-        // Header (3 lines art/info + 1 line separator, no border box)
-        render_header(&self.model_name, &self.working_dir, layout.header, buf);
+        // Header — delegated to HeaderBar Renderable
+        let header = HeaderBar {
+            model_name: &self.model_name,
+            working_dir: &self.working_dir,
+        };
+        header.render(layout.header, buf);
 
         // Session sidebar
         if let Some(sidebar_area) = layout.sidebar {
             Widget::render(&self.session_sidebar, sidebar_area, buf);
         }
 
-        // Content area: structured message rendering
-        render_messages(&self.messages, self.content_scroll, layout.content, buf);
+        // Content area — delegated to MessageList Renderable
+        let message_list = MessageList {
+            messages: &self.messages,
+            scroll_offset: self.content_scroll,
+        };
+        message_list.render(layout.content, buf);
 
-        // Status line: only show spinner when active (CC leaves this blank when idle)
+        // Status line: only show spinner when active
         if self.spinner.is_active() {
             Widget::render(&self.spinner, layout.status, buf);
         }
 
-        // Separator above input
-        render_separator(layout.separator_top, buf);
+        // Separators
+        crate::components::header::render_separator(layout.separator_top, buf);
 
-        // Input with ❯ prompt and mode indicator (no border box)
-        render_input_with_prompt(&self.input, self.input_mode, layout.input, buf);
+        // Input — delegated to InputArea Renderable
+        let input_area = InputArea {
+            input: &self.input,
+            mode: self.input_mode,
+        };
+        input_area.render(layout.input, buf);
 
-        // Separator below input
-        render_separator(layout.separator_bottom, buf);
+        crate::components::header::render_separator(layout.separator_bottom, buf);
 
-        // Unseen message divider (when user is scrolled up and new content arrives)
+        // Unseen message divider
         if self.scroll_anchor.is_some() && self.unseen_message_count > 0 {
             let divider_y = layout.content.y + layout.content.height.saturating_sub(2);
             if divider_y > layout.content.y {
@@ -780,7 +1234,7 @@ impl App {
             }
         }
 
-        // Search bar (overlays bottom of content when active)
+        // Search bar
         if self.search.is_active() {
             let search_area = Rect {
                 x: layout.content.x,
@@ -788,28 +1242,31 @@ impl App {
                 width: layout.content.width,
                 height: 1,
             };
-            search::render_search_bar(&self.search, search_area, buf);
+            // Theme is not yet threaded through App — use default (dark)
+            // to preserve byte-identical output. When App grows a theme
+            // field, replace this with a reference to it.
+            let theme = crate::theme::Theme::default();
+            search::render_search_bar(&self.search, &theme, search_area, buf);
         }
 
-        // Bottom bar
-        render_bottom_bar(
-            self.state,
-            self.search.is_active(),
-            self.permission_mode,
-            layout.bottom_bar,
-            buf,
-        );
+        // Bottom bar — delegated to BottomBar Renderable
+        let bottom_bar = BottomBar {
+            state: self.state,
+            search_active: self.search.is_active(),
+            permission_mode: self.permission_mode,
+        };
+        bottom_bar.render(layout.bottom_bar, buf);
 
-        // Autocomplete popup (renders above input)
+        // Autocomplete popup
         if self.autocomplete.is_active() {
             render_autocomplete_popup(&self.autocomplete, layout.input, buf);
         }
 
-        // Permission card — rendered inline at bottom of content area
-        // (CC style: top-border-only card in the message flow, not a modal overlay)
-        if let Some(ref card) = self.permission_card {
-            // Calculate height needed: content + options + hints
-            let card_lines = card.render_lines(layout.content.width);
+        // Permission card(s) — rendered inline at bottom of content area
+        // from the FIFO approval queue. Clear the card area first to prevent
+        // overlap with message text.
+        if let Some(pending) = self.approval_queue.current() {
+            let card_lines = pending.card.render_lines(layout.content.width);
             let card_height = (card_lines.len() as u16).min(layout.content.height);
             let card_area = Rect {
                 x: layout.content.x,
@@ -817,7 +1274,14 @@ impl App {
                 width: layout.content.width,
                 height: card_height,
             };
-            // Render each line of the card
+            // Clear the card area background to prevent text overlap
+            for y in card_area.y..card_area.y + card_area.height {
+                for x in card_area.x..card_area.x + card_area.width {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.reset();
+                    }
+                }
+            }
             for (i, line) in card_lines.iter().enumerate() {
                 if i >= card_height as usize {
                     break;
@@ -832,163 +1296,19 @@ impl App {
                 Widget::render(paragraph, line_area, buf);
             }
         }
-    }
-}
 
-/// Terra cotta color (`#DA7756`, same as CC's `clawd_body`).
-const CRAB_COLOR: Color = Color::Rgb(218, 119, 86);
-
-/// Background color for the crab art body (same as CC's `clawd_background`).
-const CRAB_BG: Color = Color::Black;
-
-/// Render the header: crab art (left) + info text (right) + separator.
-///
-/// Crab logo using Unicode block/box characters:
-/// ```text
-///  ╱▔╲ ● ● ╱▔╲  Crab Code v0.1.0
-///  ╲▂╱╲███╱╲▂╱  claude-sonnet-4-6
-///    ╱╱ ███ ╲╲   C:\path\to\project
-/// ────────────────────────────────────────
-/// ```
-#[allow(clippy::cast_possible_truncation)]
-fn render_header(model_name: &str, working_dir: &str, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 || area.width < 10 {
-        return;
-    }
-
-    let fg = Style::default().fg(CRAB_COLOR);
-    let fg_bg = Style::default().fg(CRAB_COLOR).bg(CRAB_BG);
-
-    // Crab art — 3 rows, ASCII-safe characters for consistent width
-    // All elements use CRAB_COLOR (#DA7756) matching the project logo
-    let art_lines: [Line<'_>; 3] = [
-        Line::from(Span::styled(r" /| o o |\  ", fg)),
-        Line::from(vec![
-            Span::styled(r" \_", fg),
-            Span::styled("^^^^^", fg_bg),
-            Span::styled(r"_/  ", fg),
-        ]),
-        Line::from(Span::styled(r"  // ||| \\  ", fg)),
-    ];
-
-    let art_width = 13u16;
-
-    // Info text beside the art (mirrors CC's CondensedLogo text)
-    let text_budget = area.width.saturating_sub(art_width) as usize;
-    let info_lines: [Line<'_>; 3] = [
-        Line::from(vec![
-            Span::styled(
-                "Crab Code",
-                Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" v0.1.0", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(Span::styled(
-            model_name,
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            shorten_path(working_dir, text_budget),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-
-    for (i, (art_line, info_line)) in art_lines.iter().zip(info_lines.iter()).enumerate() {
-        let y = area.y + i as u16;
-        if y >= area.y + area.height {
-            break;
-        }
-
-        let art_area = Rect {
-            x: area.x,
-            y,
-            width: art_width.min(area.width),
-            height: 1,
-        };
-        Widget::render(art_line.clone(), art_area, buf);
-
-        if area.width > art_width {
-            let info_area = Rect {
-                x: area.x + art_width,
-                y,
-                width: area.width.saturating_sub(art_width),
-                height: 1,
-            };
-            Widget::render(info_line.clone(), info_area, buf);
+        // Overlay stack (renders on top of everything)
+        if !self.overlay_stack.is_empty() {
+            self.overlay_stack.render(area, buf);
         }
     }
-
-    // Row 4: thin separator ───
-    if area.height >= 4 {
-        render_separator(
-            Rect {
-                x: area.x,
-                y: area.y + 3,
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-    }
 }
 
-/// Shorten a path to fit within `max_chars`.
-fn shorten_path(path: &str, max_chars: usize) -> String {
-    if path.len() <= max_chars || max_chars < 6 {
-        return path.to_string();
-    }
-    let suffix_budget = max_chars.saturating_sub(4);
-    if let Some(pos) = path[path.len().saturating_sub(suffix_budget)..].find(['/', '\\']) {
-        format!(
-            "...{}",
-            &path[path.len().saturating_sub(suffix_budget) + pos..]
-        )
-    } else {
-        format!("...{}", &path[path.len().saturating_sub(suffix_budget)..])
-    }
-}
-
-/// Render a thin horizontal separator line (`───`).
-#[allow(clippy::cast_possible_truncation)]
-fn render_separator(area: Rect, buf: &mut Buffer) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let sep = "─".repeat(area.width as usize);
-    Widget::render(
-        Line::from(Span::styled(&*sep, Style::default().fg(Color::DarkGray))),
-        area,
-        buf,
-    );
-}
-
-/// Render the thinking state indicator.
-///
-/// When thinking is active, shows `"Thinking... (Ns)"` with elapsed time.
-/// After thinking finishes, shows `"(thought for Ns)"` for 2 seconds.
-#[allow(dead_code, clippy::cast_possible_truncation)]
-fn render_thinking_state(thinking: &ThinkingState, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-
-    let text = match thinking {
-        ThinkingState::Idle => return,
-        ThinkingState::Thinking { started_at } => {
-            let elapsed = started_at.elapsed().as_secs();
-            format!("Thinking\u{2026} ({elapsed}s)")
-        }
-        ThinkingState::ThoughtFor { duration, .. } => {
-            format!("(thought for {}s)", duration.as_secs())
-        }
-    };
-
-    let style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::ITALIC);
-    let line = Line::from(Span::styled(text, style));
-    Widget::render(line, area, buf);
-}
+// Old render functions (render_header, shorten_path, render_separator)
+// have been extracted to components/header.rs — see HeaderBar.
+// Agent-event translation used to live here as a free `translate_agent_event`
+// function; it has been folded into `App::translate_event` so it can share
+// a single entry point with `Tick`/`Resize` translation.
 
 /// Render the unseen message divider when the user is scrolled up.
 ///
@@ -1024,289 +1344,12 @@ fn render_unseen_divider(count: usize, area: Rect, buf: &mut Buffer) {
     Widget::render(line, area, buf);
 }
 
-/// Render input with `❯` prompt and mode indicator — no border box (matches CC's flat style).
-#[allow(clippy::cast_possible_truncation)]
-fn render_input_with_prompt(
-    input: &InputBox,
-    _mode: PromptInputMode,
-    area: Rect,
-    buf: &mut Buffer,
-) {
-    if area.height == 0 || area.width < 4 {
-        Widget::render(input, area, buf);
-        return;
-    }
+// Old render_input_with_prompt extracted to components/input_area.rs — see InputArea.
 
-    // No mode indicator — CC shows permission mode elsewhere (status line)
-    let prefix_width = 0u16;
+// Old render_messages extracted to components/message_list.rs — see MessageList.
 
-    // Placeholder for future mode indicator
-    if false {
-        let mode_span = Span::styled(
-            "",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-        let mode_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: prefix_width.min(area.width),
-            height: 1,
-        };
-        Widget::render(Line::from(mode_span), mode_area, buf);
-    }
-
-    // Prompt chevron
-    let prompt_x = area.x + prefix_width;
-    let prompt_span = Span::styled(
-        "\u{276f} ",
-        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
-    );
-    let prompt_area = Rect {
-        x: prompt_x,
-        y: area.y,
-        width: 2.min(area.width.saturating_sub(prefix_width)),
-        height: 1,
-    };
-    Widget::render(Line::from(prompt_span), prompt_area, buf);
-
-    let input_x = prompt_x + 2;
-    let input_area = Rect {
-        x: input_x,
-        y: area.y,
-        width: area.width.saturating_sub(prefix_width + 2),
-        height: area.height,
-    };
-
-    Widget::render(input, input_area, buf);
-}
-
-/// Render structured messages list — each `ChatMessage` gets its own visual treatment.
-#[allow(clippy::cast_possible_truncation)]
-fn render_messages(messages: &[ChatMessage], scroll_offset: usize, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 {
-        return;
-    }
-
-    let theme = crate::theme::Theme::dark();
-    let highlighter = crate::components::syntax::SyntaxHighlighter::new();
-    let md_renderer = crate::components::markdown::MarkdownRenderer::new(&theme, &highlighter);
-
-    let mut rendered_lines: Vec<Line<'static>> = Vec::new();
-
-    for msg in messages {
-        match msg {
-            ChatMessage::User { text } => {
-                rendered_lines.push(Line::from(vec![
-                    Span::styled(
-                        "❯ ",
-                        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text.clone(), Style::default().fg(Color::White)),
-                ]));
-                rendered_lines.push(Line::default()); // breathing room
-            }
-            ChatMessage::Assistant { text } => {
-                if text.is_empty() {
-                    continue;
-                }
-                // Strip trailing tool-call JSON that some models (DeepSeek) output
-                // alongside structured tool_calls. The JSON is redundant since we
-                // handle tool_calls separately.
-                let clean_text = strip_trailing_tool_json(text);
-                if clean_text.is_empty() {
-                    continue;
-                }
-                // ● prefix on first line, then markdown-rendered content
-                let md_lines = md_renderer.render(&clean_text);
-                if let Some(first) = md_lines.first() {
-                    let mut spans = vec![Span::styled("● ", Style::default().fg(CRAB_COLOR))];
-                    spans.extend(first.spans.iter().cloned());
-                    rendered_lines.push(Line::from(spans));
-                    rendered_lines.extend(md_lines.into_iter().skip(1));
-                }
-                rendered_lines.push(Line::default());
-            }
-            ChatMessage::ToolUse { name } => {
-                rendered_lines.push(Line::from(Span::styled(
-                    format!("● {name}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            ChatMessage::ToolResult {
-                output, is_error, ..
-            } => {
-                let style = if *is_error {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                // Show up to 10 lines, truncate rest
-                let lines: Vec<&str> = output.lines().collect();
-                let show = lines.len().min(10);
-                for line in &lines[..show] {
-                    rendered_lines.push(Line::from(Span::styled(format!("  {line}"), style)));
-                }
-                if lines.len() > 10 {
-                    rendered_lines.push(Line::from(Span::styled(
-                        format!("  ... ({} more lines)", lines.len() - 10),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                rendered_lines.push(Line::default());
-            }
-            ChatMessage::System { text } => {
-                rendered_lines.push(Line::from(Span::styled(
-                    text.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                )));
-            }
-        }
-    }
-
-    // Scroll and render visible lines (auto-follow bottom)
-    let visible = area.height as usize;
-    let end = rendered_lines.len().saturating_sub(scroll_offset);
-    let start = end.saturating_sub(visible);
-
-    for (i, line) in rendered_lines
-        .iter()
-        .skip(start)
-        .take(visible.min(end.saturating_sub(start)))
-        .enumerate()
-    {
-        let y = area.y + i as u16;
-        Widget::render(
-            line.clone(),
-            Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-    }
-}
-
-#[allow(dead_code, clippy::cast_possible_truncation)]
-fn render_content_scrolled(
-    text: &str,
-    scroll_offset: usize,
-    styles: &OutputStyles,
-    area: Rect,
-    buf: &mut Buffer,
-) {
-    if area.height == 0 || text.is_empty() {
-        return;
-    }
-
-    // Render lines: system prefixed lines get color-coded styles,
-    // everything else goes through markdown rendering.
-    let theme = crate::theme::Theme::dark();
-    let highlighter = crate::components::syntax::SyntaxHighlighter::new();
-    let md_renderer = crate::components::markdown::MarkdownRenderer::new(&theme, &highlighter);
-
-    let mut rendered_lines: Vec<Line<'static>> = Vec::new();
-
-    // Split content into segments: system lines vs markdown blocks
-    let mut md_block = String::new();
-    for raw_line in text.lines() {
-        if is_system_line(raw_line) {
-            // Flush any accumulated markdown
-            if !md_block.is_empty() {
-                rendered_lines.extend(md_renderer.render(&md_block));
-                md_block.clear();
-            }
-            // Render system line with prefix-based styling
-            let style = classify_content_style(raw_line, styles);
-            rendered_lines.push(Line::from(Span::styled(raw_line.to_string(), style)));
-        } else {
-            md_block.push_str(raw_line);
-            md_block.push('\n');
-        }
-    }
-    // Flush remaining markdown
-    if !md_block.is_empty() {
-        rendered_lines.extend(md_renderer.render(&md_block));
-    }
-
-    let visible = area.height as usize;
-    let end = rendered_lines.len().saturating_sub(scroll_offset);
-    let start = end.saturating_sub(visible);
-
-    for (i, line) in rendered_lines
-        .iter()
-        .skip(start)
-        .take(visible.min(end.saturating_sub(start)))
-        .enumerate()
-    {
-        let y = area.y + i as u16;
-        let line_area = Rect {
-            x: area.x,
-            y,
-            width: area.width,
-            height: 1,
-        };
-        Widget::render(line.clone(), line_area, buf);
-    }
-}
-
-/// Check if a line is a system/tool prefix line (not markdown).
-/// Strip trailing JSON tool-call arguments from assistant text.
-///
-/// Some models (`DeepSeek`) output tool parameters as text alongside the
-/// structured `tool_calls` response. We strip the trailing `{...}` block
-/// since the tool call is handled separately via `ChatMessage::ToolUse`.
-fn strip_trailing_tool_json(text: &str) -> String {
-    let trimmed = text.trim_end();
-    if let Some(brace_start) = trimmed.rfind('{')
-        && trimmed.ends_with('}')
-    {
-        // Verify the JSON-like block is at the end and preceded by text
-        let before = trimmed[..brace_start].trim_end();
-        if !before.is_empty() {
-            return before.to_string();
-        }
-    }
-    text.to_string()
-}
-
-fn is_system_line(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("[tool")
-        || t.starts_with("[Error:")
-        || t.starts_with("[warn]")
-        || t.starts_with("[session]")
-        || t.starts_with("[compact]")
-        || t.starts_with("[interrupted]")
-        || t.starts_with("❯ ")
-        || t.starts_with("────")
-        || t.starts_with("Welcome!")
-}
-
-/// Choose a style for a content line based on its prefix/content.
-fn classify_content_style(line: &str, styles: &OutputStyles) -> Style {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("[tool error]") || trimmed.starts_with("[Error:") {
-        styles.style_for(ContentType::Error)
-    } else if trimmed.starts_with("[warn]") {
-        styles.style_for(ContentType::Warning)
-    } else if trimmed.starts_with("[tool]")
-        || trimmed.starts_with('[') && trimmed.contains("result]")
-    {
-        styles.style_for(ContentType::ToolResult)
-    } else if trimmed.starts_with("[session]") || trimmed.starts_with("[compact]") {
-        styles.style_for(ContentType::SystemMessage)
-    } else if trimmed.starts_with("[tokens:") {
-        styles.style_for(ContentType::Muted)
-    } else {
-        styles.style_for(ContentType::AssistantResponse)
-    }
-}
+// Old render_content_scrolled, strip_trailing_tool_json, is_system_line,
+// classify_content_style extracted to components/message_list.rs.
 
 /// Render the autocomplete popup above the input area.
 #[allow(clippy::cast_possible_truncation)]
@@ -1383,129 +1426,10 @@ fn render_autocomplete_popup(ac: &AutoComplete, input_area: Rect, buf: &mut Buff
     }
 }
 
-/// Render the status line: model name | token counts | thinking state.
-///
-/// Matches CC's `StatusLine` component showing operational data.
-#[allow(dead_code)]
-fn render_status_line(
-    model: &str,
-    perm_mode: crab_core::permission::PermissionMode,
-    input_tokens: u64,
-    output_tokens: u64,
-    thinking: &ThinkingState,
-    area: Rect,
-    buf: &mut Buffer,
-) {
-    if area.width < 10 || area.height == 0 {
-        return;
-    }
+// Old render_status_line and format_token_count extracted to
+// components/status_line.rs — see StatusLine.
 
-    let mut spans = vec![
-        Span::styled(model, Style::default().fg(Color::Cyan)),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-        Span::styled(perm_mode.to_string(), Style::default().fg(Color::Yellow)),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-    ];
-
-    // Token counts
-    let in_str = format_token_count(input_tokens);
-    let out_str = format_token_count(output_tokens);
-    spans.push(Span::styled(
-        format!("{in_str} in"),
-        Style::default().fg(Color::DarkGray),
-    ));
-    spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-    spans.push(Span::styled(
-        format!("{out_str} out"),
-        Style::default().fg(Color::DarkGray),
-    ));
-
-    // Thinking state
-    match thinking {
-        ThinkingState::Thinking { started_at } => {
-            let elapsed = started_at.elapsed().as_secs();
-            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(
-                format!("thinking ({elapsed}s)"),
-                Style::default().fg(Color::Yellow),
-            ));
-        }
-        ThinkingState::ThoughtFor { duration, .. } => {
-            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(
-                format!("thought for {}s", duration.as_secs()),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        ThinkingState::Idle => {}
-    }
-
-    Widget::render(Line::from(spans), area, buf);
-}
-
-/// Format token count: 1234 → "1.2k", 500 → "500"
-#[allow(dead_code)]
-fn format_token_count(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1000 {
-        format!("{:.1}k", tokens as f64 / 1000.0)
-    } else {
-        tokens.to_string()
-    }
-}
-
-fn render_bottom_bar(
-    state: AppState,
-    search_active: bool,
-    perm_mode: crab_core::permission::PermissionMode,
-    area: Rect,
-    buf: &mut Buffer,
-) {
-    let line = if search_active {
-        Line::from(Span::styled(
-            "Enter: next match | Esc: close | type to search",
-            Style::default().fg(Color::DarkGray),
-        ))
-    } else {
-        match state {
-            AppState::Confirming => Line::from(Span::styled(
-                "y: allow | n: deny | a: always | Esc: deny",
-                Style::default().fg(Color::DarkGray),
-            )),
-            AppState::Processing => {
-                // CC shows: "▶▶ accept edits on (shift+tab to cycle) · esc to interrupt"
-                Line::from(vec![
-                    Span::styled("  ▶▶ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(perm_mode.to_string(), Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        " (shift+tab to cycle) · esc to interrupt",
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ])
-            }
-            _ => {
-                // CC shows: "▶▶ accept edits on (shift+tab to cycle)" or "? for shortcuts"
-                if perm_mode == crab_core::permission::PermissionMode::Default {
-                    Line::from(Span::styled(
-                        "  ? for shortcuts",
-                        Style::default().fg(Color::DarkGray),
-                    ))
-                } else {
-                    Line::from(vec![
-                        Span::styled("  ▶▶ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(perm_mode.to_string(), Style::default().fg(Color::DarkGray)),
-                        Span::styled(
-                            " (shift+tab to cycle)",
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                    ])
-                }
-            }
-        }
-    };
-    Widget::render(line, area, buf);
-}
+// Old render_bottom_bar extracted to components/bottom_bar.rs — see BottomBar.
 
 #[cfg(test)]
 mod tests {
@@ -1526,7 +1450,7 @@ mod tests {
             ChatMessage::User { text }
             | ChatMessage::Assistant { text }
             | ChatMessage::System { text } => text.contains(needle),
-            ChatMessage::ToolUse { name } => name.contains(needle),
+            ChatMessage::ToolUse { name, .. } => name.contains(needle),
             ChatMessage::ToolResult {
                 tool_name, output, ..
             } => tool_name.contains(needle) || output.contains(needle),
@@ -1649,9 +1573,11 @@ mod tests {
         let mut app = App::new("test");
         app.state = AppState::Processing;
 
-        let mut usage = crab_core::model::TokenUsage::default();
-        usage.input_tokens = 100;
-        usage.output_tokens = 50;
+        let usage = crab_core::model::TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Default::default()
+        };
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::MessageEnd {
             usage,
         }));
@@ -1661,9 +1587,11 @@ mod tests {
 
         // Second turn
         app.state = AppState::Processing;
-        let mut usage2 = crab_core::model::TokenUsage::default();
-        usage2.input_tokens = 200;
-        usage2.output_tokens = 80;
+        let usage2 = crab_core::model::TokenUsage {
+            input_tokens: 200,
+            output_tokens: 80,
+            ..Default::default()
+        };
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::MessageEnd {
             usage: usage2,
         }));
@@ -1681,6 +1609,7 @@ mod tests {
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolUseStart {
             id: "tu_1".into(),
             name: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
         }));
 
         assert!(app.spinner.message().contains("bash"));
@@ -1706,7 +1635,7 @@ mod tests {
     fn confirming_y_allows() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.permission_card = Some(PermissionCard::from_event(
+        app.approval_queue.push(PermissionCard::from_event(
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
@@ -1721,14 +1650,14 @@ mod tests {
             }
         );
         assert_eq!(app.state, AppState::Processing);
-        assert!(app.permission_card.is_none());
+        assert!(app.approval_queue.is_empty());
     }
 
     #[test]
     fn confirming_n_denies() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.permission_card = Some(PermissionCard::from_event(
+        app.approval_queue.push(PermissionCard::from_event(
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
@@ -1748,7 +1677,7 @@ mod tests {
     fn confirming_esc_denies() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.permission_card = Some(PermissionCard::from_event(
+        app.approval_queue.push(PermissionCard::from_event(
             "edit",
             "src/main.rs",
             "req_2".into(),
@@ -1851,6 +1780,7 @@ mod tests {
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolUseStart {
             id: "tu_1".into(),
             name: "read".into(),
+            input: serde_json::json!({"file_path": "test.rs"}),
         }));
 
         assert!(messages_contain(&app.messages, "read"));
@@ -1861,7 +1791,7 @@ mod tests {
     fn permission_card_renders_in_frame() {
         let mut app = App::new("test");
         app.state = AppState::Confirming;
-        app.permission_card = Some(PermissionCard::from_event(
+        app.approval_queue.push(PermissionCard::from_event(
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
@@ -2238,7 +2168,7 @@ mod tests {
         // Manually set a ThoughtFor state that's already expired
         app.thinking = ThinkingState::ThoughtFor {
             duration: Duration::from_secs(3),
-            finished_at: Instant::now() - Duration::from_secs(3),
+            finished_at: Instant::now().checked_sub(Duration::from_secs(3)).unwrap(),
         };
         app.handle_event(TuiEvent::Tick);
         assert!(matches!(app.thinking, ThinkingState::Idle));
@@ -2363,29 +2293,6 @@ mod tests {
     // ── Render tests for new features ──
 
     #[test]
-    fn render_thinking_state_does_not_panic() {
-        let area = Rect::new(0, 0, 60, 1);
-        let mut buf = Buffer::empty(area);
-
-        render_thinking_state(&ThinkingState::Idle, area, &mut buf);
-        render_thinking_state(
-            &ThinkingState::Thinking {
-                started_at: Instant::now(),
-            },
-            area,
-            &mut buf,
-        );
-        render_thinking_state(
-            &ThinkingState::ThoughtFor {
-                duration: Duration::from_secs(5),
-                finished_at: Instant::now(),
-            },
-            area,
-            &mut buf,
-        );
-    }
-
-    #[test]
     fn render_unseen_divider_does_not_panic() {
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);
@@ -2417,7 +2324,11 @@ mod tests {
         let input = InputBox::new();
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
-        render_input_with_prompt(&input, PromptInputMode::Bash, area, &mut buf);
+        let ia = InputArea {
+            input: &input,
+            mode: PromptInputMode::Bash,
+        };
+        ia.render(area, &mut buf);
 
         let text: String = (0..area.width)
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
@@ -2431,12 +2342,105 @@ mod tests {
         let input = InputBox::new();
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
-        render_input_with_prompt(&input, PromptInputMode::Prompt, area, &mut buf);
+        let ia = InputArea {
+            input: &input,
+            mode: PromptInputMode::Prompt,
+        };
+        ia.render(area, &mut buf);
 
         let text: String = (0..area.width)
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         // Should NOT contain a mode prefix
         assert!(!text.contains("[prompt]"));
+    }
+
+    /// Regression test for task #9: `translate_event` translates
+    /// `Event::ToolResult` to `AppEvent::ToolFinished { output }`, which
+    /// carries no tool name because `Event::ToolResult` doesn't have one.
+    /// The authoritative name lives in `App.current_tool`, which is set
+    /// when `ToolStart` is applied. `apply_event` must resolve the missing
+    /// name by taking `current_tool`, so the resulting `ChatMessage::ToolResult`
+    /// still has the correct `tool_name`.
+    #[test]
+    fn apply_event_tool_finished_resolves_name_from_current_tool() {
+        use crate::app_event::AppEvent;
+        use crab_core::tool::ToolOutput;
+
+        let mut app = App::new("test");
+
+        // Simulate Event::ToolUseStart → AppEvent::ToolStart { name: "Read", input: null }
+        app.apply_event(AppEvent::ToolStart {
+            name: "Read".to_string(),
+            input: serde_json::Value::Null,
+        });
+        assert_eq!(app.current_tool.as_deref(), Some("Read"));
+
+        // Simulate Event::ToolResult → AppEvent::ToolFinished { output }
+        // (no name — apply_event must resolve from current_tool)
+        app.apply_event(AppEvent::ToolFinished {
+            output: ToolOutput::success("ok"),
+        });
+
+        // current_tool must be consumed
+        assert!(app.current_tool.is_none());
+
+        // The final ChatMessage::ToolResult must have the authoritative name
+        // resolved from current_tool, not the empty fallback.
+        let last = app.messages.last().expect("expected a message");
+        match last {
+            ChatMessage::ToolResult {
+                tool_name, output, ..
+            } => {
+                assert_eq!(tool_name, "Read");
+                assert_eq!(output, "ok");
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    /// Regression test for task #22: after #13's translate→apply migration,
+    /// `apply_event(ContentAppend)` must mirror the streamed delta into
+    /// `content_buffer` so the legacy readers — Ctrl+F search, Ctrl+Y
+    /// code-block copy, scroll-anchor math at app.rs:399/701/994, and the
+    /// external-editor-error banner at runner.rs:550 — still see the text.
+    ///
+    /// The mirror is a short-term band-aid; ticket #27 will delete
+    /// `content_buffer` entirely and rewrite the 7 read sites to iterate
+    /// `self.messages` directly. Until then, this test locks in the mirror
+    /// so a future refactor cannot silently break it again.
+    #[test]
+    fn apply_event_content_append_mirrors_into_content_buffer() {
+        use crate::app_event::AppEvent;
+
+        let mut app = App::new("test");
+        assert!(app.content_buffer.is_empty());
+        assert!(app.messages.is_empty());
+
+        // Single delta — starts a new Assistant message and mirrors.
+        app.apply_event(AppEvent::ContentAppend("Hello".to_string()));
+        assert_eq!(app.content_buffer, "Hello");
+        assert_eq!(app.messages.len(), 1);
+        match app.messages.last().unwrap() {
+            ChatMessage::Assistant { text } => assert_eq!(text, "Hello"),
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+
+        // Second delta — appends to the existing Assistant message AND
+        // appends to the mirror. Both sides must stay in sync.
+        app.apply_event(AppEvent::ContentAppend(", world!\n".to_string()));
+        assert_eq!(app.content_buffer, "Hello, world!\n");
+        assert_eq!(app.messages.len(), 1);
+        match app.messages.last().unwrap() {
+            ChatMessage::Assistant { text } => assert_eq!(text, "Hello, world!\n"),
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+
+        // Third delta — multi-line content, still mirrored byte-for-byte.
+        app.apply_event(AppEvent::ContentAppend("line2\nline3\n".to_string()));
+        assert_eq!(app.content_buffer, "Hello, world!\nline2\nline3\n");
+        // And scroll-math sees the full line count (regression anchor for
+        // app.rs:399/701/994 scroll-anchor computation).
+        assert_eq!(app.content_buffer.lines().count(), 3);
     }
 }

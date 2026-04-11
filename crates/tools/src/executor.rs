@@ -230,9 +230,13 @@ mod tests {
     struct EchoTool;
 
     impl Tool for EchoTool {
+        // The `Tool` trait declares `fn name/description(&self) -> &str`,
+        // so impls must match. `&'static str` would be a signature mismatch.
+        #[allow(clippy::unnecessary_literal_bound)]
         fn name(&self) -> &str {
             "echo"
         }
+        #[allow(clippy::unnecessary_literal_bound)]
         fn description(&self) -> &str {
             "echoes input"
         }

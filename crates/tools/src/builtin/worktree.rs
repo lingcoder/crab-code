@@ -135,6 +135,11 @@ impl Tool for EnterWorktreeTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let name = input["name"].as_str().unwrap_or("default");
+        Some(format!("EnterWorktree ({name})"))
+    }
 }
 
 // ─── ExitWorktreeTool ────────────────────────────────────────────────
@@ -270,6 +275,11 @@ impl Tool for ExitWorktreeTool {
 
     fn requires_confirmation(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let action = input["action"].as_str().unwrap_or("keep");
+        Some(format!("ExitWorktree ({action})"))
     }
 }
 
@@ -459,6 +469,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::absurd_extreme_comparisons)] // deliberately checking the full u32 range
     fn rand_u32_produces_value() {
         // Just verify it doesn't panic and returns something
         let v = rand_u32();

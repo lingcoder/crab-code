@@ -66,6 +66,10 @@ impl Tool for SnipTool {
 
         Box::pin(async move { snip_output(message_id.as_deref(), max_chars).await })
     }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("Snip".to_string())
+    }
 }
 
 /// Snip a tool output, either by message ID or the most recent large output.

@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 
 /// LSP operations tool — stub for Phase 1.
@@ -118,6 +118,33 @@ impl Tool for LspTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: "LSP (operation: "X", symbol: "Y", in: "Z")"
+        let op = input["operation"].as_str()?;
+        let file = input["file_path"].as_str().unwrap_or("?");
+        let filename = file.rsplit(['/', '\\']).next().unwrap_or(file);
+        Some(format!("LSP (operation: \"{op}\", in: \"{filename}\")"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        if text.is_empty() {
+            return None;
+        }
+        // CCB: "Found N references" / "Found N symbols" etc.
+        let line_count = text.lines().count();
+        Some(ToolDisplayResult {
+            lines: vec![ToolDisplayLine::new(
+                format!("Found {line_count} results"),
+                ToolDisplayStyle::Muted,
+            )],
+            preview_lines: 1,
+        })
     }
 }
 

@@ -90,6 +90,16 @@ impl Tool for ConfigTool {
         // set operations modify config, but we handle at operation level
         true
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let op = input["operation"].as_str().unwrap_or("?");
+        let key = input["key"].as_str().unwrap_or("");
+        if key.is_empty() {
+            Some(format!("Config ({op})"))
+        } else {
+            Some(format!("Config ({op}: {key})"))
+        }
+    }
 }
 
 /// Resolve a dot-separated key path in a JSON value.

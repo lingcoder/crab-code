@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use crab_fs::grep::{GrepMatch, GrepOptions, search};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -123,6 +123,70 @@ impl Tool for GrepTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: message = pattern: "X", path: "Y"
+        let pattern = input["pattern"].as_str()?;
+        let path = input["path"].as_str();
+        let msg = match path {
+            Some(p) => format!("pattern: \"{pattern}\", path: \"{p}\""),
+            None => format!("pattern: \"{pattern}\""),
+        };
+        Some(format!("Search ({msg})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        if text.is_empty() {
+            return Some(ToolDisplayResult {
+                lines: vec![ToolDisplayLine::new(
+                    "Found 0 results",
+                    ToolDisplayStyle::Muted,
+                )],
+                preview_lines: 1,
+            });
+        }
+
+        // CCB: "Found N files" / "Found N lines" depending on output_mode
+        // We detect by looking at content format
+        let total_lines = text.lines().count();
+
+        // Check if output is file-list mode (one file per line, no colons with line numbers)
+        let is_file_list = text
+            .lines()
+            .all(|l| !l.contains(':') || l.starts_with('/') || l.starts_with("C:"));
+        let summary = if is_file_list {
+            format!("Found {total_lines} files")
+        } else {
+            format!("Found {total_lines} results")
+        };
+
+        let mut lines = vec![ToolDisplayLine::new(&summary, ToolDisplayStyle::Muted)];
+
+        // Show results with ⎿ connector (CCB verbose tree style)
+        for line in text.lines().take(20) {
+            let style = if line.contains(':') {
+                ToolDisplayStyle::Highlight
+            } else {
+                ToolDisplayStyle::Normal
+            };
+            lines.push(ToolDisplayLine::new(format!("  ⎿ {line}"), style));
+        }
+        if total_lines > 20 {
+            lines.push(ToolDisplayLine::new(
+                format!("  … +{} results", total_lines - 20),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 1, // condensed: just "Found N files/results"
+        })
     }
 }
 

@@ -48,6 +48,12 @@ impl Tool for SleepTool {
         true
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["duration_ms"]
+            .as_u64()
+            .map(|d| format!("Sleep ({d}ms)"))
+    }
+
     fn execute(
         &self,
         input: Value,

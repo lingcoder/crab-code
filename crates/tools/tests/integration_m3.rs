@@ -1,7 +1,7 @@
 //! M3 Integration tests: tools + fs + process end-to-end verification.
 //!
-//! These tests exercise the full ToolRegistry → ToolExecutor → Tool.execute()
-//! pipeline with real filesystem and process operations.
+//! These tests exercise the full `ToolRegistry` → `ToolExecutor` →
+//! `Tool::execute()` pipeline with real filesystem and process operations.
 
 use std::path::Path;
 use std::sync::Arc;

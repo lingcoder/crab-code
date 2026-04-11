@@ -102,6 +102,24 @@ pub struct Theme {
     pub warning: Color,
     /// Success text color.
     pub success: Color,
+    /// Accent color — used for cyan-style UI highlights (frame chars,
+    /// selection indicators, timestamps). Distinct from `link` which is
+    /// specifically for clickable/URL targets.
+    pub accent: Color,
+    /// Bright foreground — emphasized text against a dark background.
+    /// Distinct from `fg` (default body) and `muted` (de-emphasized).
+    pub text_bright: Color,
+    /// Dim foreground — lighter than `fg` but brighter than `muted`.
+    /// Used for secondary text that should still be readable.
+    pub text_dim: Color,
+    /// Background for the "current" highlighted item (e.g. active search match).
+    pub highlight_bg: Color,
+    /// Foreground for the "current" highlighted item — paired with `highlight_bg`.
+    pub highlight_fg: Color,
+    /// Background for non-current selection / other matches.
+    pub selection_bg: Color,
+    /// Foreground for non-current selection — paired with `selection_bg`.
+    pub selection_fg: Color,
 }
 
 impl Theme {
@@ -140,6 +158,13 @@ impl Theme {
             error: Color::Red,
             warning: Color::Yellow,
             success: Color::Green,
+            accent: Color::Cyan,
+            text_bright: Color::White,
+            text_dim: Color::Gray,
+            highlight_bg: Color::Yellow,
+            highlight_fg: Color::Black,
+            selection_bg: Color::DarkGray,
+            selection_fg: Color::White,
         }
     }
 
@@ -178,6 +203,13 @@ impl Theme {
             error: Color::Red,
             warning: Color::Rgb(204, 120, 0),
             success: Color::Rgb(0, 128, 0),
+            accent: Color::Blue,
+            text_bright: Color::Black,
+            text_dim: Color::DarkGray,
+            highlight_bg: Color::Rgb(255, 230, 128),
+            highlight_fg: Color::Black,
+            selection_bg: Color::Gray,
+            selection_fg: Color::Black,
         }
     }
 
@@ -216,6 +248,13 @@ impl Theme {
             error: Color::Rgb(249, 38, 114),
             warning: Color::Rgb(230, 219, 116),
             success: Color::Rgb(166, 226, 46),
+            accent: Color::Rgb(102, 217, 239),
+            text_bright: Color::Rgb(248, 248, 242),
+            text_dim: Color::Rgb(181, 181, 166),
+            highlight_bg: Color::Rgb(230, 219, 116),
+            highlight_fg: Color::Rgb(39, 40, 34),
+            selection_bg: Color::Rgb(73, 72, 62),
+            selection_fg: Color::Rgb(248, 248, 242),
         }
     }
 
@@ -254,6 +293,13 @@ impl Theme {
             error: Color::Rgb(220, 50, 47),
             warning: Color::Rgb(181, 137, 0),
             success: Color::Rgb(133, 153, 0),
+            accent: Color::Rgb(38, 139, 210),
+            text_bright: Color::Rgb(238, 232, 213),
+            text_dim: Color::Rgb(147, 161, 161),
+            highlight_bg: Color::Rgb(181, 137, 0),
+            highlight_fg: Color::Rgb(0, 43, 54),
+            selection_bg: Color::Rgb(7, 54, 66),
+            selection_fg: Color::Rgb(238, 232, 213),
         }
     }
 
@@ -388,6 +434,13 @@ impl ThemeConfig {
                     "error" => theme.error = color,
                     "warning" => theme.warning = color,
                     "success" => theme.success = color,
+                    "accent" => theme.accent = color,
+                    "text_bright" => theme.text_bright = color,
+                    "text_dim" => theme.text_dim = color,
+                    "highlight_bg" => theme.highlight_bg = color,
+                    "highlight_fg" => theme.highlight_fg = color,
+                    "selection_bg" => theme.selection_bg = color,
+                    "selection_fg" => theme.selection_fg = color,
                     _ => {}
                 }
             }
@@ -484,6 +537,75 @@ mod tests {
         assert_eq!(theme.fg, Color::White);
         assert_eq!(theme.diff_add_fg, Color::Green);
         assert_eq!(theme.diff_remove_fg, Color::Red);
+    }
+
+    #[test]
+    fn dark_theme_new_role_defaults_are_byte_identical_to_prior_literals() {
+        // These mappings are the contract: call sites that previously
+        // hardcoded Yellow/Black/White/DarkGray/Cyan/Gray for semantic
+        // roles now read these fields. Under the dark theme each role
+        // field MUST equal the exact literal the call site used before,
+        // so render output stays byte-identical.
+        let t = Theme::dark();
+        assert_eq!(t.accent, Color::Cyan);
+        assert_eq!(t.text_bright, Color::White);
+        assert_eq!(t.text_dim, Color::Gray);
+        assert_eq!(t.highlight_bg, Color::Yellow);
+        assert_eq!(t.highlight_fg, Color::Black);
+        assert_eq!(t.selection_bg, Color::DarkGray);
+        assert_eq!(t.selection_fg, Color::White);
+    }
+
+    #[test]
+    fn all_builtin_themes_populate_new_role_fields() {
+        // Regression guard: if a new constructor is added and forgets to
+        // set the new fields, it won't compile (the struct requires them).
+        // This test just sanity-checks that every built-in produces a
+        // non-Reset value for every new role — i.e., they're intentionally
+        // themed, not defaulted to some sentinel.
+        for name in ThemeRegistry::available_themes() {
+            let t = Theme::by_name(name);
+            assert_ne!(t.accent, Color::Reset, "{name:?} missing accent");
+            assert_ne!(t.text_bright, Color::Reset, "{name:?} missing text_bright");
+            assert_ne!(t.text_dim, Color::Reset, "{name:?} missing text_dim");
+            assert_ne!(
+                t.highlight_bg,
+                Color::Reset,
+                "{name:?} missing highlight_bg"
+            );
+            assert_ne!(
+                t.highlight_fg,
+                Color::Reset,
+                "{name:?} missing highlight_fg"
+            );
+            assert_ne!(
+                t.selection_bg,
+                Color::Reset,
+                "{name:?} missing selection_bg"
+            );
+            assert_ne!(
+                t.selection_fg,
+                Color::Reset,
+                "{name:?} missing selection_fg"
+            );
+        }
+    }
+
+    #[test]
+    fn theme_config_overrides_new_role_fields() {
+        // JSON config can override the new fields too.
+        let mut colors = HashMap::new();
+        colors.insert("accent".into(), "#123456".into());
+        colors.insert("highlight_bg".into(), "red".into());
+        let config = ThemeConfig {
+            name: ThemeName::Dark,
+            colors,
+        };
+        let theme = config.into_theme();
+        assert_eq!(theme.accent, Color::Rgb(0x12, 0x34, 0x56));
+        assert_eq!(theme.highlight_bg, Color::Red);
+        // Unchanged field stays at dark default.
+        assert_eq!(theme.highlight_fg, Color::Black);
     }
 
     #[test]

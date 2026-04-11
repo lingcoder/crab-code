@@ -91,6 +91,11 @@ impl Tool for TeamCreateTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let name = input["team_name"].as_str().unwrap_or("?");
+        Some(format!("TeamCreate ({name})"))
+    }
 }
 
 // ─── TeamDeleteTool ───
@@ -147,6 +152,10 @@ impl Tool for TeamDeleteTool {
 
     fn requires_confirmation(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("TeamDelete".to_string())
     }
 }
 
@@ -236,6 +245,11 @@ impl Tool for SendMessageTool {
                 false,
             ))
         })
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let to = input["to"].as_str().unwrap_or("?");
+        Some(format!("SendMessage (to: {to})"))
     }
 }
 

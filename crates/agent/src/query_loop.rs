@@ -462,6 +462,7 @@ async fn execute_tool_calls(
                         .send(Event::ToolUseStart {
                             id: id.clone(),
                             name: name.clone(),
+                            input: input.clone(),
                         })
                         .await;
                     let result = executor.execute(&name, input, ctx).await;
@@ -499,6 +500,7 @@ async fn execute_tool_calls(
                 .send(Event::ToolUseStart {
                     id: id.clone(),
                     name: name.clone(),
+                    input: input.clone(),
                 })
                 .await;
             let output = ToolOutput::error(
@@ -534,6 +536,7 @@ async fn execute_tool_calls(
                         .send(Event::ToolUseStart {
                             id: id.clone(),
                             name: name.clone(),
+                            input: input.clone(),
                         })
                         .await;
                     let output = ToolOutput::error(format!("<hook-blocked> {msg}"));
@@ -562,6 +565,7 @@ async fn execute_tool_calls(
             .send(Event::ToolUseStart {
                 id: id.clone(),
                 name: name.clone(),
+                input: input.clone(),
             })
             .await;
 

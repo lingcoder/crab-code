@@ -60,6 +60,104 @@ pub trait Tool: Send + Sync {
     fn is_read_only(&self) -> bool {
         false
     }
+
+    // ── Rendering hooks (Phase 1.5) ─────────────────────────────────
+    //
+    // All have default implementations so existing tools don't break.
+    // Override in individual tool impls for customized TUI display.
+
+    /// One-line summary shown when the tool is invoked.
+    ///
+    /// E.g. `BashTool` → `"$ ls -la"`, `ReadTool` → `"src/main.rs:1-50"`.
+    /// Returns `None` to use the default `"● {tool_name}"`.
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        None
+    }
+
+    /// Custom result formatting for TUI display.
+    ///
+    /// Returns `None` to use the default plain-text rendering (10-line truncation).
+    fn format_result(&self, _output: &ToolOutput) -> Option<ToolDisplayResult> {
+        None
+    }
+
+    /// Whether the result should be collapsible in the TUI.
+    ///
+    /// Default: collapse when output exceeds 5 lines.
+    fn is_result_collapsible(&self, output: &ToolOutput) -> bool {
+        output.text().lines().count() > 5
+    }
+
+    /// Summary shown when the tool invocation was rejected by the user.
+    ///
+    /// E.g. `EditTool` → `"Edit rejected: src/main.rs"`.
+    fn format_rejected_summary(&self, _input: &Value) -> Option<String> {
+        None
+    }
+
+    /// Whether this tool supports real-time streaming progress display.
+    ///
+    /// E.g. `BashTool` can stream stdout as it runs.
+    fn supports_streaming_progress(&self) -> bool {
+        false
+    }
+}
+
+/// Tool-customized rendering output for TUI display.
+#[derive(Debug, Clone)]
+pub struct ToolDisplayResult {
+    /// Styled lines to render.
+    pub lines: Vec<ToolDisplayLine>,
+    /// Number of lines to show when collapsed (default 3).
+    pub preview_lines: usize,
+}
+
+/// A single styled line in a tool display result.
+#[derive(Debug, Clone)]
+pub struct ToolDisplayLine {
+    /// The text content.
+    pub text: String,
+    /// Optional display style. `None` uses the default style.
+    pub style: Option<ToolDisplayStyle>,
+}
+
+impl ToolDisplayLine {
+    /// Create a new line with the given text and style.
+    pub fn new(text: impl Into<String>, style: ToolDisplayStyle) -> Self {
+        Self {
+            text: text.into(),
+            style: Some(style),
+        }
+    }
+
+    /// Create a new line with default styling.
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            style: None,
+        }
+    }
+}
+
+/// Display style hint for tool output lines.
+///
+/// The TUI maps these to actual terminal colors/attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDisplayStyle {
+    /// Normal text.
+    Normal,
+    /// Error text (typically red).
+    Error,
+    /// Diff addition (typically green).
+    DiffAdd,
+    /// Diff removal (typically red).
+    DiffRemove,
+    /// Diff context (unchanged lines).
+    DiffContext,
+    /// Muted / de-emphasized text (typically dim gray).
+    Muted,
+    /// Highlighted / emphasized text.
+    Highlight,
 }
 
 /// Execution context passed to every tool invocation.

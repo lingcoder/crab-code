@@ -107,6 +107,7 @@ unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
 jsonc-parser = { version = "0.32", features = ["serde"] }
 schemars = "1"
+nucleo-matcher = "0.3"
 
 # ─── 测试 ───
 tempfile = "3"

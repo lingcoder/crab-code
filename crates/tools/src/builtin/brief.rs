@@ -55,6 +55,10 @@ impl Tool for BriefTool {
 
         Box::pin(async move { generate_brief(&scope, summary.as_deref()).await })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["scope"].as_str().map(|s| format!("Brief ({s})"))
+    }
 }
 
 /// Generate a brief summary for the given scope.

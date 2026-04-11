@@ -5,7 +5,10 @@
 
 use base64::Engine as _;
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
+use crab_core::tool::{
+    Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
+    ToolOutputContent,
+};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -58,6 +61,22 @@ impl Tool for ImageReadTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("Read ({filename})"))
+    }
+
+    fn format_result(&self, _output: &ToolOutput) -> Option<ToolDisplayResult> {
+        Some(ToolDisplayResult {
+            lines: vec![ToolDisplayLine::new(
+                "Read image".to_string(),
+                ToolDisplayStyle::Muted,
+            )],
+            preview_lines: 1,
+        })
     }
 
     fn execute(
@@ -220,7 +239,6 @@ mod tests {
             ToolOutputContent::Image { media_type, data } => {
                 assert_eq!(media_type, "image/png");
                 // Verify it's valid base64 and decodes to the original
-                use base64::Engine as _;
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .unwrap();

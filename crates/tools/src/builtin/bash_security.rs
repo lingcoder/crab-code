@@ -483,7 +483,7 @@ mod tests {
         let rw_rule = policy
             .path_rules
             .iter()
-            .find(|r| r.path == PathBuf::from("/home/user/project"));
+            .find(|r| r.path == Path::new("/home/user/project"));
         assert!(rw_rule.is_some());
         assert_eq!(rw_rule.unwrap().access, PathAccess::ReadWrite);
     }
@@ -494,7 +494,7 @@ mod tests {
         let usr_rule = policy
             .path_rules
             .iter()
-            .find(|r| r.path == PathBuf::from("/usr"));
+            .find(|r| r.path == Path::new("/usr"));
         assert!(usr_rule.is_some());
         assert_eq!(usr_rule.unwrap().access, PathAccess::ReadOnly);
     }

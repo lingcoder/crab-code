@@ -122,6 +122,14 @@ impl Tool for MonitorTool {
             }
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let target = input["path"]
+            .as_str()
+            .or_else(|| input["process_name"].as_str())
+            .unwrap_or("?");
+        Some(format!("Monitor ({target})"))
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────

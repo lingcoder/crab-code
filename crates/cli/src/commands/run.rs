@@ -328,11 +328,12 @@ fn event_to_value(event: &Event) -> serde_json::Value {
                 "delta": delta,
             })
         }
-        Event::ToolUseStart { id, name } => {
+        Event::ToolUseStart { id, name, input } => {
             serde_json::json!({
                 "type": "tool_use_start",
                 "id": id,
                 "name": name,
+                "input": input,
             })
         }
         Event::ToolResult { id, output } => {
@@ -429,6 +430,7 @@ mod tests {
         let event = Event::ToolUseStart {
             id: "tu_1".into(),
             name: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
         };
         let value = event_to_value(&event);
         assert_eq!(value["type"], "tool_use_start");

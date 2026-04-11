@@ -132,6 +132,10 @@ impl Tool for McpToolAdapter {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some(self.name().to_string())
+    }
 }
 
 /// Register all MCP tools from the manager into the tool registry.
@@ -189,8 +193,10 @@ mod tests {
         {
             Box::pin(async move {
                 let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
-                let responses = self.responses.lock().await;
-                let result = responses
+                let result = self
+                    .responses
+                    .lock()
+                    .await
                     .get(idx)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
@@ -216,7 +222,7 @@ mod tests {
         }
     }
 
-    /// Helper to create a connected McpClient with mock transport.
+    /// Helper to create a connected `McpClient` with mock transport.
     async fn mock_client(tool_responses: Vec<serde_json::Value>) -> McpClient {
         // First two responses: initialize + tools/list
         let mut responses = vec![serde_json::json!({

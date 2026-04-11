@@ -73,6 +73,12 @@ impl Tool for VerifyPlanExecutionTool {
         true
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["plan_file"]
+            .as_str()
+            .map(|f| format!("VerifyPlan ({f})"))
+    }
+
     fn execute(
         &self,
         input: Value,

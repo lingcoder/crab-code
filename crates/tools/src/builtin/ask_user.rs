@@ -54,6 +54,10 @@ impl Tool for AskUserQuestionTool {
         true
     }
 
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("AskUser".to_string())
+    }
+
     fn execute(
         &self,
         input: Value,

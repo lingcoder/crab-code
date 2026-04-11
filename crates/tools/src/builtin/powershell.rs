@@ -7,6 +7,8 @@ use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
+use crate::str_utils::truncate_chars;
+
 /// `PowerShell` command execution tool (Windows only).
 ///
 /// Prefers `pwsh` (`PowerShell` 7+) when available, falls back to
@@ -114,6 +116,14 @@ impl Tool for PowerShellTool {
 
     fn requires_confirmation(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // Commands may contain multi-byte UTF-8 (paths, string literals);
+        // truncate_chars counts codepoints to avoid panics on non-ASCII input.
+        let cmd = input["command"].as_str()?;
+        let display = truncate_chars(cmd, 160, "…");
+        Some(format!("Run ({display})"))
     }
 }
 

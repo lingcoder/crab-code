@@ -111,6 +111,32 @@ impl SessionSidebar {
         }
     }
 
+    /// Get the next session ID (wrapping around).
+    pub fn next_session_id(&self) -> Option<String> {
+        if self.sessions.is_empty() {
+            return None;
+        }
+        let next = if self.selected + 1 < self.sessions.len() {
+            self.selected + 1
+        } else {
+            0
+        };
+        Some(self.sessions[next].id.clone())
+    }
+
+    /// Get the previous session ID (wrapping around).
+    pub fn prev_session_id(&self) -> Option<String> {
+        if self.sessions.is_empty() {
+            return None;
+        }
+        let prev = if self.selected > 0 {
+            self.selected - 1
+        } else {
+            self.sessions.len() - 1
+        };
+        Some(self.sessions[prev].id.clone())
+    }
+
     /// Default sidebar width.
     #[must_use]
     pub const fn width() -> u16 {

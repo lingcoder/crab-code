@@ -9,6 +9,8 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::str_utils::truncate_chars;
+
 // ── ListMcpResources ──────────────────────────────────────────────────
 
 /// Tool name constant for `ListMcpResourcesTool`.
@@ -45,6 +47,12 @@ impl Tool for ListMcpResourcesTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["server_name"]
+            .as_str()
+            .map(|s| format!("ListMcpResources ({s})"))
     }
 
     fn execute(
@@ -119,6 +127,14 @@ impl Tool for ReadMcpResourceTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // URIs can contain percent-encoded or multi-byte characters;
+        // truncate_chars counts codepoints to avoid panics on non-ASCII input.
+        let uri = input["uri"].as_str().unwrap_or("?");
+        let truncated = truncate_chars(uri, 57, "…");
+        Some(format!("ReadMcpResource ({truncated})"))
     }
 
     fn execute(

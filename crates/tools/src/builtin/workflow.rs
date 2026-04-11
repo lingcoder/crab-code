@@ -69,6 +69,10 @@ impl Tool for WorkflowTool {
         })
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["name"].as_str().map(|n| format!("Workflow ({n})"))
+    }
+
     fn execute(
         &self,
         input: Value,

@@ -1,5 +1,6 @@
 //! Conversion between Chat Completions API types and internal types.
 
+use crab_core::event::TOOL_ARG_INDEX_BASE;
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::TokenUsage;
 
@@ -248,8 +249,18 @@ pub fn chunk_to_stream_event(chunk: &ChatCompletionChunk) -> Vec<StreamEvent> {
     let mut events = Vec::new();
 
     for choice in &chunk.choices {
+        let has_tool_calls = choice
+            .delta
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
+
+        // When tool_calls are present alongside content, the content is
+        // redundant tool-parameter JSON (DeepSeek behaviour). Skip it to
+        // avoid polluting assistant text with raw JSON.
         if let Some(content) = &choice.delta.content
             && !content.is_empty()
+            && !has_tool_calls
         {
             events.push(StreamEvent::ContentDelta {
                 index: choice.index,
@@ -259,8 +270,8 @@ pub fn chunk_to_stream_event(chunk: &ChatCompletionChunk) -> Vec<StreamEvent> {
 
         if let Some(tool_calls) = &choice.delta.tool_calls {
             for tc in tool_calls {
-                // Use index offset 1000+ to avoid colliding with text content block indices
-                let tool_index = 1000 + tc.index;
+                // Use index offset to avoid colliding with text content block indices
+                let tool_index = TOOL_ARG_INDEX_BASE + tc.index;
 
                 // First chunk for a tool call: has id + function.name
                 if tc.id.is_some() {

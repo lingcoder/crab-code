@@ -17,7 +17,7 @@
 
 ---
 
-> **状态：积极开发中** -- 49 个内置工具、6 种权限模式、扩展思维、多 Agent 协调、结构化消息模型 TUI（187 spinner verbs），17 个 crate 共 3800+ 测试、11 万行代码。零 `todo!()` 残留。
+> **状态：积极开发中** -- 49 个内置工具、6 种权限模式、扩展思维、多 Agent 协调、结构化消息模型 TUI（187 spinner verbs），17 个 crate 共 3900+ 测试、11 万行代码。零 `todo!()` 残留。
 
 ## 什么是 Crab Code？
 
@@ -153,7 +153,7 @@ Crab Code 支持 Claude Code 的 `settings.json` 格式，包括 `env` 字段：
 
 ## 架构
 
-4 层 16 crate 的 Rust workspace：
+4 层 17 crate 的 Rust workspace：
 
 ```
 第 4 层（入口）    cli          daemon        xtask
@@ -209,7 +209,7 @@ crab auth login                   # 配置认证
 
 ```bash
 cargo build --workspace                    # 构建全部
-cargo test --workspace                     # 运行所有测试（3800+）
+cargo test --workspace                     # 运行所有测试（3900+）
 cargo clippy --workspace -- -D warnings    # Lint 检查
 cargo fmt --all --check                    # 格式检查
 cargo run --bin crab                       # 运行 CLI

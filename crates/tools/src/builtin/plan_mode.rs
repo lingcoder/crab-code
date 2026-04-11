@@ -111,6 +111,10 @@ impl Tool for EnterPlanModeTool {
         true
     }
 
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("EnterPlanMode".to_string())
+    }
+
     fn execute(
         &self,
         input: Value,
@@ -203,6 +207,10 @@ impl Tool for ExitPlanModeTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("ExitPlanMode".to_string())
     }
 
     fn execute(

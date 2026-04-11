@@ -158,6 +158,12 @@ impl Tool for RemoteTriggerTool {
         })
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["action"]
+            .as_str()
+            .map(|a| format!("RemoteTrigger ({a})"))
+    }
+
     #[allow(clippy::too_many_lines)]
     fn execute(
         &self,
@@ -644,8 +650,8 @@ mod tests {
             _ => panic!("expected JSON output"),
         }
 
-        let s = store.lock().unwrap();
-        assert!(s.list().is_empty());
+        let is_empty = store.lock().unwrap().list().is_empty();
+        assert!(is_empty);
     }
 
     #[tokio::test]

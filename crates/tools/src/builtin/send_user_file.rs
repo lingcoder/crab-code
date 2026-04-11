@@ -72,6 +72,12 @@ impl Tool for SendUserFileTool {
         true
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("SendFile ({filename})"))
+    }
+
     fn execute(
         &self,
         input: Value,

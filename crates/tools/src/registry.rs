@@ -125,6 +125,9 @@ mod tests {
         fn name(&self) -> &str {
             self.tool_name
         }
+        // The `Tool` trait declares `fn description(&self) -> &str`, so the
+        // impl must match. `&'static str` would be a signature mismatch.
+        #[allow(clippy::unnecessary_literal_bound)]
         fn description(&self) -> &str {
             "a dummy tool"
         }

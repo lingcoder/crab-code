@@ -3,12 +3,13 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::executor::StreamingOutput;
+use crate::str_utils::truncate_chars;
 
 /// Shell command execution tool.
 pub const BASH_TOOL_NAME: &str = "Bash";
@@ -118,6 +119,65 @@ impl Tool for BashTool {
     }
 
     fn requires_confirmation(&self) -> bool {
+        true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: userFacingName="Run", message = truncated command (max 160 chars).
+        // Commands can contain multi-byte UTF-8 (paths, grep patterns, echo args);
+        // truncate_chars counts codepoints to avoid panics on non-ASCII input.
+        let cmd = input["command"].as_str()?;
+        let display = truncate_chars(cmd, 160, "…");
+        Some(format!("Run ({display})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        // CCB: stdout in normal color, stderr in error color.
+        // We don't have separate stdout/stderr here, so use is_error flag.
+        if text.is_empty() {
+            // CCB: "(No output)" dimmed when empty
+            return Some(ToolDisplayResult {
+                lines: vec![ToolDisplayLine::new("(No output)", ToolDisplayStyle::Muted)],
+                preview_lines: 1,
+            });
+        }
+        let style = if output.is_error {
+            ToolDisplayStyle::Error
+        } else {
+            ToolDisplayStyle::Normal
+        };
+        let all_lines: Vec<&str> = text.lines().collect();
+        let total = all_lines.len();
+        // CCB: shows last 5 lines in progress; for result, show all but
+        // truncate display. We show up to 20 lines with count indicator.
+        let show = total.min(20);
+        let mut lines: Vec<ToolDisplayLine> = all_lines[..show]
+            .iter()
+            .map(|l| ToolDisplayLine::new(*l, style))
+            .collect();
+        if total > show {
+            lines.push(ToolDisplayLine::new(
+                format!("… +{} lines", total - show),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 5,
+        })
+    }
+
+    fn format_rejected_summary(&self, input: &Value) -> Option<String> {
+        input["command"]
+            .as_str()
+            .map(|cmd| format!("Run rejected ({cmd})"))
+    }
+
+    fn supports_streaming_progress(&self) -> bool {
         true
     }
 }
@@ -417,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn bash_nonzero_exit_is_error() {
         let tool = BashTool;
-        let cmd = if cfg!(windows) { "exit 1" } else { "exit 1" };
+        let cmd = "exit 1";
         let input = serde_json::json!({ "command": cmd });
         let out = tool.execute(input, &make_ctx()).await.unwrap();
         assert!(out.is_error);

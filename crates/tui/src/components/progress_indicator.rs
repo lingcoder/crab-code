@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn progress_bar_new() {
         let bar = ProgressBar::new();
-        assert_eq!(bar.progress(), 0.0);
+        assert!(bar.progress().abs() < f64::EPSILON);
         assert!(bar.label().is_none());
         assert!(!bar.is_complete());
         assert_eq!(bar.percentage(), 0);
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn progress_bar_default() {
         let bar = ProgressBar::default();
-        assert_eq!(bar.progress(), 0.0);
+        assert!(bar.progress().abs() < f64::EPSILON);
     }
 
     #[test]

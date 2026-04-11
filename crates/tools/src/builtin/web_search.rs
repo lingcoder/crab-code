@@ -346,6 +346,14 @@ impl Tool for WebSearchTool {
     fn is_read_only(&self) -> bool {
         true
     }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: message = "query text"
+        let query = input["query"].as_str()?;
+        Some(format!("WebSearch (\"{query}\")"))
+    }
 }
 
 /// Parse a JSON array of strings into a `Vec<String>`.

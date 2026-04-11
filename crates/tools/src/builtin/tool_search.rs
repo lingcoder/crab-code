@@ -64,6 +64,10 @@ impl Tool for ToolSearchTool {
             search_tools(&query, &tool_descs)
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["query"].as_str().map(|q| format!("ToolSearch ({q})"))
+    }
 }
 
 /// Search the tool registry for tools matching the query.

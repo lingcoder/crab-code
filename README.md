@@ -17,7 +17,7 @@
 
 ---
 
-> **Status: Active Development** -- 49 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, structured message TUI with 187 spinner verbs, 3800+ tests across 17 crates, 110k+ LOC. Zero `todo!()` macros.
+> **Status: Active Development** -- 49 built-in tools, 6 permission modes, extended thinking, multi-agent coordination, structured message TUI with 187 spinner verbs, 3900+ tests across 17 crates, 110k+ LOC. Zero `todo!()` macros.
 
 ## What is Crab Code?
 
@@ -153,7 +153,7 @@ Plus tool-level filtering with `--allowedTools` / `--disallowedTools` supporting
 
 ## Architecture
 
-4-layer, 16-crate Rust workspace:
+4-layer, 17-crate Rust workspace:
 
 ```
 Layer 4 (Entry)     cli          daemon        xtask
@@ -209,7 +209,7 @@ crab auth login                   # Configure authentication
 
 ```bash
 cargo build --workspace                    # Build all
-cargo test --workspace                     # Run all tests (3800+)
+cargo test --workspace                     # Run all tests (3900+)
 cargo clippy --workspace -- -D warnings    # Lint
 cargo fmt --all --check                    # Check formatting
 cargo run --bin crab                       # Run CLI

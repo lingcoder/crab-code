@@ -20,6 +20,8 @@ pub struct InputBox {
     history_index: Option<usize>,
     /// Saved current input when entering history browse mode.
     saved_input: Option<String>,
+    /// Undo stack: `(lines, cursor_row, cursor_col)`.
+    undo_stack: Vec<(Vec<String>, usize, usize)>,
 }
 
 impl InputBox {
@@ -32,6 +34,7 @@ impl InputBox {
             history: Vec::new(),
             history_index: None,
             saved_input: None,
+            undo_stack: Vec::new(),
         }
     }
 
@@ -69,6 +72,25 @@ impl InputBox {
         text
     }
 
+    /// Save current state to the undo stack.
+    fn save_undo(&mut self) {
+        // Limit undo stack to 50 entries
+        if self.undo_stack.len() >= 50 {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack
+            .push((self.lines.clone(), self.cursor_row, self.cursor_col));
+    }
+
+    /// Undo the last edit.
+    pub fn undo(&mut self) {
+        if let Some((lines, row, col)) = self.undo_stack.pop() {
+            self.lines = lines;
+            self.cursor_row = row;
+            self.cursor_col = col;
+        }
+    }
+
     /// Clear the input box.
     pub fn clear(&mut self) {
         self.lines = vec![String::new()];
@@ -80,6 +102,13 @@ impl InputBox {
 
     /// Handle a key event. Returns `true` if the event was consumed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Save undo state before text-modifying keys
+        match key.code {
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter => {
+                self.save_undo();
+            }
+            _ => {}
+        }
         match key.code {
             KeyCode::Char(c) => {
                 self.exit_history_browse();

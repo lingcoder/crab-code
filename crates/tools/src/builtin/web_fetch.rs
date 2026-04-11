@@ -4,10 +4,12 @@
 //! conversion is deferred to Phase 2 (requires adding `reqwest` dependency).
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+
+use crate::str_utils::truncate_chars;
 
 /// Default timeout in seconds for HTTP requests.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -87,34 +89,95 @@ impl Tool for WebFetchTool {
                 return Ok(ToolOutput::error(reason));
             }
 
-            let content = fetch_url(&url, timeout_secs, max_size).await?;
+            let result = fetch_url(&url, timeout_secs, max_size).await?;
+
+            // Non-2xx responses are errors
+            if result.status_code >= 400 {
+                // truncate_chars is multi-byte safe — `result.body` can contain
+                // arbitrary UTF-8 (including partial codepoints if the server
+                // returned non-ASCII error text).
+                let snippet = truncate_chars(&result.body, 500, "…");
+                return Ok(ToolOutput::error(format!(
+                    "HTTP {} {}: {snippet}",
+                    result.status_code, result.status_text,
+                )));
+            }
 
             // Strip HTML tags if the response looks like HTML
-            let text = if content.contains("<html") || content.contains("<!DOCTYPE") {
-                strip_html_tags(&content)
+            let text = if result.body.contains("<html") || result.body.contains("<!DOCTYPE") {
+                strip_html_tags(&result.body)
             } else {
-                content
+                result.body.clone()
             };
 
-            // Truncate to prevent context overflow (~100k chars)
-            let truncated = if text.len() > 100_000 {
-                format!(
-                    "{}...\n\n[truncated — full page was {} chars]",
-                    &text[..100_000],
-                    text.len()
-                )
+            // Truncate to prevent context overflow (~100k chars). We count
+            // by codepoint so multi-byte UTF-8 (CJK, emoji) never panics.
+            let text_char_count = text.chars().count();
+            let truncated = if text_char_count > 100_000 {
+                let prefix: String = text.chars().take(100_000).collect();
+                format!("{prefix}...\n\n[truncated — full page was {text_char_count} chars]")
             } else {
                 text
             };
 
+            // Embed metadata in output for format_result to parse
+            let size_str = format_size(result.content_length);
             Ok(ToolOutput::success(format!(
-                "# Web Fetch: {url}\n\n**Prompt:** {prompt}\n\n---\n\n{truncated}"
+                "[{} {} | {}]\n\n# Web Fetch: {url}\n\n**Prompt:** {prompt}\n\n---\n\n{truncated}",
+                result.status_code, result.status_text, size_str
             )))
         })
     }
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: message = URL (non-verbose) or url: "X" + prompt: "Y" (verbose)
+        let url = input["url"].as_str()?;
+        Some(format!("Fetch ({url})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        // CCB: "Received SIZE (STATUS CODE STATUS_TEXT)"
+        // Our output embeds "[CODE TEXT | SIZE]" on the first line
+        let summary = if let Some(first_line) = text.lines().next()
+            && first_line.starts_with('[')
+            && first_line.contains(']')
+        {
+            // Parse "[200 OK | 45.2 KB]"
+            let inner = &first_line[1..first_line.find(']').unwrap_or(first_line.len())];
+            if let Some(pipe) = inner.find('|') {
+                let status = inner[..pipe].trim();
+                let size = inner[pipe + 1..].trim();
+                format!("Received {size} ({status})")
+            } else {
+                format!("Received ({inner})")
+            }
+        } else {
+            let size = format_size(text.len());
+            format!("Received {size}")
+        };
+        Some(ToolDisplayResult {
+            lines: vec![ToolDisplayLine::new(summary, ToolDisplayStyle::Muted)],
+            preview_lines: 1,
+        })
+    }
+}
+
+/// Format a byte count for human display.
+fn format_size(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -139,10 +202,28 @@ fn validate_url(url: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Fetch a URL using curl subprocess.
-async fn fetch_url(url: &str, timeout_secs: u64, max_size: u64) -> crab_common::Result<String> {
+/// Result of a URL fetch, including HTTP metadata.
+struct FetchResult {
+    /// Response body.
+    body: String,
+    /// HTTP status code (e.g., 200, 404).
+    status_code: u16,
+    /// HTTP status text (e.g., "OK", "Not Found").
+    status_text: String,
+    /// Response body size in bytes.
+    content_length: usize,
+}
+
+/// Fetch a URL using curl subprocess, capturing HTTP status code.
+async fn fetch_url(
+    url: &str,
+    timeout_secs: u64,
+    max_size: u64,
+) -> crab_common::Result<FetchResult> {
+    // -w '\n%{http_code}' appends the status code on the last line
     let cmd = format!(
-        "curl -sS -L --max-time {timeout_secs} --max-filesize {max_size} -A 'CrabCode/1.0' '{url}'"
+        "curl -sS -L --max-time {timeout_secs} --max-filesize {max_size} \
+         -A 'CrabCode/1.0' -w '\\n%{{http_code}}' '{url}'"
     );
     let mut opts = crab_process::spawn::shell_command(&cmd);
     opts.timeout = Some(std::time::Duration::from_secs(timeout_secs + 5));
@@ -155,7 +236,50 @@ async fn fetch_url(url: &str, timeout_secs: u64, max_size: u64) -> crab_common::
             output.stderr.trim()
         )));
     }
-    Ok(output.stdout)
+
+    // Extract status code from last line
+    let stdout = &output.stdout;
+    let (body, status_code) = if let Some(last_newline) = stdout.rfind('\n') {
+        let code_str = stdout[last_newline + 1..].trim();
+        let code = code_str.parse::<u16>().unwrap_or(0);
+        (stdout[..last_newline].to_string(), code)
+    } else {
+        (stdout.clone(), 0)
+    };
+
+    let status_text = http_status_text(status_code).to_string();
+    let content_length = body.len();
+
+    Ok(FetchResult {
+        body,
+        status_code,
+        status_text,
+        content_length,
+    })
+}
+
+/// Map HTTP status code to standard reason phrase.
+fn http_status_text(code: u16) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "",
+    }
 }
 
 /// Strip HTML tags to extract plain text content.

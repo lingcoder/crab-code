@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::str_utils::truncate_chars;
+
 /// Sub-agent spawning tool.
 ///
 /// This tool does not directly spawn a sub-agent (it lives in `crab-tools`,
@@ -116,6 +118,17 @@ impl Tool for AgentTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let desc = input["description"]
+            .as_str()
+            .or_else(|| input["task"].as_str())
+            .unwrap_or("agent task");
+        // LLM-generated descriptions can contain any Unicode — byte slicing is
+        // unsafe. truncate_chars handles multi-byte input correctly.
+        let truncated = truncate_chars(desc, 77, "…");
+        Some(format!("Agent ({truncated})"))
+    }
 }
 
 #[cfg(test)]
@@ -174,9 +187,11 @@ mod tests {
         assert!(!output.is_error);
 
         // Should contain structured JSON output
-        let json_content = match &output.content[0] {
-            ToolOutputContent::Json { value } => value,
-            _ => panic!("expected JSON output"),
+        let ToolOutputContent::Json {
+            value: json_content,
+        } = &output.content[0]
+        else {
+            panic!("expected JSON output");
         };
         assert_eq!(json_content["action"], "spawn_agent");
         assert_eq!(json_content["task"], "Fix the bug in auth module");
@@ -199,9 +214,11 @@ mod tests {
         let output = AgentTool.execute(input, &ctx).await.unwrap();
         assert!(!output.is_error);
 
-        let json_content = match &output.content[0] {
-            ToolOutputContent::Json { value } => value,
-            _ => panic!("expected JSON output"),
+        let ToolOutputContent::Json {
+            value: json_content,
+        } = &output.content[0]
+        else {
+            panic!("expected JSON output");
         };
         assert_eq!(json_content["model"], "claude-sonnet-4-20250514");
         assert_eq!(json_content["working_dir"], abs_dir_str);
@@ -214,9 +231,11 @@ mod tests {
         let input = json!({"task": "do something"});
 
         let output = AgentTool.execute(input, &ctx).await.unwrap();
-        let json_content = match &output.content[0] {
-            ToolOutputContent::Json { value } => value,
-            _ => panic!("expected JSON output"),
+        let ToolOutputContent::Json {
+            value: json_content,
+        } = &output.content[0]
+        else {
+            panic!("expected JSON output");
         };
         assert_eq!(json_content["working_dir"], "/tmp/project");
     }

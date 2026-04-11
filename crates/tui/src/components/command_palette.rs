@@ -7,6 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::components::fuzzy::FuzzyMatcher;
 use crate::theme::Theme;
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -133,27 +134,47 @@ impl CommandRegistry {
             .collect()
     }
 
-    /// Fuzzy search commands by query.
-    #[must_use]
-    pub fn search(&self, query: &str) -> Vec<&Command> {
+    /// Fuzzy search commands by query using the shared `FuzzyMatcher`.
+    ///
+    /// Takes a mutable `FuzzyMatcher` so the underlying nucleo `Matcher`
+    /// (and its scratch buffer) can be reused across queries.
+    pub fn search<'a>(&'a self, fuzzy: &mut FuzzyMatcher, query: &str) -> Vec<&'a Command> {
         if query.is_empty() {
             return self.commands.iter().collect();
         }
-        let query_lower = query.to_lowercase();
-        let mut results: Vec<(&Command, i32)> = self
+
+        // Score each command against three candidate haystacks — label,
+        // description (if any), and category — and take the best. This
+        // mirrors the behaviour of the previous hand-rolled scorer.
+        let mut results: Vec<(&'a Command, u32)> = self
             .commands
             .iter()
             .filter_map(|cmd| {
-                let score = fuzzy_score(&cmd.label, &query_lower)
-                    .or_else(|| {
-                        cmd.description
-                            .as_deref()
-                            .and_then(|d| fuzzy_score(d, &query_lower))
-                    })
-                    .or_else(|| fuzzy_score(&cmd.category.to_string(), &query_lower));
-                score.map(|s| (cmd, s))
+                let label_hits =
+                    fuzzy.match_and_rank(std::slice::from_ref(&cmd.label), query, |s| s.as_str());
+                let label_score = label_hits.first().map(|(_, s)| *s);
+
+                let desc_score = cmd.description.as_ref().and_then(|desc| {
+                    fuzzy
+                        .match_and_rank(std::slice::from_ref(desc), query, |s| s.as_str())
+                        .first()
+                        .map(|(_, s)| *s)
+                });
+
+                let cat_string = cmd.category.to_string();
+                let cat_score = fuzzy
+                    .match_and_rank(std::slice::from_ref(&cat_string), query, |s| s.as_str())
+                    .first()
+                    .map(|(_, s)| *s);
+
+                let best = [label_score, desc_score, cat_score]
+                    .into_iter()
+                    .flatten()
+                    .max();
+                best.map(|s| (cmd, s))
             })
             .collect();
+
         results.sort_by(|a, b| b.1.cmp(&a.1));
         results.into_iter().map(|(cmd, _)| cmd).collect()
     }
@@ -163,42 +184,6 @@ impl Default for CommandRegistry {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Simple fuzzy matching: returns Some(score) if all query chars appear in order.
-fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
-    let hay_lower = haystack.to_lowercase();
-    let mut score = 0i32;
-    let mut hay_iter = hay_lower.chars().peekable();
-    let mut last_match_idx = 0usize;
-    let mut pos = 0usize;
-
-    for needle_char in needle.chars() {
-        let mut found = false;
-        while let Some(&hay_char) = hay_iter.peek() {
-            hay_iter.next();
-            pos += 1;
-            if hay_char == needle_char {
-                // Consecutive match bonus
-                if pos == last_match_idx + 1 {
-                    score += 2;
-                } else {
-                    score += 1;
-                }
-                // Start-of-word bonus
-                if pos <= 1 {
-                    score += 3;
-                }
-                last_match_idx = pos;
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return None;
-        }
-    }
-    Some(score)
 }
 
 // ─── CommandPalette state ───────────────────────────────────────────────
@@ -226,6 +211,10 @@ pub struct CommandPalette {
     selected: usize,
     /// The registry of all commands.
     registry: CommandRegistry,
+    /// Reusable fuzzy matcher — constructed once, reused across every
+    /// `update_filter` call so nucleo's `Matcher` and scratch char buffer
+    /// don't get rebuilt on each keystroke.
+    fuzzy: FuzzyMatcher,
 }
 
 impl CommandPalette {
@@ -239,6 +228,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             registry,
+            fuzzy: FuzzyMatcher::new(),
         }
     }
 
@@ -327,7 +317,7 @@ impl CommandPalette {
         if self.query.is_empty() {
             self.filtered = (0..self.registry.len()).collect();
         } else {
-            let results = self.registry.search(&self.query);
+            let results = self.registry.search(&mut self.fuzzy, &self.query);
             self.filtered = results
                 .iter()
                 .filter_map(|cmd| {
@@ -623,14 +613,16 @@ mod tests {
     #[test]
     fn registry_search_all() {
         let reg = sample_registry();
-        let results = reg.search("");
+        let mut fuzzy = FuzzyMatcher::new();
+        let results = reg.search(&mut fuzzy, "");
         assert_eq!(results.len(), 9);
     }
 
     #[test]
     fn registry_search_filter() {
         let reg = sample_registry();
-        let results = reg.search("file");
+        let mut fuzzy = FuzzyMatcher::new();
+        let results = reg.search(&mut fuzzy, "file");
         assert!(results.len() >= 2); // "New File" and "Open File"
         assert!(results.iter().any(|c| c.id == "new_file"));
         assert!(results.iter().any(|c| c.id == "open_file"));
@@ -639,7 +631,8 @@ mod tests {
     #[test]
     fn registry_search_partial() {
         let reg = sample_registry();
-        let results = reg.search("und");
+        let mut fuzzy = FuzzyMatcher::new();
+        let results = reg.search(&mut fuzzy, "und");
         assert!(!results.is_empty());
         assert_eq!(results[0].id, "undo");
     }
@@ -647,40 +640,9 @@ mod tests {
     #[test]
     fn registry_search_no_match() {
         let reg = sample_registry();
-        let results = reg.search("zzzzz");
+        let mut fuzzy = FuzzyMatcher::new();
+        let results = reg.search(&mut fuzzy, "zzzzz");
         assert!(results.is_empty());
-    }
-
-    // ── fuzzy_score ──
-
-    #[test]
-    fn fuzzy_score_exact() {
-        assert!(fuzzy_score("hello", "hello").is_some());
-    }
-
-    #[test]
-    fn fuzzy_score_prefix() {
-        let s = fuzzy_score("hello world", "hel");
-        assert!(s.is_some());
-    }
-
-    #[test]
-    fn fuzzy_score_scattered() {
-        // h...l...p from "show help"
-        let s = fuzzy_score("show help", "shp");
-        assert!(s.is_some());
-    }
-
-    #[test]
-    fn fuzzy_score_no_match() {
-        assert!(fuzzy_score("hello", "xyz").is_none());
-    }
-
-    #[test]
-    fn fuzzy_score_empty_needle() {
-        // Empty needle always matches with score 0
-        let s = fuzzy_score("anything", "");
-        assert_eq!(s, Some(0));
     }
 
     // ── CommandPalette ──
@@ -814,7 +776,7 @@ mod tests {
         let content: String = (0..area.width)
             .map(|x| buf.cell((x, 2)).unwrap().symbol().to_string())
             .collect();
-        assert!(content.contains(">"), "Missing query prompt: {content}");
+        assert!(content.contains('>'), "Missing query prompt: {content}");
     }
 
     #[test]

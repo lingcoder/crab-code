@@ -1,8 +1,12 @@
 //! TUI event system — merges crossterm terminal events with agent domain events.
 
+use std::sync::Arc;
+
 use crab_core::event::Event as AgentEvent;
 use crossterm::event::{Event as CtEvent, KeyEvent, KeyEventKind};
 use tokio::sync::mpsc;
+
+use crate::event_broker::EventBroker;
 
 /// Events consumed by the TUI main loop.
 #[derive(Debug)]
@@ -22,19 +26,35 @@ pub enum TuiEvent {
 /// Returns the receiver. The caller should also hold the `agent_tx` sender and
 /// forward `AgentEvent`s into it from the agent task.
 ///
+/// `broker` controls whether crossterm key/resize events reach the receiver. When
+/// `broker.is_paused()` is true (e.g. while an external editor owns the terminal),
+/// terminal events are dropped instead of being forwarded. Tick events still fire
+/// regardless so the app can keep rendering.
+///
+/// Buffering choice: dropped, not queued. Buffering keystrokes that the user typed
+/// "blind" while the editor was attached would replay them into the TUI on resume,
+/// which is surprising and almost never what the user wants.
+///
 /// The loop runs until the returned receiver is dropped.
 pub fn spawn_event_loop(
     agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
     tick_rate: std::time::Duration,
+    broker: Arc<EventBroker>,
 ) -> mpsc::UnboundedReceiver<TuiEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    // Crossterm reader task
+    // Crossterm reader task — owns the broker handle. Caller passes a freshly
+    // cloned `Arc` and retains its own clone for pause/resume.
     let ct_tx = tx.clone();
     tokio::spawn(async move {
         use futures::StreamExt;
         let mut reader = crossterm::event::EventStream::new();
         while let Some(Ok(event)) = reader.next().await {
+            // Drop terminal events while the broker is paused — the external
+            // process owns the terminal and any input belongs to it.
+            if broker.is_paused() {
+                continue;
+            }
             let tui_event = match event {
                 // Only handle Press events — Windows reports both Press and
                 // Release, which would double every keystroke / IME character.
@@ -128,7 +148,8 @@ mod tests {
     #[tokio::test]
     async fn spawn_event_loop_receives_agent_events() {
         let (agent_tx, agent_rx) = mpsc::unbounded_channel();
-        let mut tui_rx = spawn_event_loop(agent_rx, std::time::Duration::from_secs(60));
+        let broker = Arc::new(EventBroker::new());
+        let mut tui_rx = spawn_event_loop(agent_rx, std::time::Duration::from_secs(60), broker);
 
         agent_tx
             .send(AgentEvent::ContentDelta {
@@ -148,11 +169,10 @@ mod tests {
             for _ in 0..10 {
                 if let Ok(Some(e)) =
                     tokio::time::timeout(std::time::Duration::from_millis(100), tui_rx.recv()).await
+                    && matches!(e, TuiEvent::Agent(_))
                 {
-                    if matches!(e, TuiEvent::Agent(_)) {
-                        found_agent = true;
-                        break;
-                    }
+                    found_agent = true;
+                    break;
                 }
             }
         }
@@ -160,20 +180,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_event_loop_ticks_continue_when_broker_paused() {
+        // The crossterm reader should drop terminal events when paused, but the
+        // tick task is independent and must keep firing so the app can render.
+        let (_agent_tx, agent_rx) = mpsc::unbounded_channel();
+        let broker = Arc::new(EventBroker::new());
+        broker.pause();
+        let mut tui_rx = spawn_event_loop(
+            agent_rx,
+            std::time::Duration::from_millis(20),
+            Arc::clone(&broker),
+        );
+
+        let mut found_tick = false;
+        for _ in 0..20 {
+            if let Ok(Some(e)) =
+                tokio::time::timeout(std::time::Duration::from_millis(100), tui_rx.recv()).await
+                && matches!(e, TuiEvent::Tick)
+            {
+                found_tick = true;
+                break;
+            }
+        }
+        assert!(found_tick, "ticks must still fire while broker paused");
+    }
+
+    #[tokio::test]
     async fn spawn_event_loop_receives_ticks() {
         let (_agent_tx, agent_rx) = mpsc::unbounded_channel();
-        let mut tui_rx = spawn_event_loop(agent_rx, std::time::Duration::from_millis(50));
+        let broker = Arc::new(EventBroker::new());
+        let mut tui_rx = spawn_event_loop(agent_rx, std::time::Duration::from_millis(50), broker);
 
         // Wait for a tick
         let mut found_tick = false;
         for _ in 0..20 {
             if let Ok(Some(e)) =
                 tokio::time::timeout(std::time::Duration::from_millis(100), tui_rx.recv()).await
+                && matches!(e, TuiEvent::Tick)
             {
-                if matches!(e, TuiEvent::Tick) {
-                    found_tick = true;
-                    break;
-                }
+                found_tick = true;
+                break;
             }
         }
         assert!(found_tick, "expected to receive a Tick event");

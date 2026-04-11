@@ -2,6 +2,17 @@ use crate::model::TokenUsage;
 use crate::tool::ToolOutput;
 use serde_json::Value;
 
+/// Streaming content-block index offset for `tool_calls` entries.
+///
+/// Used by `OpenAI`-compatible providers (`DeepSeek` in particular) to
+/// encode `tool_calls` entries. Tool-call chunks arrive with indices
+/// `>= TOOL_ARG_INDEX_BASE` so they can be multiplexed with text `content`
+/// blocks (indices `0..TOOL_ARG_INDEX_BASE`) in a single streaming event.
+/// Consumers of `Event::ContentDelta` that render text should filter
+/// indices `>= TOOL_ARG_INDEX_BASE` to avoid leaking raw tool-call JSON
+/// into the message body.
+pub const TOOL_ARG_INDEX_BASE: usize = 1000;
+
 /// Domain events for agent-to-UI communication.
 ///
 /// All variants are `Clone + Send + 'static` to support
@@ -29,7 +40,13 @@ pub enum Event {
 
     // ─── Tool execution ───
     /// A tool call has started.
-    ToolUseStart { id: String, name: String },
+    ToolUseStart {
+        id: String,
+        name: String,
+        /// Tool input parameters (for rendering hooks).
+        #[serde(default)]
+        input: Value,
+    },
 
     /// Incremental tool input (streaming).
     ToolUseInput { id: String, input: Value },
@@ -300,6 +317,7 @@ mod tests {
         serde_roundtrip(&Event::ToolUseStart {
             id: "tu_1".into(),
             name: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
         });
     }
 
@@ -449,5 +467,14 @@ mod tests {
             index: 0,
             delta: "Step 1: analyze the problem".into(),
         });
+    }
+
+    #[test]
+    fn tool_arg_index_base_is_stable() {
+        // Locks the constant to 1000. If a future change raises this value,
+        // it must be a conscious review — the constant is load-bearing for
+        // both the OpenAI-compatible streaming producer (crab-api) and the
+        // text-rendering consumers (crab-tui).
+        assert_eq!(TOOL_ARG_INDEX_BASE, 1000);
     }
 }

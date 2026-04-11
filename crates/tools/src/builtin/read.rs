@@ -4,7 +4,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 
 /// File reading tool.
@@ -135,6 +135,36 @@ impl Tool for ReadTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: userFacingName="Read", message = file path + optional line range
+        let path = input["file_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        let offset = input["offset"].as_u64();
+        let limit = input["limit"].as_u64();
+        let range = match (offset, limit) {
+            (Some(o), Some(l)) => format!(" · lines {o}-{}", o + l),
+            (Some(o), None) => format!(" · from line {o}"),
+            _ => String::new(),
+        };
+        Some(format!("Read ({filename}{range})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        // CCB: "Read N lines" (N bold) — single line summary
+        let line_count = text.lines().count();
+        Some(ToolDisplayResult {
+            lines: vec![ToolDisplayLine::new(
+                format!("Read {line_count} lines"),
+                ToolDisplayStyle::Muted,
+            )],
+            preview_lines: 1,
+        })
     }
 }
 

@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use crab_fs::glob::{GlobOptions, find_files};
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -85,6 +85,56 @@ impl Tool for GlobTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: userFacingName="Search", message = pattern: "X", path: "Y"
+        let pattern = input["pattern"].as_str()?;
+        let path = input["path"].as_str();
+        let msg = match path {
+            Some(p) => format!("pattern: \"{pattern}\", path: \"{p}\""),
+            None => format!("pattern: \"{pattern}\""),
+        };
+        Some(format!("Search ({msg})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
+        let text = output.text();
+        if text.is_empty() {
+            return Some(ToolDisplayResult {
+                lines: vec![ToolDisplayLine::new(
+                    "Found 0 files",
+                    ToolDisplayStyle::Muted,
+                )],
+                preview_lines: 1,
+            });
+        }
+        // CCB: "Found N files" (N bold) as summary, files listed below in verbose
+        let file_count = text.lines().count();
+        let mut lines = vec![ToolDisplayLine::new(
+            format!("Found {file_count} files"),
+            ToolDisplayStyle::Muted,
+        )];
+        // Show file list indented with ⎿ connector (CCB verbose style)
+        for f in text.lines().take(20) {
+            lines.push(ToolDisplayLine::new(
+                format!("  ⎿ {f}"),
+                ToolDisplayStyle::Normal,
+            ));
+        }
+        if file_count > 20 {
+            lines.push(ToolDisplayLine::new(
+                format!("  … +{} files", file_count - 20),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 1, // condensed: just "Found N files"
+        })
     }
 }
 

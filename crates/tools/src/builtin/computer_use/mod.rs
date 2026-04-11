@@ -70,6 +70,12 @@ impl Tool for ComputerUseTool {
         })
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["action"]
+            .as_str()
+            .map(|a| format!("ComputerUse ({a})"))
+    }
+
     fn execute(
         &self,
         input: Value,

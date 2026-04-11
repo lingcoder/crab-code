@@ -26,6 +26,9 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 anyhow.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+nucleo-matcher.workspace = true
 
 [lints]
 workspace = true

@@ -206,6 +206,11 @@ impl Tool for CronCreateTool {
             ))
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let cron = input["cron"].as_str().unwrap_or("?");
+        Some(format!("CronCreate ({cron})"))
+    }
 }
 
 // ── CronDeleteTool ─────────────────────────────────────────────────────
@@ -274,6 +279,11 @@ impl Tool for CronDeleteTool {
             }
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let id = input["id"].as_str().unwrap_or("?");
+        Some(format!("CronDelete ({id})"))
+    }
 }
 
 // ── CronListTool ───────────────────────────────────────────────────────
@@ -341,6 +351,10 @@ impl Tool for CronListTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("CronList".to_string())
     }
 }
 
@@ -431,8 +445,8 @@ mod tests {
             s.create("0 * * * *".into(), "from thread".into(), true, false);
         });
         handle.join().unwrap();
-        let s = store.lock().unwrap();
-        assert_eq!(s.list().len(), 1);
+        let len = store.lock().unwrap().list().len();
+        assert_eq!(len, 1);
     }
 
     // ─── CronCreateTool ───
@@ -481,8 +495,8 @@ mod tests {
         }
 
         // Verify stored
-        let s = store.lock().unwrap();
-        assert_eq!(s.list().len(), 1);
+        let len = store.lock().unwrap().list().len();
+        assert_eq!(len, 1);
     }
 
     #[tokio::test]
@@ -592,8 +606,8 @@ mod tests {
             _ => panic!("expected JSON output"),
         }
 
-        let s = store.lock().unwrap();
-        assert!(s.list().is_empty());
+        let is_empty = store.lock().unwrap().list().is_empty();
+        assert!(is_empty);
     }
 
     #[tokio::test]

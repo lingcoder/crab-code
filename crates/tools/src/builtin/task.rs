@@ -6,6 +6,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use crate::str_utils::truncate_chars;
+
 pub const TASK_CREATE_TOOL_NAME: &str = "TaskCreate";
 pub const TASK_LIST_TOOL_NAME: &str = "TaskList";
 pub const TASK_GET_TOOL_NAME: &str = "TaskGet";
@@ -250,6 +252,14 @@ impl Tool for TaskCreateTool {
             Ok(ToolOutput::success(response.to_string()))
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // Subjects are LLM-authored and can contain any Unicode (CJK, emoji);
+        // truncate_chars counts codepoints to avoid panics on multi-byte input.
+        let subject = input["subject"].as_str().unwrap_or("?");
+        let truncated = truncate_chars(subject, 57, "…");
+        Some(format!("TaskCreate ({truncated})"))
+    }
 }
 
 /// Task listing tool.
@@ -311,6 +321,10 @@ impl Tool for TaskListTool {
     fn is_read_only(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, _input: &Value) -> Option<String> {
+        Some("TaskList".to_string())
+    }
 }
 
 /// Task retrieval tool.
@@ -366,6 +380,14 @@ impl Tool for TaskGetTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let id = input["taskId"]
+            .as_str()
+            .or_else(|| input["task_id"].as_str())
+            .unwrap_or("?");
+        Some(format!("TaskGet (#{id})"))
     }
 }
 
@@ -450,6 +472,19 @@ impl Tool for TaskUpdateTool {
             )
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let id = input["taskId"]
+            .as_str()
+            .or_else(|| input["task_id"].as_str())
+            .unwrap_or("?");
+        let status = input["status"].as_str().unwrap_or("");
+        if status.is_empty() {
+            Some(format!("TaskUpdate (#{id})"))
+        } else {
+            Some(format!("TaskUpdate (#{id} → {status})"))
+        }
+    }
 }
 
 /// Task stop tool — requests cancellation of a background task.
@@ -508,6 +543,11 @@ impl Tool for TaskStopTool {
                 false,
             ))
         })
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let id = input["task_id"].as_str().unwrap_or("?");
+        Some(format!("TaskStop (#{id})"))
     }
 }
 
@@ -591,6 +631,11 @@ impl Tool for TaskOutputTool {
     fn is_read_only(&self) -> bool {
         true
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let id = input["task_id"].as_str().unwrap_or("?");
+        Some(format!("TaskOutput (#{id})"))
+    }
 }
 
 #[cfg(test)]
@@ -600,7 +645,7 @@ mod tests {
     #[test]
     fn task_store_create_and_get() {
         let mut store = TaskStore::new();
-        let id = store.create("Test".into(), "desc".into()).id.clone();
+        let id = store.create("Test".into(), "desc".into()).id;
         let task = store.get(&id).unwrap();
         assert_eq!(task.subject, "Test");
         assert_eq!(task.status, TaskStatus::Pending);
@@ -609,8 +654,8 @@ mod tests {
     #[test]
     fn task_store_list_excludes_deleted() {
         let mut store = TaskStore::new();
-        store.create("Keep".into(), "".into());
-        let id2 = store.create("Delete".into(), "".into()).id.clone();
+        store.create("Keep".into(), String::new());
+        let id2 = store.create("Delete".into(), String::new()).id;
         store.update(
             &id2,
             Some(TaskStatus::Deleted),
@@ -626,7 +671,7 @@ mod tests {
     #[test]
     fn task_store_update_status() {
         let mut store = TaskStore::new();
-        let id = store.create("Task".into(), "".into()).id.clone();
+        let id = store.create("Task".into(), String::new()).id;
         store.update(
             &id,
             Some(TaskStatus::InProgress),
@@ -644,15 +689,15 @@ mod tests {
     #[test]
     fn task_store_dependencies() {
         let mut store = TaskStore::new();
-        let id1 = store.create("Blocker".into(), "".into()).id.clone();
-        let id2 = store.create("Blocked".into(), "".into()).id.clone();
+        let id1 = store.create("Blocker".into(), String::new()).id;
+        let id2 = store.create("Blocked".into(), String::new()).id;
         store.update(&id2, None, None, None, None, Some(vec![id1.clone()]), None);
 
-        let blocked = store.get(&id2).unwrap();
-        assert!(blocked.blocked_by.contains(&id1));
+        let downstream = store.get(&id2).unwrap();
+        assert!(downstream.blocked_by.contains(&id1));
 
-        let blocker = store.get(&id1).unwrap();
-        assert!(blocker.blocks.contains(&id2));
+        let upstream = store.get(&id1).unwrap();
+        assert!(upstream.blocks.contains(&id2));
     }
 
     #[test]
@@ -669,11 +714,11 @@ mod tests {
         let store2 = Arc::clone(&store);
         let handle = std::thread::spawn(move || {
             let mut list = store2.lock().unwrap();
-            list.create("From thread".into(), "".into());
+            list.create("From thread".into(), String::new());
         });
         handle.join().unwrap();
-        let list = store.lock().unwrap();
-        assert_eq!(list.list().len(), 1);
+        let len = store.lock().unwrap().list().len();
+        assert_eq!(len, 1);
     }
 
     #[test]

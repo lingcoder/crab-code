@@ -4,9 +4,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+
+use crate::theme::Theme;
 
 /// A single search match location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +170,11 @@ impl Default for SearchState {
 }
 
 /// Render the search bar at the bottom of the content area.
-pub fn render_search_bar(search: &SearchState, area: Rect, buf: &mut Buffer) {
+///
+/// All colors come from `theme` — the search prompt uses `theme.warning` for
+/// the leading `/`, `theme.text_bright` for the query text, and `theme.muted`
+/// for the "(n/m)" match counter.
+pub fn render_search_bar(search: &SearchState, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if area.height == 0 || !search.is_active() {
         return;
     }
@@ -185,26 +191,31 @@ pub fn render_search_bar(search: &SearchState, area: Rect, buf: &mut Buffer) {
         Span::styled(
             "/",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(search.query(), Style::default().fg(Color::White)),
-        Span::styled(match_info, Style::default().fg(Color::DarkGray)),
+        Span::styled(search.query(), Style::default().fg(theme.text_bright)),
+        Span::styled(match_info, Style::default().fg(theme.muted)),
     ]);
 
     Widget::render(line, area, buf);
 }
 
 /// Style for search match highlighting.
+///
+/// The "current" match uses `theme.highlight_bg` + `theme.highlight_fg`,
+/// other matches use `theme.selection_bg` + `theme.selection_fg`.
 #[must_use]
-pub fn match_style(is_current: bool) -> Style {
+pub fn match_style(theme: &Theme, is_current: bool) -> Style {
     if is_current {
         Style::default()
-            .bg(Color::Yellow)
-            .fg(Color::Black)
+            .bg(theme.highlight_bg)
+            .fg(theme.highlight_fg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(Color::DarkGray).fg(Color::White)
+        Style::default()
+            .bg(theme.selection_bg)
+            .fg(theme.selection_fg)
     }
 }
 
@@ -356,23 +367,42 @@ mod tests {
     }
 
     #[test]
-    fn match_style_current() {
-        let style = match_style(true);
-        assert_eq!(style.bg, Some(Color::Yellow));
+    fn match_style_current_uses_theme_highlight() {
+        let theme = Theme::dark();
+        let style = match_style(&theme, true);
+        assert_eq!(style.bg, Some(theme.highlight_bg));
+        assert_eq!(style.fg, Some(theme.highlight_fg));
+        // Dark theme preserves historical yellow-on-black appearance.
+        assert_eq!(style.bg, Some(ratatui::style::Color::Yellow));
+        assert_eq!(style.fg, Some(ratatui::style::Color::Black));
     }
 
     #[test]
-    fn match_style_other() {
-        let style = match_style(false);
-        assert_eq!(style.bg, Some(Color::DarkGray));
+    fn match_style_other_uses_theme_selection() {
+        let theme = Theme::dark();
+        let style = match_style(&theme, false);
+        assert_eq!(style.bg, Some(theme.selection_bg));
+        assert_eq!(style.fg, Some(theme.selection_fg));
+    }
+
+    #[test]
+    fn match_style_follows_theme_switch() {
+        // Monokai should produce different colors than dark without
+        // callers having to pass anything but a different theme.
+        let dark = Theme::dark();
+        let monokai = Theme::monokai();
+        let dark_style = match_style(&dark, true);
+        let monokai_style = match_style(&monokai, true);
+        assert_ne!(dark_style.bg, monokai_style.bg);
     }
 
     #[test]
     fn render_search_bar_inactive() {
         let search = SearchState::new();
+        let theme = Theme::dark();
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
-        render_search_bar(&search, area, &mut buf);
+        render_search_bar(&search, &theme, area, &mut buf);
         // No content rendered (inactive)
     }
 
@@ -386,17 +416,46 @@ mod tests {
         search.push_char('t');
         search.search("test content with test");
 
+        let theme = Theme::dark();
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
-        render_search_bar(&search, area, &mut buf);
+        render_search_bar(&search, &theme, area, &mut buf);
 
         let buf_ref = &buf;
         let row: String = (0..area.width)
             .map(|x| buf_ref.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
-        assert!(row.contains("/"));
+        assert!(row.contains('/'));
         assert!(row.contains("test"));
         assert!(row.contains("1/2")); // match count
+    }
+
+    #[test]
+    fn render_search_bar_uses_theme_colors() {
+        // Buffer cell assertion: verify the rendered '/' prompt uses
+        // theme.warning and the query text uses theme.text_bright.
+        // This proves the render path flows through theme fields, not
+        // hardcoded literals. Under dark theme these happen to equal
+        // Color::Yellow / Color::White, confirming byte-identical output.
+        let mut search = SearchState::new();
+        search.activate();
+        search.push_char('x');
+        search.search("abc");
+
+        let theme = Theme::dark();
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+        render_search_bar(&search, &theme, area, &mut buf);
+
+        // First cell is '/'
+        let slash_cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(slash_cell.symbol(), "/");
+        assert_eq!(slash_cell.fg, theme.warning);
+
+        // Second cell is 'x' — first character of query
+        let query_cell = buf.cell((1, 0)).unwrap();
+        assert_eq!(query_cell.symbol(), "x");
+        assert_eq!(query_cell.fg, theme.text_bright);
     }
 
     #[test]
@@ -406,9 +465,10 @@ mod tests {
         search.push_char('z');
         search.search("no z here... wait");
 
+        let theme = Theme::dark();
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
-        render_search_bar(&search, area, &mut buf);
+        render_search_bar(&search, &theme, area, &mut buf);
     }
 
     #[test]

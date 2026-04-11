@@ -5,7 +5,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput};
+use crab_core::tool::{
+    Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
+};
 use serde_json::Value;
 
 pub const NOTEBOOK_READ_TOOL_NAME: &str = "NotebookRead";
@@ -137,6 +139,24 @@ impl Tool for NotebookReadTool {
 
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let path = input["notebook_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("Read ({filename})"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        let text = output.text();
+        let cell_count = text.matches("Cell ").count().max(1);
+        Some(ToolDisplayResult {
+            lines: vec![ToolDisplayLine::new(
+                format!("Read {cell_count} cells"),
+                ToolDisplayStyle::Muted,
+            )],
+            preview_lines: 1,
+        })
     }
 }
 
@@ -385,6 +405,15 @@ impl Tool for NotebookTool {
     fn requires_confirmation(&self) -> bool {
         true
     }
+
+    // ── CCB-aligned rendering hooks ──
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        // CCB: "NotebookEdit (path)"
+        let path = input["notebook_path"].as_str()?;
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        Some(format!("NotebookEdit ({filename})"))
+    }
 }
 
 #[cfg(test)]
@@ -498,7 +527,7 @@ mod tests {
         assert!(text.contains("[stdout]"));
         assert!(text.contains("hello"));
         assert!(text.contains("[output]"));
-        assert!(text.contains("3"));
+        assert!(text.contains('3'));
         assert!(text.contains("[error: ValueError: oops]"));
         assert!(text.contains("[execution_count: 1]"));
         // Cleanup

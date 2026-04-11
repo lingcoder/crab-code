@@ -179,6 +179,11 @@ impl Tool for StandaloneSendMessageTool {
             ))
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let to = input["to"].as_str().unwrap_or("?");
+        Some(format!("SendMessage (to: {to})"))
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────

@@ -128,6 +128,11 @@ impl Tool for WebBrowserTool {
             )))
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let action = input["action"].as_str().unwrap_or("?");
+        Some(format!("WebBrowser ({action})"))
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────

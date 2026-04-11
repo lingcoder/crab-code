@@ -76,6 +76,46 @@ pub enum Action {
     Undo,
 }
 
+// TODO(ccb-align): port resolver.ts context-aware key routing when
+// chord bindings or per-overlay key rebinding become requirements.
+// KeyContext remains because 5 overlays report it via Overlay::contexts().
+/// Keybinding context — determines which bindings are active.
+///
+/// Inspired by CCB's 18-context system. Contexts are checked in priority
+/// order: the first matching binding wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyContext {
+    /// Always active.
+    Global,
+    /// Active when idle (no processing, no overlay).
+    Idle,
+    /// Active when the input box has focus.
+    Input,
+    /// Active during agent processing.
+    Processing,
+    /// Active when a permission card is showing.
+    Permission,
+    /// Active when in-conversation search is open.
+    Search,
+    /// Active when autocomplete popup is visible.
+    Autocomplete,
+    /// Active when command palette is open.
+    CommandPalette,
+    /// Active when history search overlay is open.
+    HistorySearch,
+    /// Active when model picker is open.
+    ModelPicker,
+    /// Active when transcript overlay is open.
+    Transcript,
+    /// Active when sidebar has focus.
+    Sidebar,
+    /// Vim normal mode.
+    VimNormal,
+    /// Vim visual mode.
+    VimVisual,
+}
+
 /// A key combination (modifier + key code).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyCombo {

@@ -118,6 +118,10 @@ impl Tool for SkillTool {
             ))
         })
     }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        input["skill"].as_str().map(|s| format!("Skill ({s})"))
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────

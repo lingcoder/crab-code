@@ -80,6 +80,11 @@ impl Tool for TodoWriteTool {
         })
     }
 
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let count = input["todos"].as_array().map_or(0, Vec::len);
+        Some(format!("TodoWrite ({count} items)"))
+    }
+
     fn execute(
         &self,
         input: Value,

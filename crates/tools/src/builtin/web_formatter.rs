@@ -466,6 +466,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::literal_string_with_formatting_args)] // {display:none} is CSS, not a format arg
     fn style_tags_stripped() {
         let html = "<style>.hide{display:none}</style><p>Content</p>";
         let md = html_to_markdown(html);
@@ -480,7 +481,7 @@ mod tests {
         let md = html_to_markdown(html);
         assert!(md.contains("Name"));
         assert!(md.contains("Alice"));
-        assert!(md.contains("|"));
+        assert!(md.contains('|'));
     }
 
     #[test]
