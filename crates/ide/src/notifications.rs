@@ -1,14 +1,10 @@
 //! MCP notification handlers.
 //!
 //! Registers handlers on the MCP client for the two IDE-specific
-//! notifications CCB's plugin sends:
+//! notifications IDE plugins send:
 //!
 //! - `selection_changed` — ambient state; updates `handles.selection`.
 //! - `at_mentioned` — one-shot; fanned out via a broadcast channel.
-//!
-//! Wire schemas come from:
-//! `claude-code-best/src/hooks/useIdeSelection.ts:32-53`
-//! `claude-code-best/src/hooks/useIdeAtMentioned.ts:18-26`
 
 #![allow(dead_code)] // R1 scaffolding; wired up in R2
 

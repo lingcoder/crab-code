@@ -2,9 +2,8 @@
 //! `<system-reminder>` meta-user messages for LLM context.
 //!
 //! Called by `crab-agent` right before sending a user prompt. The
-//! output string (wrapped by the caller) follows CCB's template
-//! verbatim (`messages.ts:3648-3662`) so LLMs trained against
-//! Claude Code's prompt patterns recognize the shape.
+//! output string (wrapped by the caller) follows the upstream template
+//! so LLMs trained against that prompt pattern recognize the shape.
 
 #![allow(dead_code)] // R1 scaffolding; wired into agent in R3
 
@@ -15,8 +14,7 @@ use std::path::Path;
 ///
 /// Returns `None` when there is nothing to inject (no selection or
 /// missing fields). Caller wraps it in `<system-reminder>...</system-reminder>`
-/// and pushes as a `user`-role meta message, mirroring CCB's
-/// `wrapMessagesInSystemReminder` + `isMeta: true` behavior.
+/// and pushes as a `user`-role meta message.
 pub fn build_selected_lines_reminder(sel: &IdeSelection, _cwd: &Path) -> Option<String> {
     if !sel.has_text() {
         return None;

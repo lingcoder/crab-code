@@ -1,7 +1,7 @@
 //! Discovery of IDE plugin MCP endpoints via lockfile.
 //!
-//! CCB's plugin writes `~/.claude/ide/<port>.lock` on startup with a
-//! JSON payload describing how to reach the MCP server:
+//! IDE plugins write `<ide-dir>/<port>.lock` on startup with a JSON
+//! payload describing how to reach their MCP server:
 //!
 //! ```json
 //! {
@@ -16,10 +16,8 @@
 //! Filename = port (e.g. `12345.lock` ⇒ MCP server listens on `12345`).
 //!
 //! Search paths (checked in order):
-//! 1. `~/.claude/ide/*.lock` — CCB's official plugin (piggyback path)
+//! 1. `~/.claude/ide/*.lock` — upstream plugin's directory (piggyback path)
 //! 2. `~/.crab/ide/*.lock` — our future plugin (self-hosted path)
-//!
-//! Reference: `claude-code-best/src/utils/ide.ts:295-393`
 
 #![allow(dead_code)] // R1 scaffolding; wired up in R2
 

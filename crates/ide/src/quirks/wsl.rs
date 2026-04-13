@@ -5,8 +5,6 @@
 //! `/home/user/project`. This module will translate between them so
 //! `IdeSelection::file_path` remains useful regardless of where the
 //! crab process is running.
-//!
-//! Reference: `claude-code-best/src/utils/idePathConversion.ts`
 
 #![allow(dead_code)] // R1 scaffolding; wired up in R3
 

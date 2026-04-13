@@ -14,13 +14,12 @@
 //!
 //! ## Wire schema alignment
 //!
-//! Field names mirror CCB's `selection_changed` MCP notification payload
-//! (see `claude-code-best/src/hooks/useIdeSelection.ts`). This keeps the
-//! deserializer trivial and preserves the "opened file but nothing
-//! selected" semantics: `line_count == 0 && file_path.is_some()`.
+//! Field names mirror the upstream `selection_changed` MCP notification
+//! payload so the deserializer is trivial, and preserve the "opened file
+//! but nothing selected" semantics: `line_count == 0 && file_path.is_some()`.
 //!
-//! The injection template in `crab-ide` also mirrors CCB's prose to
-//! keep LLM prompt patterns familiar.
+//! The injection template in `crab-ide` also mirrors the upstream prose
+//! to keep LLM prompt patterns familiar.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -148,8 +147,8 @@ mod tests {
     }
 
     #[test]
-    fn selection_parses_ccb_wire_format() {
-        // Shape matches `selection_changed` notification params from CCB.
+    fn selection_parses_mcp_wire_format() {
+        // Shape matches the upstream `selection_changed` MCP notification params.
         let json = r#"{
             "line_count": 11,
             "line_start": 10,
