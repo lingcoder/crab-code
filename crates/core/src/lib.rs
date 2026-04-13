@@ -2,6 +2,7 @@ pub mod capability;
 pub mod config;
 pub mod conversation;
 pub mod event;
+pub mod ide;
 pub mod message;
 pub mod model;
 pub mod permission;
