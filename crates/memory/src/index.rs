@@ -285,7 +285,7 @@ Not a list item
     fn truncate_exceeds_line_limit() {
         let mut content = String::new();
         for i in 0..250 {
-            content.push_str(&format!("- [Item {i}](item_{i}.md) \u{2014} entry {i}\n"));
+            writeln!(content, "- [Item {i}](item_{i}.md) \u{2014} entry {i}").unwrap();
         }
         let (result, trunc) = truncate_index_content(&content);
         assert!(trunc.was_line_truncated);
@@ -300,7 +300,7 @@ Not a list item
         let mut content = String::new();
         for i in 0..50 {
             let padding = "x".repeat(600);
-            content.push_str(&format!("- [Item {i}](item_{i}.md) \u{2014} {padding}\n"));
+            writeln!(content, "- [Item {i}](item_{i}.md) \u{2014} {padding}").unwrap();
         }
         assert!(content.len() > MAX_INDEX_BYTES);
 
