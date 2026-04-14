@@ -15,7 +15,7 @@ mem-ranker = ["dep:crab-api", "dep:crab-core", "dep:tokio"]
 crab-common.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yml.workspace = true
+serde_yaml_ng.workspace = true
 dunce.workspace = true
 # optional — only for mem-ranker feature
 crab-api = { workspace = true, optional = true }

@@ -2,9 +2,6 @@
 ignore = [
     # Unmaintained crates — transitive deps, will address when alternatives mature
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust unmaintained, transitive via syntect" },
-    { id = "RUSTSEC-2024-0384", reason = "transitive dep, no safe upgrade available yet" },
-    { id = "RUSTSEC-2024-0436", reason = "transitive dep, no safe upgrade available yet" },
-    { id = "RUSTSEC-2025-0134", reason = "transitive dep, no safe upgrade available yet" },
     { id = "RUSTSEC-2025-0141", reason = "transitive dep, no safe upgrade available yet" },
 ]
 

@@ -84,8 +84,8 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
 /// (`name`, `description`, `type`) are missing.
 pub fn parse_frontmatter(content: &str) -> Option<MemoryMetadata> {
     let (yaml, _) = split_frontmatter(content)?;
-    // serde_yml may return Err for missing required fields — map to None.
-    serde_yml::from_str(yaml).ok()
+    // serde_yaml_ng may return Err for missing required fields — map to None.
+    serde_yaml_ng::from_str(yaml).ok()
 }
 
 /// Return the body text after the frontmatter delimiters.
@@ -101,7 +101,7 @@ pub fn extract_body(content: &str) -> &str {
 /// Render [`MemoryMetadata`] as a YAML frontmatter block (including `---`
 /// delimiters).
 pub fn format_frontmatter(metadata: &MemoryMetadata) -> String {
-    // Build YAML manually for deterministic ordering (serde_yml output order
+    // Build YAML manually for deterministic ordering (serde_yaml_ng output order
     // is not guaranteed).
     let mut out = String::from("---\n");
     let _ = writeln!(out, "name: {}", metadata.name);
