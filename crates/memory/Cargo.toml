@@ -11,6 +11,7 @@ description = "File-based memory system for Crab Code"
 crab-common.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yml.workspace = true
 dunce.workspace = true
 
 [dev-dependencies]
