@@ -27,8 +27,8 @@ use crab_agent::SessionConfig;
 use crab_api::LlmBackend;
 use crab_core::event::Event;
 use crab_core::message::Message;
-use crab_plugin::skill::SkillRegistry;
 use crab_session::{Conversation, SessionHistory};
+use crab_skill::SkillRegistry;
 use crab_tools::builtin::create_default_registry;
 use crab_tools::executor::{PermissionHandler, ToolExecutor};
 
@@ -685,7 +685,7 @@ fn spawn_event_forwarder(mut rx: mpsc::Receiver<Event>, tx: mpsc::UnboundedSende
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crab_plugin::skill::{Skill, SkillTrigger};
+    use crab_skill::{Skill, SkillTrigger};
 
     #[test]
     fn agent_task_result_struct() {
@@ -731,13 +731,10 @@ mod tests {
     fn resolve_slash_command_matches_skill() {
         let mut reg = SkillRegistry::new();
         reg.register(Skill {
-            name: "commit".into(),
-            description: "Create a commit".into(),
             trigger: SkillTrigger::Command {
                 name: "commit".into(),
             },
-            content: "You are a commit helper.".into(),
-            source_path: None,
+            ..Skill::new("commit", "You are a commit helper.")
         });
 
         let result = resolve_slash_command("/commit", &reg);
@@ -748,13 +745,10 @@ mod tests {
     fn resolve_slash_command_with_args() {
         let mut reg = SkillRegistry::new();
         reg.register(Skill {
-            name: "review".into(),
-            description: "Review code".into(),
             trigger: SkillTrigger::Command {
                 name: "review".into(),
             },
-            content: "Review the code.".into(),
-            source_path: None,
+            ..Skill::new("review", "Review the code.")
         });
 
         let result = resolve_slash_command("/review src/main.rs", &reg);

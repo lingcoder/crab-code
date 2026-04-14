@@ -242,26 +242,22 @@ fn shared_task_list_cross_thread() {
 
 #[test]
 fn skill_registry_discover_and_match() {
-    use crab_plugin::skill::{Skill, SkillRegistry, SkillTrigger};
+    use crab_skill::{Skill, SkillRegistry, SkillTrigger};
 
     let mut registry = SkillRegistry::new();
     registry.register(Skill {
-        name: "commit".into(),
-        description: "Create a git commit".into(),
         trigger: SkillTrigger::Command {
             name: "commit".into(),
         },
-        content: "You are a commit helper.".into(),
-        source_path: None,
+        description: "Create a git commit".into(),
+        ..Skill::new("commit", "You are a commit helper.")
     });
     registry.register(Skill {
-        name: "review".into(),
-        description: "Review code".into(),
         trigger: SkillTrigger::Pattern {
             regex: r"(?i)review".into(),
         },
-        content: "You are a reviewer.".into(),
-        source_path: None,
+        description: "Review code".into(),
+        ..Skill::new("review", "You are a reviewer.")
     });
 
     // Command matching

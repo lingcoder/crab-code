@@ -617,8 +617,7 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     for dir in &cli.plugin_dir {
         skill_dirs.push(dir.clone());
     }
-    let skill_registry =
-        crab_plugin::skill::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
+    let skill_registry = crab_skill::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
     if !skill_registry.is_empty() {
         eprintln!("Loaded {} skill(s).", skill_registry.len());
     }
@@ -811,10 +810,7 @@ fn build_skill_dirs(working_dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// If input starts with `/`, try to match a skill command and return its content
 /// as the prompt. Otherwise return the original input.
-fn resolve_slash_command(
-    input: &str,
-    skill_registry: &crab_plugin::skill::SkillRegistry,
-) -> String {
+fn resolve_slash_command(input: &str, skill_registry: &crab_skill::SkillRegistry) -> String {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
         return input.to_string();
@@ -908,7 +904,7 @@ async fn run_single_shot(
 #[cfg(not(feature = "tui"))]
 async fn run_repl(
     session: &mut AgentSession,
-    skill_registry: &crab_plugin::skill::SkillRegistry,
+    skill_registry: &crab_skill::SkillRegistry,
 ) -> anyhow::Result<()> {
     use std::io::BufRead;
     let stdin = std::io::stdin();
@@ -1295,7 +1291,7 @@ fn event_to_json(event: &Event) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crab_plugin::skill::{Skill, SkillRegistry, SkillTrigger};
+    use crab_skill::{Skill, SkillRegistry, SkillTrigger};
 
     #[test]
     fn build_skill_dirs_includes_global_and_project() {
@@ -1331,13 +1327,10 @@ mod tests {
     fn resolve_slash_command_matches_skill() {
         let mut reg = SkillRegistry::new();
         reg.register(Skill {
-            name: "commit".into(),
-            description: "Create a commit".into(),
             trigger: SkillTrigger::Command {
                 name: "commit".into(),
             },
-            content: "You are a commit helper.".into(),
-            source_path: None,
+            ..Skill::new("commit", "You are a commit helper.")
         });
 
         let result = resolve_slash_command("/commit", &reg);
@@ -1348,13 +1341,10 @@ mod tests {
     fn resolve_slash_command_with_args() {
         let mut reg = SkillRegistry::new();
         reg.register(Skill {
-            name: "review".into(),
-            description: "Review code".into(),
             trigger: SkillTrigger::Command {
                 name: "review".into(),
             },
-            content: "Review the code.".into(),
-            source_path: None,
+            ..Skill::new("review", "Review the code.")
         });
 
         let result = resolve_slash_command("/review src/main.rs", &reg);

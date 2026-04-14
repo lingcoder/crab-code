@@ -18,6 +18,7 @@ crab-api.workspace = true
 crab-tools.workspace = true
 crab-session.workspace = true
 crab-plugin.workspace = true
+crab-skill.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 syntect.workspace = true

@@ -17,7 +17,7 @@
 
 ---
 
-> **状态：积极开发中** -- 49 个内置工具、6 种权限模式、扩展思维、多 Agent 协调、结构化消息模型 TUI（187 spinner verbs），16 个 crate 共 3900+ 测试、11 万行代码。零 `todo!()` 残留。
+> **状态：积极开发中** -- 49 个内置工具、6 种权限模式、扩展思维、多 Agent 协调、结构化消息模型 TUI（187 spinner verbs），17 个 crate 共 3900+ 测试、11 万行代码。零 `todo!()` 残留。
 
 ## 什么是 Crab Code？
 
@@ -153,14 +153,14 @@ Crab Code 支持 Claude Code 的 `settings.json` 格式，包括 `env` 字段：
 
 ## 架构
 
-4 层 16 crate 的 Rust workspace：
+4 层 17 crate 的 Rust workspace：
 
 ```
 第 4 层（入口）    cli          daemon        xtask
                     |              |
 第 3 层（编排）    agent         session
                     |              |
-第 2 层（服务）    api   tools   mcp   tui   plugin   telemetry
+第 2 层（服务）    api   tools   mcp   tui   skill   plugin   telemetry
                     |     |      |     |      |         |
 第 1 层（基础）    common   core   config   auth
 ```

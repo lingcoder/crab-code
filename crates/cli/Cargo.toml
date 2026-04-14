@@ -24,6 +24,7 @@ crab-tools.workspace = true
 crab-session.workspace = true
 crab-agent.workspace = true
 crab-plugin.workspace = true
+crab-skill.workspace = true
 crab-telemetry.workspace = true
 crab-tui = { workspace = true, optional = true }
 clap.workspace = true

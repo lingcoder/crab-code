@@ -13,7 +13,7 @@
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `crates/cli` `crates/daemon` | CLI entry point (clap), background daemon |
 | **Layer 3** Engine Layer | `agent` `session` | Multi-Agent orchestration, session management, context compaction |
-| **Layer 2** Service Layer | `tools` `mcp` `api` `fs` `process` `plugin` `telemetry` `tui` | Tool system, MCP protocol stack, multi-model API client, file/process operations, TUI components |
+| **Layer 2** Service Layer | `tools` `mcp` `api` `fs` `process` `plugin` `skill` `telemetry` `tui` | Tool system, MCP protocol stack, multi-model API client, file/process operations, skill system, TUI components |
 | **Layer 1** Foundation Layer | `core` `common` `config` `auth` | Domain model, config hot reload, authentication |
 
 > Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between tools/agent.
@@ -45,12 +45,12 @@
 │  │in     │  │       │  │    │  │          │  │            │      │
 │  └┬────┬─┘  └───────┘  └────┘  └──────────┘  └────────────┘      │
 │   │    │                                                           │
-│  ┌▼──┐ ┌▼──────┐  ┌──────┐                                        │
-│  │fs │ │process │  │plugin│                                        │
-│  │glob│ │sub-   │  │WASM  │                                        │
-│  │grep│ │process│  │sand- │                                        │
-│  │    │ │signal │  │box   │                                        │
-│  └───┘ └───────┘  └──────┘                                        │
+│  ┌▼──┐ ┌▼──────┐  ┌──────┐  ┌──────┐                              │
+│  │fs │ │process │  │plugin│  │skill │                              │
+│  │glob│ │sub-   │  │hooks │  │regis-│                              │
+│  │grep│ │process│  │WASM  │  │try + │                              │
+│  │    │ │signal │  │MCP↔  │  │built-│                              │
+│  └───┘ └───────┘  └──────┘  └──────┘                              │
 ├───────────────────────────────────────────────────────────────────┤
 │                      Layer 1: Foundation Layer                      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
@@ -70,14 +70,14 @@
 | **Entry Layer** entrypoints/ | `cli.tsx` `main.tsx` | `crates/cli` `crates/daemon` | CC uses React/Ink for rendering, Crab uses ratatui |
 | **Command Layer** commands/ | `query.ts` `QueryEngine.ts` | `agent` + `session` | CC's query loop maps to agent orchestration |
 | **Tool Layer** tools/ | 52 Tool directories | `tools` + `mcp` | CC mixes tools and MCP in services/; Crab separates them |
-| **Service Layer** services/ | `api/` `mcp/` `oauth/` `compact/` | `api` `mcp` `auth` `plugin` `telemetry` | CC's service layer is flat; Crab splits by responsibility |
+| **Service Layer** services/ | `api/` `mcp/` `oauth/` `compact/` | `api` `mcp` `auth` `skill` `plugin` `telemetry` | CC's service layer is flat; Crab splits by responsibility |
 | **Foundation Layer** utils/ types/ | `Tool.ts` `context.ts` | `core` `common` `config` | CC scatters types across files; Crab centralizes them in core |
 
 ### Core Design Philosophy
 
 1. **core has zero I/O** -- Pure data structures and trait definitions, reusable by any frontend (CLI/GUI/WASM)
 2. **Message loop driven** -- Everything revolves around the query loop: user input -> API call -> tool execution -> result return
-3. **Workspace isolation** -- 14 library crates with orthogonal responsibilities (~176 modules); incremental compilation only triggers on changed parts
+3. **Workspace isolation** -- 16 library crates with orthogonal responsibilities (~190 modules); incremental compilation only triggers on changed parts
 4. **Feature flags control dependencies** -- No Bedrock? AWS SDK is not compiled. No WASM? wasmtime is not compiled.
 
 ---
@@ -502,21 +502,40 @@ crab-code/
 │   │       │   └── mode.rs
 │   │       └── theme.rs               # Color theme (customizable)
 │   │
-│   ├── plugin/                        # crab-plugin: plugin system
+│   ├── skill/                         # crab-skill: skill system
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── skill.rs               # Skill discovery, loading, execution
-│   │       ├── skill_builder.rs       # [P1] Skill builder API + MCP skill loading
-│   │       ├── bundled_skills.rs      # [P1] Built-in skills (commit/review/debug etc.)
+│   │       ├── types.rs               # Skill, SkillTrigger, SkillContext, SkillSource
+│   │       ├── frontmatter.rs         # YAML frontmatter parsing
+│   │       ├── registry.rs            # SkillRegistry (discover, find, match)
+│   │       ├── builder.rs             # SkillBuilder fluent API
+│   │       └── bundled/               # Built-in skills (one file per skill)
+│   │           ├── mod.rs
+│   │           ├── commit.rs
+│   │           ├── review_pr.rs
+│   │           ├── debug.rs
+│   │           ├── loop_skill.rs
+│   │           ├── remember.rs
+│   │           ├── schedule.rs
+│   │           ├── simplify.rs
+│   │           ├── stuck.rs
+│   │           ├── verify.rs
+│   │           └── update_config.rs
+│   │
+│   ├── plugin/                        # crab-plugin: plugin/hook system
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── skill_builder.rs       # MCP → Skill bridge
 │   │       ├── wasm_runtime.rs        # WASM sandbox (feature = "wasm")
 │   │       ├── manifest.rs            # Plugin manifest parsing
 │   │       ├── manager.rs             # Plugin lifecycle management
 │   │       ├── hook.rs                # Lifecycle hook execution
-│   │       ├── hook_registry.rs       # [P0] Async hook registry + event broadcast
-│   │       ├── hook_types.rs          # [P0] Agent/Http/Prompt hooks + SSRF guard
-│   │       ├── hook_watchers.rs       # [P1] File change triggered hook re-registration
-│   │       └── frontmatter_hooks.rs   # [P1] Frontmatter YAML hook registration
+│   │       ├── hook_registry.rs       # Async hook registry + event broadcast
+│   │       ├── hook_types.rs          # Agent/Http/Prompt hooks + SSRF guard
+│   │       ├── hook_watchers.rs       # File change triggered hook re-registration
+│   │       └── frontmatter_hooks.rs   # Frontmatter YAML hook registration
 │   │
 │   ├── telemetry/                     # crab-telemetry: observability
 │   │   ├── Cargo.toml
@@ -569,7 +588,7 @@ crab-code/
 | Binary crate | 2 | `crates/cli` `crates/daemon` |
 | Helper crate | 1 | `xtask` |
 | **Total** | **17** | -- |
-| Total modules | ~241 | Across 14 library crates |
+| Total modules | ~257 | Across 16 library crates |
 | Total tests | ~2654 | `cargo test --workspace` (2026-04-06) |
 
 > Note: [P0]/[P1]/[P2] markers indicate CCB feature alignment priority. Unmarked files are already implemented.
@@ -648,10 +667,11 @@ crab-code/
 | 10 | **tools** | core, fs, process, mcp, config, common | 40+ built-in tools |
 | 11 | **session** | core, api, config, common | Session + context compaction + memory system |
 | 12 | **agent** | core, session, tools, common | Agent orchestration |
-| 13 | **plugin** | core, common | Skill/WASM sandbox + hook system |
-| 14 | **tui** | core, session, config, common | Terminal UI (does not depend on tools directly; receives tool state via core::Event) |
-| 15 | **cli** (bin) | All crates | Extremely thin entry point |
-| 16 | **daemon** (bin) | core, session, api, tools, config, agent, common | Background service |
+| 13 | **skill** | common | Skill discovery, registry, bundled definitions |
+| 14 | **plugin** | core, common, skill | Hook system, WASM sandbox, MCP↔skill bridge |
+| 15 | **tui** | core, session, config, skill, common | Terminal UI (does not depend on tools directly; receives tool state via core::Event) |
+| 16 | **cli** (bin) | All crates | Extremely thin entry point |
+| 17 | **daemon** (bin) | core, session, api, tools, config, agent, common | Background service |
 
 ### 5.3 Dependency Direction Principles
 
@@ -3110,80 +3130,58 @@ impl App {
 
 ---
 
-### 6.13 `crates/plugin/` -- Plugin System
+### 6.13 `crates/skill/` -- Skill System
 
-**Responsibility**: Skill/plugin discovery, loading, execution (corresponds to CC `src/skills/` + `src/services/plugins/`)
+**Responsibility**: Skill discovery, loading, registry, and built-in skill definitions (corresponds to CC `src/skills/`)
+
+**Directory Structure**
+
+```
+src/
+├── lib.rs            // Public API re-exports
+├── types.rs          // Skill, SkillTrigger, SkillContext, SkillSource
+├── frontmatter.rs    // YAML frontmatter parsing from .md files
+├── registry.rs       // SkillRegistry (discover, register, find, match)
+├── builder.rs        // SkillBuilder fluent API
+└── bundled/
+    ├── mod.rs         // bundled_skills() + BUNDLED_SKILL_NAMES
+    ├── commit.rs      // /commit
+    ├── review_pr.rs   // /review-pr
+    ├── debug.rs       // /debug
+    ├── loop_skill.rs  // /loop
+    ├── remember.rs    // /remember
+    ├── schedule.rs    // /schedule
+    ├── simplify.rs    // /simplify
+    ├── stuck.rs       // /stuck
+    ├── verify.rs      // /verify
+    └── update_config.rs // /update-config
+```
+
+**External Dependencies**: `crab-common`, `serde`, `serde_json`, `regex`, `tracing`
+
+---
+
+### 6.14 `crates/plugin/` -- Plugin System
+
+**Responsibility**: Plugin lifecycle, hooks, WASM sandbox, MCP↔skill bridge (corresponds to CC `src/services/plugins/`)
 
 **Directory Structure**
 
 ```
 src/
 ├── lib.rs
-├── skill.rs          // Skill discovery, loading, execution
-├── wasm_runtime.rs   // WASM plugin sandbox (wasmtime, feature = "wasm")
-├── manifest.rs       // Plugin manifest parsing (skill.json)
-└── hook.rs           // Lifecycle hooks
+├── skill_builder.rs      // MCP → Skill bridge (load_mcp_skills)
+├── hook.rs               // Lifecycle hook execution
+├── hook_registry.rs      // Hook registry
+├── hook_types.rs         // Hook type definitions
+├── hook_watchers.rs      // File watcher hooks
+├── frontmatter_hooks.rs  // Parse hooks from skill YAML frontmatter
+├── manager.rs            // Plugin discovery and lifecycle
+├── manifest.rs           // Plugin manifest parsing
+└── wasm_runtime.rs       // WASM plugin sandbox (wasmtime, feature = "wasm")
 ```
 
-**Core Types**
-
-```rust
-// skill.rs -- Skill system
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillManifest {
-    pub name: String,
-    pub description: String,
-    pub version: String,
-    pub trigger: SkillTrigger,
-    pub instructions: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum SkillTrigger {
-    /// Triggered by user input /command
-    Command { name: String },
-    /// Regex match on user input
-    Pattern { regex: String },
-    /// Manual invocation
-    Manual,
-}
-
-/// Skill trigger (implemented, #[derive(Default)] defaults to Manual)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(tag = "type")]
-pub enum SkillTrigger {
-    /// Triggered by user input /command
-    Command { name: String },
-    /// Regex match on user input
-    Pattern { regex: String },
-    /// Manual invocation (default)
-    #[default]
-    Manual,
-}
-
-pub struct SkillRegistry {
-    skills: Vec<SkillManifest>,
-}
-
-impl SkillRegistry {
-    /// Discover skills from ~/.crab/skills/ and project .crab/skills/ (implemented)
-    pub fn discover(paths: &[std::path::PathBuf]) -> crab_common::Result<Self>;
-
-    /// Find by name
-    pub fn find(&self, name: &str) -> Option<&SkillManifest>;
-
-    /// Match by /command name
-    pub fn find_by_command(&self, command: &str) -> Option<&SkillManifest>;
-
-    /// All skills list
-    pub fn all(&self) -> &[SkillManifest];
-}
-```
-
-**External Dependencies**: `crab-core`, `crab-common`, `wasmtime` (optional)
+**External Dependencies**: `crab-common`, `crab-core`, `crab-process`, `crab-skill`, `wasmtime` (optional)
 
 **Feature Flags**
 
@@ -3195,7 +3193,7 @@ wasm = ["wasmtime"]
 
 ---
 
-### 6.14 `crates/telemetry/` -- Observability
+### 6.15 `crates/telemetry/` -- Observability
 
 **Responsibility**: Distributed tracing and metrics collection (corresponds to CC `src/services/analytics/` + `src/services/diagnosticTracking.ts`)
 
