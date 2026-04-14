@@ -3,6 +3,7 @@
 //! Provides persistent, cross-session memory storage organized as
 //! markdown files with YAML frontmatter in `~/.crab/memory/`.
 
+pub mod age;
 pub mod index;
 pub mod relevance;
 pub mod store;
