@@ -6,11 +6,9 @@ pub mod cost;
 pub mod history;
 pub mod memory;
 pub mod memory_extract;
-pub mod memory_types;
 pub mod micro_compact;
 pub mod migration;
 pub mod snip_compact;
-pub mod team_memory;
 pub mod template;
 
 pub use compaction::{
@@ -22,7 +20,6 @@ pub use conversation::Conversation;
 pub use cost::{CostAccumulator, CostSummary, ModelPricing, lookup_pricing};
 pub use history::{ExportFormat, SearchResult, SessionHistory, SessionMetadata, SessionStats};
 pub use memory::{IndexEntry, MemoryFile, MemoryIndex, MemoryStore};
-pub use memory_types::{MemoryMetadata, MemoryType};
 pub use snip_compact::SnipConfig;
 pub use template::{
     SessionKind, SessionSummary, SessionTemplate, builtin_templates, find_template,

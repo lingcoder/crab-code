@@ -7,8 +7,8 @@
 //!
 //! Maps to CCB `memdir/extractMemories.ts`.
 
-use super::memory_types::MemoryType;
 use crab_core::message::{Message, Role};
+use crab_memory::types::MemoryType;
 
 /// Minimum new messages before triggering extraction.
 const EXTRACTION_INTERVAL: usize = 10;
