@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn parse_assume_role_response_valid_xml() {
-        let xml = r#"
+        let xml = r"
         <AssumeRoleResponse>
             <AssumeRoleResult>
                 <Credentials>
@@ -627,7 +627,7 @@ mod tests {
                 </Credentials>
             </AssumeRoleResult>
         </AssumeRoleResponse>
-        "#;
+        ";
 
         let parsed = parse_assume_role_response(xml).unwrap();
         assert_eq!(parsed.access_key_id, "ASIA1234567890");
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn parse_assume_role_response_web_identity() {
-        let xml = r#"
+        let xml = r"
         <AssumeRoleWithWebIdentityResponse>
             <AssumeRoleWithWebIdentityResult>
                 <Credentials>
@@ -648,7 +648,7 @@ mod tests {
                 </Credentials>
             </AssumeRoleWithWebIdentityResult>
         </AssumeRoleWithWebIdentityResponse>
-        "#;
+        ";
 
         let parsed = parse_assume_role_response(xml).unwrap();
         assert_eq!(parsed.access_key_id, "ASIAWEB123");
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn parse_assume_role_response_missing_field() {
-        let xml = r#"<Credentials><AccessKeyId>ASIA</AccessKeyId></Credentials>"#;
+        let xml = r"<Credentials><AccessKeyId>ASIA</AccessKeyId></Credentials>";
         let result = parse_assume_role_response(xml);
         assert!(result.is_err());
     }

@@ -428,8 +428,8 @@ mod tests {
         };
         let json = serde_json::to_string(&neg).unwrap();
         let back: NegotiatedCapabilities = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.tools, true);
-        assert_eq!(back.prompts, false);
+        assert!(back.tools);
+        assert!(!back.prompts);
     }
 
     #[test]

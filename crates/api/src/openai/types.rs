@@ -336,7 +336,7 @@ mod tests {
                 assert_eq!(choice_type, "function");
                 assert_eq!(function.name, "my_func");
             }
-            _ => panic!("expected Function variant"),
+            ToolChoice::Mode(_) => panic!("expected Function variant"),
         }
     }
 

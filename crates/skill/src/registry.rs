@@ -327,7 +327,7 @@ mod tests {
     fn discover_empty_dir() {
         let tmp = std::env::temp_dir().join("crab_skill_test_empty_reg");
         let _ = std::fs::create_dir_all(&tmp);
-        let reg = SkillRegistry::discover(&[tmp.clone()]).unwrap();
+        let reg = SkillRegistry::discover(std::slice::from_ref(&tmp)).unwrap();
         assert!(reg.is_empty());
         let _ = std::fs::remove_dir(&tmp);
     }
@@ -348,7 +348,7 @@ mod tests {
         )
         .unwrap();
 
-        let reg = SkillRegistry::discover(&[tmp.clone()]).unwrap();
+        let reg = SkillRegistry::discover(std::slice::from_ref(&tmp)).unwrap();
         assert_eq!(reg.len(), 1);
         let skill = reg.find("commit").unwrap();
         assert_eq!(skill.source, SkillSource::Disk);
@@ -362,7 +362,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("crab_skill_test_nonmd_reg");
         let _ = std::fs::create_dir_all(&tmp);
         std::fs::write(tmp.join("notes.txt"), "not a skill").unwrap();
-        let reg = SkillRegistry::discover(&[tmp.clone()]).unwrap();
+        let reg = SkillRegistry::discover(std::slice::from_ref(&tmp)).unwrap();
         assert!(reg.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }

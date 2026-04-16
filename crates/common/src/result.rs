@@ -7,7 +7,11 @@ mod tests {
     #[test]
     fn result_ok() {
         let r: Result<i32> = Ok(42);
-        assert_eq!(r.unwrap(), 42);
+        if let Ok(v) = r {
+            assert_eq!(v, 42);
+        } else {
+            panic!("expected Ok");
+        }
     }
 
     #[test]

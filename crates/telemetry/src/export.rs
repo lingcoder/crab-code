@@ -211,7 +211,7 @@ mod tests {
         let json = serde_json::to_string(&metric).unwrap();
         let parsed: MetricRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "tokens_used");
-        assert_eq!(parsed.value, 1234.0);
+        assert!((parsed.value - 1234.0_f64).abs() < f64::EPSILON);
     }
 
     #[test]

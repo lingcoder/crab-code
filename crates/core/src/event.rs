@@ -191,6 +191,7 @@ mod tests {
             index: 0,
             delta: "hello".into(),
         };
+        #[allow(clippy::redundant_clone)]
         let cloned = event.clone();
         if let Event::ContentDelta { index, delta } = cloned {
             assert_eq!(index, 0);

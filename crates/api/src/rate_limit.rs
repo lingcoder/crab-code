@@ -294,7 +294,9 @@ mod tests {
     fn rate_limiter_wait_duration_past_reset() {
         let mut rl = RateLimiter::new();
         // reset_at in the past
-        let past = Instant::now() - Duration::from_secs(1);
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
         rl.update(0, 0, past);
         assert!(rl.should_wait());
         // saturating_duration_since should return ZERO for past instants

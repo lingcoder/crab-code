@@ -110,10 +110,11 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::literal_string_with_formatting_args)]
     fn mixed_text_and_default() {
         assert_eq!(
             expand_env_vars("http://localhost:${CRAB_NOPORT:-8080}/api"),
-            "http://localhost:8080/api"
+            "http://localhost:8080/api",
         );
     }
 

@@ -797,7 +797,7 @@ mod tests {
         let path = dir.join("tokens.json");
 
         let mut store = TokenStore::default();
-        store.upsert(make_token("bedrock", Some(9999999999)));
+        store.upsert(make_token("bedrock", Some(9_999_999_999)));
         store.upsert(make_token("vertex", None));
 
         save_token_store(&path, &store).unwrap();
@@ -805,7 +805,10 @@ mod tests {
 
         assert_eq!(loaded.tokens.len(), 2);
         assert_eq!(loaded.get("bedrock").unwrap().access_token, "access-123");
-        assert_eq!(loaded.get("bedrock").unwrap().expires_at, Some(9999999999));
+        assert_eq!(
+            loaded.get("bedrock").unwrap().expires_at,
+            Some(9_999_999_999)
+        );
         assert!(loaded.get("vertex").is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1244,7 +1247,7 @@ mod tests {
                 .unwrap();
         };
 
-        let (url_result, _) = tokio::join!(server_future, client_future);
+        let (url_result, ()) = tokio::join!(server_future, client_future);
         let url = url_result.unwrap();
 
         // Verify parse_callback_params works with the server output

@@ -1071,8 +1071,10 @@ mod tests {
     async fn write_message_frames_correctly() {
         let writer = Arc::new(Mutex::new(Vec::<u8>::new()));
         write_message(&writer, "{\"ok\":true}").await.unwrap();
-        let data = writer.lock().await;
-        let text = String::from_utf8(data.clone()).unwrap();
+        let text = {
+            let data = writer.lock().await;
+            String::from_utf8(data.clone()).unwrap()
+        };
         assert!(text.starts_with("Content-Length: 11\r\n\r\n"));
         assert!(text.contains("{\"ok\":true}"));
     }
@@ -1579,7 +1581,9 @@ mod tests {
             crate::protocol::PromptMessageContent::Text { text } => {
                 assert_eq!(text, "Hello, Alice!");
             }
-            _ => panic!("expected text content"),
+            crate::protocol::PromptMessageContent::Resource { .. } => {
+                panic!("expected text content")
+            }
         }
     }
 
@@ -1708,14 +1712,19 @@ mod tests {
             crate::protocol::PromptMessageContent::Text { text } => {
                 assert_eq!(text, "Hello Bob, welcome to Rust Land!");
             }
-            _ => panic!("expected text"),
+            crate::protocol::PromptMessageContent::Resource { .. } => {
+                panic!("expected text")
+            }
         }
     }
 
     #[test]
     fn skill_prompt_handler_missing_required_arg() {
-        let handler =
-            SkillPromptHandler::new(vec![("greet".into(), "".into(), "Hello {{name}}!".into())]);
+        let handler = SkillPromptHandler::new(vec![(
+            "greet".into(),
+            String::new(),
+            "Hello {{name}}!".into(),
+        )]);
 
         let args = std::collections::HashMap::new();
         let err = handler.get_prompt("greet", &args).unwrap_err();

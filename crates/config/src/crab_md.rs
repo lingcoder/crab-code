@@ -113,11 +113,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("CRAB.md"), "   ").unwrap();
         let results = collect_crab_md(dir.path());
-        let project_mds: Vec<_> = results
-            .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
-            .collect();
-        assert!(project_mds.is_empty());
+        assert!(!results.iter().any(|md| md.source == CrabMdSource::Project));
     }
 
     #[test]
@@ -154,12 +150,12 @@ mod tests {
         fs::write(nested.join("CRAB.md"), same_content).unwrap();
 
         let results = collect_crab_md(dir.path());
-        let project_mds: Vec<_> = results
+        let project_count = results
             .iter()
             .filter(|md| md.source == CrabMdSource::Project)
-            .collect();
+            .count();
         // Should deduplicate identical content
-        assert_eq!(project_mds.len(), 1);
+        assert_eq!(project_count, 1);
     }
 
     #[test]
@@ -184,11 +180,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("CRAB.md"), "   \n  \t  ").unwrap();
         let results = collect_crab_md(dir.path());
-        let project_mds: Vec<_> = results
-            .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
-            .collect();
-        assert!(project_mds.is_empty());
+        assert!(!results.iter().any(|md| md.source == CrabMdSource::Project));
     }
 
     #[test]
@@ -197,6 +189,7 @@ mod tests {
             content: "test".into(),
             source: CrabMdSource::Global,
         };
+        #[allow(clippy::redundant_clone)]
         let cloned = md.clone();
         assert_eq!(cloned.content, "test");
         assert_eq!(cloned.source, CrabMdSource::Global);

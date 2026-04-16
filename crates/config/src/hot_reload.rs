@@ -248,7 +248,7 @@ mod tests {
         let file = dir.join("test.json");
         std::fs::write(&file, "{}").unwrap();
 
-        let state = FileState::new(file.clone());
+        let state = FileState::new(file);
         assert!(state.last_mtime.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -423,7 +423,7 @@ mod tests {
 
         // Verify the change was detected (may timeout on some CI, so we
         // only assert if we got the notification)
-        if let Ok(Ok(())) = changed {
+        if matches!(changed, Ok(Ok(()))) {
             let settings = rx.borrow();
             // The reloaded settings come from the full merge chain, which
             // may include global settings. We just verify it loaded successfully.

@@ -434,7 +434,7 @@ mod tests {
             self.name
         }
 
-        fn description(&self) -> &str {
+        fn description(&self) -> &'static str {
             "A mock tool for testing"
         }
 

@@ -262,6 +262,7 @@ impl ProgressTracker {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // progress values are f64 but tests use exact integer-equivalent values
 mod tests {
     use super::*;
 

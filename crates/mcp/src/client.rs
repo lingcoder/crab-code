@@ -566,11 +566,13 @@ mod tests {
         {
             Box::pin(async move {
                 let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
-                let responses = self.responses.lock().await;
-                let result = responses
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
+                let result = {
+                    let responses = self.responses.lock().await;
+                    responses
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null)
+                };
 
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0".into(),

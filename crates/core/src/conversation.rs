@@ -331,7 +331,7 @@ mod tests {
         // Budget of 1 token — should keep at least the last message
         let removed = conv.truncate_to_budget(1);
         assert!(removed <= 1);
-        assert!(conv.len() >= 1);
+        assert!(!conv.is_empty());
     }
 
     #[test]
@@ -355,7 +355,7 @@ mod tests {
 
         if removed > 0 {
             // If truncation happened, remaining messages should still be coherent
-            assert!(conv.len() >= 1);
+            assert!(!conv.is_empty());
         }
     }
 

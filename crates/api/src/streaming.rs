@@ -508,10 +508,10 @@ mod tests {
         let mut parser = StreamingToolParser::new();
         assert!(!parser.process(&StreamEvent::MessageStart {
             id: "m1".into(),
-            usage: Default::default(),
+            usage: crab_core::model::TokenUsage::default(),
         }));
         assert!(!parser.process(&StreamEvent::MessageDelta {
-            usage: Default::default(),
+            usage: crab_core::model::TokenUsage::default(),
             stop_reason: None,
         }));
         assert!(!parser.process(&StreamEvent::MessageStop));
@@ -547,7 +547,7 @@ mod tests {
         parser.set_tool_metadata(1, "tc_1".into(), "bash".into());
         parser.process(&StreamEvent::ContentDelta {
             index: 1,
-            delta: r#"{}"#.into(),
+            delta: "{}".into(),
         });
         parser.process(&StreamEvent::ContentBlockStop { index: 1 });
 
@@ -629,7 +629,7 @@ mod tests {
     fn collector_reset() {
         let mut collector = ParallelToolCollector::new();
         let mut acc = ToolUseAccumulator::new(0, "tc_1".into(), "bash".into());
-        acc.append_delta(r#"{}"#);
+        acc.append_delta("{}");
         acc.finalize();
         collector.add(&acc);
         assert_eq!(collector.len(), 1);
@@ -711,7 +711,7 @@ mod tests {
         // Feed JSON incrementally
         parser.process(&StreamEvent::ContentDelta {
             index: 0,
-            delta: r#"{"#.into(),
+            delta: "{".into(),
         });
         // Can't parse yet
         assert!(parser.in_progress_tools()[0].try_parse_input().is_none());
