@@ -1,3 +1,4 @@
+pub mod bridge;
 pub mod capability;
 pub mod config;
 pub mod conversation;
@@ -6,4 +7,8 @@ pub mod ide;
 pub mod message;
 pub mod model;
 pub mod permission;
+pub mod proactive;
+pub mod query;
+pub mod remote;
+pub mod sandbox;
 pub mod tool;

@@ -1,4 +1,9 @@
+use crate::bridge::{BridgeStatus, ClientSource};
 use crate::model::TokenUsage;
+use crate::proactive::ProactiveSuggestion;
+use crate::query::QueryPhase;
+use crate::remote::{RemoteSessionId, RemoteSessionInfo};
+use crate::sandbox::{SandboxBackend, ViolationInfo};
 use crate::tool::ToolOutput;
 use serde_json::Value;
 
@@ -123,6 +128,47 @@ pub enum Event {
         /// Total tokens used by this worker.
         usage: TokenUsage,
     },
+
+    // ─── Bridge (v2.3) ───
+    /// Bridge server status changed.
+    BridgeStatusChanged(BridgeStatus),
+
+    /// A remote client attached to the bridge.
+    BridgeClientConnected {
+        client_id: String,
+        source: ClientSource,
+    },
+
+    /// A remote client detached from the bridge.
+    BridgeClientDisconnected { client_id: String },
+
+    // ─── Remote sessions (v2.3) ───
+    /// A remote claude.ai session was started.
+    RemoteSessionStarted(RemoteSessionInfo),
+
+    /// A remote session reported a progress step.
+    RemoteSessionProgress { id: RemoteSessionId, step: String },
+
+    /// A remote session finished (successfully or not).
+    RemoteSessionCompleted { id: RemoteSessionId, success: bool },
+
+    // ─── Sandbox (v2.3) ───
+    /// A sandbox backend rejected an operation.
+    SandboxViolation {
+        backend: SandboxBackend,
+        info: ViolationInfo,
+    },
+
+    // ─── Proactive suggestions (v2.3) ───
+    /// A proactive suggestion is ready for display.
+    ProactiveSuggestion(ProactiveSuggestion),
+
+    // ─── Query lifecycle (v2.3) ───
+    /// Engine phase transition (submitting → streaming → tool exec → finalize → done).
+    QueryPhaseChanged(QueryPhase),
+
+    /// Engine loop stopped; reason is stringified `engine::StopReason`.
+    QueryStopped { reason: String },
 
     // ─── Errors ───
     /// An error occurred during processing.
@@ -476,5 +522,79 @@ mod tests {
         // both the OpenAI-compatible streaming producer (crab-api) and the
         // text-rendering consumers (crab-tui).
         assert_eq!(TOOL_ARG_INDEX_BASE, 1000);
+    }
+
+    #[test]
+    fn bridge_status_changed_event() {
+        use crate::bridge::BridgeStatus;
+        let event = Event::BridgeStatusChanged(BridgeStatus::Listening { port: 9000 });
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("BridgeStatusChanged"));
+    }
+
+    #[test]
+    fn remote_session_started_event() {
+        use crate::remote::{RemoteSessionId, RemoteSessionInfo};
+        let info = RemoteSessionInfo {
+            id: RemoteSessionId("s1".into()),
+            prompt_preview: "hi".into(),
+            created_at: 0,
+        };
+        let event = Event::RemoteSessionStarted(info.clone());
+        if let Event::RemoteSessionStarted(got) = event {
+            assert_eq!(got, info);
+        } else {
+            panic!("unexpected variant");
+        }
+    }
+
+    #[test]
+    fn sandbox_violation_event() {
+        use crate::sandbox::{SandboxBackend, ViolationInfo};
+        let event = Event::SandboxViolation {
+            backend: SandboxBackend::Landlock,
+            info: ViolationInfo {
+                op: "write".into(),
+                target: "/etc".into(),
+                reason: "denied".into(),
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("SandboxViolation"));
+        assert!(json.contains("Landlock"));
+    }
+
+    #[test]
+    fn proactive_suggestion_event() {
+        use crate::proactive::{ProactiveSuggestion, SuggestionKind};
+        let s = ProactiveSuggestion {
+            kind: SuggestionKind::Autocomplete,
+            text: "git commit".into(),
+            score: 0.9,
+        };
+        let event = Event::ProactiveSuggestion(s);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("ProactiveSuggestion"));
+    }
+
+    #[test]
+    fn query_phase_changed_event() {
+        use crate::query::QueryPhase;
+        let event = Event::QueryPhaseChanged(QueryPhase::Streaming);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("QueryPhaseChanged"));
+        assert!(json.contains("Streaming"));
+    }
+
+    #[test]
+    fn query_stopped_event() {
+        let event = Event::QueryStopped {
+            reason: "NoToolCalls".into(),
+        };
+        if let Event::QueryStopped { reason } = event {
+            assert_eq!(reason, "NoToolCalls");
+        } else {
+            panic!("unexpected variant");
+        }
     }
 }
