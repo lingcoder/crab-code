@@ -144,13 +144,12 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
         ext: crab_core::tool::ToolContextExt::default(),
     };
 
-    let loop_config = crab_agent::QueryLoopConfig {
+    let loop_config = crab_engine::QueryConfig {
         model: config.session_config.model.clone(),
         max_tokens: config.session_config.max_tokens,
         temperature: config.session_config.temperature,
         tool_schemas,
         cache_enabled: false,
-        _token_budget: None,
         budget_tokens: None,
         retry_policy: None,
         hook_executor: None,
@@ -160,6 +159,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
             .session_config
             .fallback_model
             .map(crab_core::model::ModelId::from),
+        source: crab_core::query::QuerySource::Repl,
     };
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);
@@ -382,7 +382,7 @@ async fn run_loop(
     backend: Arc<LlmBackend>,
     executor: Arc<ToolExecutor>,
     mut tool_ctx: crab_core::tool::ToolContext,
-    loop_config: crab_agent::QueryLoopConfig,
+    loop_config: crab_engine::QueryConfig,
     event_tx: mpsc::Sender<Event>,
     perm_resp_tx: mpsc::UnboundedSender<(String, bool)>,
     skill_registry: &SkillRegistry,
@@ -495,23 +495,23 @@ async fn run_loop(
                 conv_return = Some(return_rx);
 
                 tokio::spawn(async move {
-                    let config = crab_agent::QueryLoopConfig {
+                    let config = crab_engine::QueryConfig {
                         model: task_model,
                         max_tokens: task_max_tokens,
                         temperature: task_temperature,
                         tool_schemas: task_schemas,
                         cache_enabled: task_cache,
-                        _token_budget: None,
                         budget_tokens: None,
                         retry_policy: None,
                         hook_executor: None,
                         session_id: None,
                         effort: None,
                         fallback_model: None,
+                        source: crab_core::query::QuerySource::Repl,
                     };
 
                     let mut task_cost_tracker = crab_session::CostAccumulator::default();
-                    let result = crab_agent::query_loop(
+                    let result = crab_engine::query_loop(
                         &mut task_conversation,
                         &task_backend,
                         &task_executor,

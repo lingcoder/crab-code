@@ -17,10 +17,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::message_bus::{AgentMessage, Envelope, MessageBus};
 use crate::message_router::MessageRouter;
-use crate::query_loop::{self, QueryLoopConfig};
 use crate::retry::{RetryDecision, RetryPolicy, RetryTracker};
 use crate::team::{Team, TeamMode};
 use crate::worker::{AgentWorker, WorkerConfig, WorkerResult};
+use crab_engine::{QueryConfig, query_loop};
 
 /// Multi-agent orchestrator. Manages the main agent and worker pool.
 ///
@@ -117,7 +117,7 @@ pub struct AgentSession {
     pub backend: Arc<LlmBackend>,
     pub executor: ToolExecutor,
     pub tool_ctx: ToolContext,
-    pub config: QueryLoopConfig,
+    pub config: QueryConfig,
     pub event_tx: mpsc::Sender<Event>,
     pub event_rx: mpsc::Receiver<Event>,
     pub cancel: CancellationToken,
@@ -128,7 +128,7 @@ pub struct AgentSession {
     /// Cost accumulator for tracking API usage.
     pub cost: CostAccumulator,
     /// Query engine (new unified API — optional during migration).
-    pub engine: Option<crate::engine::QueryEngine>,
+    pub engine: Option<crab_engine::QueryEngine>,
 }
 
 impl AgentSession {
@@ -221,13 +221,12 @@ impl AgentSession {
             ext: crab_core::tool::ToolContextExt::default(),
         };
 
-        let config = QueryLoopConfig {
+        let config = QueryConfig {
             model: session_config.model,
             max_tokens: session_config.max_tokens,
             temperature: session_config.temperature,
             tool_schemas,
             cache_enabled: false,
-            _token_budget: None,
             budget_tokens: None,
             retry_policy: None,
             hook_executor: None,
@@ -235,8 +234,9 @@ impl AgentSession {
             effort: session_config
                 .effort
                 .as_deref()
-                .and_then(|e| e.parse::<crate::effort::EffortLevel>().ok()),
+                .and_then(|e| e.parse::<crab_engine::EffortLevel>().ok()),
             fallback_model: session_config.fallback_model.map(ModelId::from),
+            source: crab_core::query::QuerySource::Repl,
         };
 
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -479,7 +479,7 @@ impl AgentCoordinator {
         backend: Arc<LlmBackend>,
         executor: Arc<ToolExecutor>,
         tool_ctx: ToolContext,
-        loop_config: QueryLoopConfig,
+        loop_config: QueryConfig,
         event_tx: mpsc::Sender<Event>,
         max_turns: Option<usize>,
     ) -> String {

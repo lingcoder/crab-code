@@ -1,4 +1,4 @@
-//! AutoDream — periodic background "dream" cycles for the agent.
+//! `AutoDream` — periodic background "dream" cycles for the agent.
 //!
 //! The dream system is designed to let the agent periodically consolidate
 //! context, prune stale information, or run background analysis.

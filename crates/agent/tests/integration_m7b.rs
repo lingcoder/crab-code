@@ -485,7 +485,7 @@ fn default_registry_includes_all_builtin_tools() {
 
 #[test]
 fn tool_results_message_format() {
-    use crab_agent::query_loop::tool_results_message;
+    use crab_engine::tool_results_message;
 
     let results = vec![
         ("tu_1".into(), Ok(ToolOutput::success("file read ok"))),
@@ -531,23 +531,23 @@ fn tool_results_message_format() {
     }
 }
 
-// ─── QueryLoopConfig clone ───
+// ─── QueryConfig clone ───
 
 #[test]
-fn query_loop_config_is_cloneable() {
-    let config = crab_agent::QueryLoopConfig {
+fn query_config_is_cloneable() {
+    let config = crab_engine::QueryConfig {
         model: ModelId::from("test-model"),
         max_tokens: 4096,
         temperature: Some(0.5),
         tool_schemas: vec![serde_json::json!({"name": "test"})],
         cache_enabled: true,
-        _token_budget: None,
         budget_tokens: None,
         retry_policy: None,
         hook_executor: None,
         session_id: None,
         effort: None,
         fallback_model: None,
+        source: crab_core::query::QuerySource::Repl,
     };
     let cloned = config.clone();
     assert_eq!(cloned.model.as_str(), "test-model");

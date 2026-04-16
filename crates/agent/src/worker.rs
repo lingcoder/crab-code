@@ -18,7 +18,7 @@ use crab_tools::executor::ToolExecutor;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::query_loop::{self, QueryLoopConfig};
+use crab_engine::{QueryConfig, query_loop};
 
 /// Configuration for spawning a sub-agent worker.
 #[derive(Clone)]
@@ -76,7 +76,7 @@ pub struct AgentWorker {
     backend: Arc<LlmBackend>,
     executor: Arc<ToolExecutor>,
     tool_ctx: ToolContext,
-    loop_config: QueryLoopConfig,
+    loop_config: QueryConfig,
     event_tx: mpsc::Sender<Event>,
     cancel: CancellationToken,
 }
@@ -92,7 +92,7 @@ impl AgentWorker {
         backend: Arc<LlmBackend>,
         executor: Arc<ToolExecutor>,
         tool_ctx: ToolContext,
-        loop_config: QueryLoopConfig,
+        loop_config: QueryConfig,
         event_tx: mpsc::Sender<Event>,
         cancel: CancellationToken,
     ) -> Self {
@@ -232,7 +232,7 @@ async fn run_with_turn_limit(
     backend: &LlmBackend,
     executor: &ToolExecutor,
     tool_ctx: &ToolContext,
-    config: &QueryLoopConfig,
+    config: &QueryConfig,
     cost_tracker: &mut crab_session::CostAccumulator,
     event_tx: mpsc::Sender<Event>,
     cancel: CancellationToken,

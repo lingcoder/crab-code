@@ -15,6 +15,7 @@ mem-ranker = ["crab-memory/mem-ranker"]
 crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
+crab-engine.workspace = true
 crab-memory.workspace = true
 crab-session.workspace = true
 crab-tools.workspace = true
