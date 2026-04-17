@@ -189,6 +189,10 @@ option_if_let_else = "allow"
 or_fun_call = "allow"
 comparison_chain = "allow"
 if_same_then_else = "allow"
+# Stylistic-only; `Duration::from_secs(3600)` reads just as well as
+# `from_hours(1)`. The lint (rust 1.95+) fires across retry/timeout
+# code with no functional benefit.
+duration_suboptimal_units = "allow"
 
 [profile.dev]
 opt-level = 0
