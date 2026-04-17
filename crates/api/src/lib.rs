@@ -5,6 +5,7 @@
 //! No dynamic trait dispatch; compile-time determined, exhaustive match.
 
 pub mod anthropic;
+pub mod anti_track;
 pub mod cache;
 pub mod capabilities;
 pub mod context_optimizer;
@@ -136,6 +137,9 @@ impl LlmBackend {
 /// - Everything else (including `None`) → `AnthropicClient`
 #[must_use]
 pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
+    // Extract anti-track config from settings
+    let anti_track = settings.anti_track.clone();
+
     match settings.api_provider.as_deref() {
         Some("openai" | "ollama" | "deepseek" | "vllm") => {
             let base_url = settings
@@ -146,7 +150,7 @@ pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
                 .api_key
                 .clone()
                 .or_else(|| std::env::var("OPENAI_API_KEY").ok());
-            LlmBackend::OpenAi(openai::OpenAiClient::new(base_url, api_key))
+            LlmBackend::OpenAi(openai::OpenAiClient::new_with_anti_track(base_url, api_key, anti_track))
         }
         #[cfg(feature = "bedrock")]
         Some("bedrock") => {
@@ -169,9 +173,10 @@ pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
                 |_| {
                     // Fall back to direct Anthropic if Bedrock auth fails
                     let auth = crab_auth::create_auth_provider(settings);
-                    LlmBackend::Anthropic(anthropic::AnthropicClient::new(
+                    LlmBackend::Anthropic(anthropic::AnthropicClient::new_with_anti_track(
                         "https://api.anthropic.com",
                         auth,
+                        anti_track,
                     ))
                 },
                 LlmBackend::Bedrock,
@@ -200,9 +205,10 @@ pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
             vertex::create_vertex_client(&config).map_or_else(
                 |_| {
                     let auth = crab_auth::create_auth_provider(settings);
-                    LlmBackend::Anthropic(anthropic::AnthropicClient::new(
+                    LlmBackend::Anthropic(anthropic::AnthropicClient::new_with_anti_track(
                         "https://api.anthropic.com",
                         auth,
+                        anti_track,
                     ))
                 },
                 LlmBackend::Vertex,
@@ -214,7 +220,7 @@ pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
                 .as_deref()
                 .unwrap_or("https://api.anthropic.com");
             let auth = crab_auth::create_auth_provider(settings);
-            LlmBackend::Anthropic(anthropic::AnthropicClient::new(base_url, auth))
+            LlmBackend::Anthropic(anthropic::AnthropicClient::new_with_anti_track(base_url, auth, anti_track))
         }
     }
 }
