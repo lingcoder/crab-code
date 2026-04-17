@@ -160,7 +160,7 @@ pub struct MetricsCollector {
 
 impl std::fmt::Debug for MetricsCollector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.timings.lock().map(|t| t.len()).unwrap_or(0);
+        let count = self.timings.lock().map_or(0, |t| t.len());
         f.debug_struct("MetricsCollector")
             .field("timings_count", &count)
             .finish_non_exhaustive()
@@ -192,21 +192,23 @@ impl MetricsCollector {
     /// Get all recorded timings.
     #[must_use]
     pub fn timings(&self) -> Vec<SpanTiming> {
-        self.timings.lock().map(|t| t.clone()).unwrap_or_default()
+        self.timings
+            .lock()
+            .map_or_else(|_| Vec::new(), |t| t.clone())
     }
 
     /// Get timings filtered by name prefix.
     #[must_use]
     pub fn timings_by_prefix(&self, prefix: &str) -> Vec<SpanTiming> {
-        self.timings
-            .lock()
-            .map(|t| {
+        self.timings.lock().map_or_else(
+            |_| Vec::new(),
+            |t| {
                 t.iter()
                     .filter(|s| s.name.starts_with(prefix))
                     .cloned()
                     .collect()
-            })
-            .unwrap_or_default()
+            },
+        )
     }
 
     /// Get aggregate stats for a span name prefix.
@@ -237,7 +239,7 @@ impl MetricsCollector {
     /// Number of recorded timings.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.timings.lock().map(|t| t.len()).unwrap_or(0)
+        self.timings.lock().map_or(0, |t| t.len())
     }
 
     /// Whether there are no recorded timings.

@@ -201,7 +201,7 @@ pub fn quick_resume_list(
 
     for sid in &session_ids {
         let path = history.base_dir.join(format!("{sid}.json"));
-        let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+        let file_size = path.metadata().map_or(0, |m| m.len());
 
         let preview = match history.load(sid)? {
             Some(messages) => {
