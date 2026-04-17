@@ -1,37 +1,32 @@
-//! `crab-acp` — Agent Client Protocol server side.
+//! `crab-acp` — [Agent Client Protocol](https://agentclientprotocol.com) server glue.
 //!
-//! [ACP](https://agentclientprotocol.com) is an open JSON-RPC standard (introduced
-//! by Zed in 2025) that lets editors drive external AI coding agents the way LSP
-//! lets editors drive language servers. This crate lets crab **be** such an
-//! external agent: a Zed / Neovim / Helix user picks crab from their editor's
-//! "external agents" menu, the editor spawns crab as a child process, and
-//! messages flow over stdio framed as ACP JSON-RPC.
+//! ACP lets editors (Zed, Neovim, Helix, …) drive external AI coding
+//! agents the way LSP lets them drive language servers. This crate
+//! wires the upstream [`agent_client_protocol`] SDK to stdio so that a
+//! user's editor can spawn `crab` as an ACP-speaking child process.
 //!
-//! ## Architectural role
+//! ## Architecture
 //!
-//! ```text
-//! Editor (ACP client)            ◄── ACP over stdio ──►   crab-acp (this crate)
-//!                                                                │
-//!                                                                ▼
-//!                                                           AgentHandler trait
-//!                                                                │
-//!                                                                ▼
-//!                                                       crab-engine / crab-agent
-//! ```
+//! The wire types and the [`Agent`] trait come from the upstream SDK
+//! (`agent-client-protocol = 0.10.4`, Zed's official Rust crate,
+//! Apache-2.0). This crate only provides the stdio entry point and
+//! re-exports the upstream surface that composition roots need, so
+//! `cli` / `daemon` don't have to add the SDK as a direct dep.
 //!
-//! `AgentHandler` is this crate's external boundary — consumers (cli / daemon)
-//! plug in a real implementation wired to `crab-engine`. This mirrors how
-//! `crab-mcp::McpServer` takes a `ToolHandler` trait without embedding any
-//! specific tool backend.
+//! Composition roots (`crates/cli/` or `crates/daemon/`) implement the
+//! [`Agent`] trait against the crab engine and hand the implementation
+//! to [`server::AcpServer::serve_stdio`]; this crate never embeds any
+//! engine logic.
 //!
-//! ## Module layout (scaffold; implementation lands in Phase δ)
-//!
-//! ```text
-//! crab-acp/
-//! ├── protocol/      ACP wire types (initialize, prompt, tool_use, cancel, …)  ← this commit
-//! └── server.rs      AcpServer + AgentHandler trait — Phase δ
-//! ```
+//! [`Agent`]: agent_client_protocol::Agent
 
-pub mod protocol;
+pub mod server;
 
-pub use protocol::PROTOCOL_VERSION;
+pub use server::{AcpServeError, AcpServer};
+
+/// Re-export of the upstream [`agent_client_protocol`] crate so
+/// consumers can implement the [`Agent`] trait without adding the SDK
+/// as a direct workspace dependency.
+///
+/// [`Agent`]: agent_client_protocol::Agent
+pub use agent_client_protocol as sdk;

@@ -10,12 +10,16 @@ description = "Agent Client Protocol (ACP) — crab as an external agent for Zed
 [dependencies]
 crab-common.workspace = true
 crab-core.workspace = true
-# protocol / serde
-serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
-# async + io
+# Upstream ACP SDK (Zed / agentclientprotocol.com official Rust crate).
+# Re-exported as `crab_acp::sdk` so composition roots can implement the
+# `Agent` trait without adding the SDK as a direct dep.
+agent-client-protocol.workspace = true
+# futures-io adapters for tokio::io — the upstream crate's constructor
+# expects `futures::io::AsyncRead` / `AsyncWrite`, which tokio streams
+# don't implement directly.
+futures.workspace = true
 tokio.workspace = true
+tokio-util = { workspace = true, features = ["compat"] }
 # diagnostics
 thiserror.workspace = true
 tracing.workspace = true
