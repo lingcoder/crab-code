@@ -5,8 +5,6 @@
 //! output string (wrapped by the caller) follows the upstream template
 //! so LLMs trained against that prompt pattern recognize the shape.
 
-#![allow(dead_code)] // R1 scaffolding; wired into agent in R3
-
 use crab_core::ide::IdeSelection;
 use std::path::Path;
 

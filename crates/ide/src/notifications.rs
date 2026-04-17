@@ -1,15 +1,19 @@
 //! MCP notification handlers.
 //!
-//! Registers handlers on the MCP client for the two IDE-specific
-//! notifications IDE plugins send:
+//! Parses the two IDE-specific notifications plugins send:
 //!
-//! - `selection_changed` — ambient state; updates `handles.selection`.
+//! - `selection_changed` — ambient state; written to `handles.selection`.
 //! - `at_mentioned` — one-shot; fanned out via a broadcast channel.
-
-#![allow(dead_code)] // R1 scaffolding; wired up in R2
+//!
+//! The dispatch loop lives in [`run_dispatch_loop`] and is owned by the
+//! [`crate::client::IdeClient`] reconnect task.
 
 use crab_core::ide::{IdeAtMention, IdeSelection};
+use crab_mcp::protocol::JsonRpcNotification;
 use serde::Deserialize;
+use tokio::sync::{broadcast, mpsc};
+
+use crate::state::IdeHandles;
 
 /// `selection_changed` notification params.
 ///
@@ -60,12 +64,53 @@ impl From<AtMentionedParams> for IdeAtMention {
     }
 }
 
-// R2: pub(crate) async fn register(
-//         client: &crab_mcp::Client,
-//         handles: IdeHandles,
-//         tick_tx: broadcast::Sender<()>,
-//         mention_tx: broadcast::Sender<IdeAtMention>,
-//     ) -> Result<(), crab_mcp::Error>
+/// Drain notifications from `rx` until the channel closes, routing each
+/// to the appropriate sink.
+///
+/// Returns when the WebSocket reader task exits (transport close, read
+/// error, or server-initiated close). Callers should then attempt
+/// reconnection.
+pub(crate) async fn run_dispatch_loop(
+    mut rx: mpsc::UnboundedReceiver<JsonRpcNotification>,
+    handles: IdeHandles,
+    mention_tx: broadcast::Sender<IdeAtMention>,
+) {
+    while let Some(notif) = rx.recv().await {
+        dispatch_one(notif, &handles, &mention_tx).await;
+    }
+    tracing::debug!("IDE notification dispatch loop exiting");
+}
+
+/// Route a single notification. Unknown methods are logged and dropped.
+async fn dispatch_one(
+    notif: JsonRpcNotification,
+    handles: &IdeHandles,
+    mention_tx: &broadcast::Sender<IdeAtMention>,
+) {
+    let Some(params) = notif.params else {
+        tracing::trace!(method = %notif.method, "ignoring parameterless IDE notification");
+        return;
+    };
+    match notif.method.as_str() {
+        "selection_changed" => match serde_json::from_value::<SelectionChangedParams>(params) {
+            Ok(p) => {
+                let selection: IdeSelection = p.into();
+                *handles.selection.write().await = Some(selection);
+            }
+            Err(e) => tracing::warn!(error = %e, "malformed selection_changed params"),
+        },
+        "at_mentioned" => match serde_json::from_value::<AtMentionedParams>(params) {
+            Ok(p) => {
+                let mention: IdeAtMention = p.into();
+                // Receivers may have lagged or been dropped — broadcast.send
+                // returning Err means "no active subscribers"; that's fine.
+                let _ = mention_tx.send(mention);
+            }
+            Err(e) => tracing::warn!(error = %e, "malformed at_mentioned params"),
+        },
+        other => tracing::trace!(method = other, "ignoring unhandled IDE notification"),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -100,5 +145,55 @@ mod tests {
         let m: IdeAtMention = p.into();
         assert_eq!(m.line_start, Some(1));
         assert_eq!(m.line_end, Some(5));
+    }
+
+    #[tokio::test]
+    async fn dispatch_updates_selection_handle() {
+        let handles = IdeHandles::default();
+        let (mention_tx, _) = broadcast::channel(4);
+        let notif = JsonRpcNotification::new(
+            "selection_changed".to_string(),
+            Some(serde_json::json!({"lineCount":2,"lineStart":1,"text":"hi","filePath":"/a"})),
+        );
+        dispatch_one(notif, &handles, &mention_tx).await;
+        let sel = handles.selection.read().await.clone().unwrap();
+        assert_eq!(sel.line_count, 2);
+        assert_eq!(sel.text.as_deref(), Some("hi"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_broadcasts_at_mention() {
+        let handles = IdeHandles::default();
+        let (mention_tx, mut rx) = broadcast::channel(4);
+        let notif = JsonRpcNotification::new(
+            "at_mentioned".to_string(),
+            Some(serde_json::json!({"filePath":"/a","lineStart":1,"lineEnd":3})),
+        );
+        dispatch_one(notif, &handles, &mention_tx).await;
+        let mention = rx.recv().await.unwrap();
+        assert_eq!(mention.line_end, Some(3));
+    }
+
+    #[tokio::test]
+    async fn dispatch_ignores_unknown_method() {
+        let handles = IdeHandles::default();
+        let (mention_tx, _rx) = broadcast::channel(4);
+        let notif =
+            JsonRpcNotification::new("something_else".to_string(), Some(serde_json::json!({})));
+        dispatch_one(notif, &handles, &mention_tx).await;
+        assert!(handles.selection.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_tolerates_malformed_payload() {
+        let handles = IdeHandles::default();
+        let (mention_tx, _rx) = broadcast::channel(4);
+        let notif = JsonRpcNotification::new(
+            "selection_changed".to_string(),
+            Some(serde_json::json!({"lineCount":"not-a-number"})),
+        );
+        // Must not panic.
+        dispatch_one(notif, &handles, &mention_tx).await;
+        assert!(handles.selection.read().await.is_none());
     }
 }

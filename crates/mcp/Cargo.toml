@@ -25,15 +25,11 @@ rand.workspace = true
 webbrowser.workspace = true
 urlencoding.workspace = true
 globset.workspace = true
-futures = { workspace = true, optional = true }
-tokio-tungstenite = { workspace = true, optional = true }
+futures.workspace = true
+tokio-tungstenite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-
-[features]
-default = []
-ws = ["tokio-tungstenite", "futures"]
 
 [lints]
 workspace = true

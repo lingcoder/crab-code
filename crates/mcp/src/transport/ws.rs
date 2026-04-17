@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
@@ -18,6 +18,13 @@ use crate::transport::Transport;
 
 /// Connection timeout for the initial WebSocket handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Receiver for server-initiated JSON-RPC notifications.
+///
+/// Returned by [`WsTransport::take_notifications`] exactly once per
+/// transport. Consumers spawn a task that loops on `rx.recv().await`
+/// and dispatches notifications by `method`.
+pub type NotificationReceiver = mpsc::UnboundedReceiver<JsonRpcNotification>;
 
 /// WebSocket transport for MCP servers.
 pub struct WsTransport {
@@ -29,6 +36,9 @@ pub struct WsTransport {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
     /// Handle to the background reader task.
     reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Receiver for server-initiated notifications. Moved out by
+    /// `take_notifications()`; drops silently if never consumed.
+    notification_rx: Mutex<Option<NotificationReceiver>>,
 }
 
 /// Type alias for the write half of a tungstenite WebSocket stream over TCP+TLS.
@@ -51,12 +61,42 @@ impl WsTransport {
     /// Performs the WebSocket handshake with a timeout, then spawns a
     /// background reader task to dispatch incoming JSON-RPC responses.
     pub async fn connect(url: &str) -> crab_common::Result<Self> {
-        use futures::StreamExt as _;
+        Self::connect_inner(url, None).await
+    }
 
-        tracing::debug!(url, "connecting to MCP WebSocket server");
+    /// Connect with an IDE-plugin auth token.
+    ///
+    /// Sends the token in the `x-claude-code-ide-authorization` header,
+    /// matching the protocol used by the Claude Code IDE plugins we
+    /// piggyback on (VS Code / `JetBrains` lockfiles at `~/.claude/ide/*.lock`).
+    pub async fn connect_with_auth(url: &str, auth_token: &str) -> crab_common::Result<Self> {
+        Self::connect_inner(url, Some(auth_token)).await
+    }
+
+    async fn connect_inner(url: &str, auth_token: Option<&str>) -> crab_common::Result<Self> {
+        use futures::StreamExt as _;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        tracing::debug!(
+            url,
+            has_auth = auth_token.is_some(),
+            "connecting to MCP WebSocket server"
+        );
+
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| crab_common::Error::Other(format!("invalid WebSocket URL {url}: {e}")))?;
+        if let Some(token) = auth_token {
+            let header_value = token.parse().map_err(|e| {
+                crab_common::Error::Other(format!("invalid auth token (not HTTP-header-safe): {e}"))
+            })?;
+            request
+                .headers_mut()
+                .insert("x-claude-code-ide-authorization", header_value);
+        }
 
         let (ws_stream, _response) =
-            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
+            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request))
                 .await
                 .map_err(|_| {
                     crab_common::Error::Other(format!(
@@ -73,6 +113,7 @@ impl WsTransport {
         let writer = Arc::new(Mutex::new(write_half));
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let (notif_tx, notif_rx) = mpsc::unbounded_channel::<JsonRpcNotification>();
 
         // Spawn background reader task.
         let pending_clone = Arc::clone(&pending);
@@ -84,13 +125,23 @@ impl WsTransport {
             while let Some(msg_result) = read_half.next().await {
                 match msg_result {
                     Ok(Message::Text(text)) => {
+                        // A JSON-RPC message has either an `id` (request/response)
+                        // or no `id` (notification). Try response first; fall back
+                        // to notification on id-missing or id-typed failures.
                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
                             let mut map = pending_clone.lock().await;
                             if let Some(tx) = map.remove(&resp.id) {
                                 let _ = tx.send(resp);
                             }
+                        } else if let Ok(notif) = serde_json::from_str::<JsonRpcNotification>(&text)
+                        {
+                            let _ = notif_tx.send(notif);
+                        } else {
+                            tracing::trace!(
+                                url = url_clone,
+                                "dropping unparseable WebSocket message"
+                            );
                         }
-                        // Server notifications are silently dropped for now.
                     }
                     Ok(Message::Close(_)) => {
                         tracing::debug!(url = url_clone, "WebSocket server sent close frame");
@@ -125,7 +176,19 @@ impl WsTransport {
             writer,
             pending,
             reader_handle: Mutex::new(Some(reader_handle)),
+            notification_rx: Mutex::new(Some(notif_rx)),
         })
+    }
+
+    /// Take the server-notification receiver.
+    ///
+    /// Returns `Some` on the first call and `None` afterwards. If never
+    /// called, notifications accumulate in an unbounded channel until the
+    /// transport is dropped — acceptable for short-lived / low-volume
+    /// integrations (IDE client) but callers handling high-volume server
+    /// events should consume this channel.
+    pub async fn take_notifications(&self) -> Option<NotificationReceiver> {
+        self.notification_rx.lock().await.take()
     }
 
     /// Send a text frame over the WebSocket.

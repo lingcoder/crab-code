@@ -95,15 +95,10 @@ pub async fn connect_server(config: &McpServerConfig) -> crab_common::Result<cra
         McpTransportConfig::Stdio { command, args } => {
             crate::McpClient::connect_stdio(command, args, config.env.as_ref(), &config.name).await
         }
-        #[cfg(feature = "ws")]
         McpTransportConfig::Ws { ws_url } => {
             let transport = crate::transport::ws::WsTransport::connect(ws_url).await?;
             crate::McpClient::connect(Box::new(transport), &config.name).await
         }
-        #[cfg(not(feature = "ws"))]
-        McpTransportConfig::Ws { .. } => Err(crab_common::Error::Other(
-            "WebSocket transport requires the 'ws' feature".into(),
-        )),
         McpTransportConfig::Http { url } => {
             crate::McpClient::connect_streamable_http(url, &config.name).await
         }

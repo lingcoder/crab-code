@@ -1,6 +1,4 @@
 pub mod stdio;
-
-#[cfg(feature = "ws")]
 pub mod ws;
 
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
