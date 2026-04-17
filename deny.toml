@@ -8,6 +8,15 @@ ignore = [
     # runs on loopback for the local session-attach server; there is no
     # network-observable timing signal for an attacker to exploit.
     { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken, loopback-only usage, no upgrade available" },
+    # `rand 0.8.5` unsoundness (GHSA-cq8v-f236-94qc). Only triggers when a
+    # custom `log`-crate logger calls `rand::rng()` from inside a log
+    # callback AND ThreadRng reseeds during that call. We use
+    # `tracing`/`tracing-subscriber` (not `log`'s logger trait) and no
+    # logging path touches `rand`, so the exploit conditions cannot be
+    # met here. Our direct `rand` is already 0.10.1 (patched); 0.8.5
+    # comes transitively through jsonwebtoken + rsa + oauth2, which are
+    # all at their latest stable releases.
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.8.5 via jsonwebtoken/rsa/oauth2; our logging path never calls rand" },
 ]
 
 [licenses]
