@@ -368,7 +368,7 @@ mod tests {
             max_duration: None,
             context_window: 200_000,
         };
-        let cloned = config.clone();
+        let cloned = config;
         assert_eq!(cloned.worker_id, "w1");
         assert_eq!(cloned.max_turns, Some(10));
     }

@@ -626,7 +626,7 @@ impl AgentCoordinator {
 mod tests {
     use super::*;
 
-    /// Create a dummy `LlmBackend` for tests (OpenAI client pointing to localhost).
+    /// Create a dummy `LlmBackend` for tests (`OpenAI` client pointing to localhost).
     fn test_backend() -> Arc<LlmBackend> {
         Arc::new(LlmBackend::OpenAi(crab_api::openai::OpenAiClient::new(
             "http://localhost:0/v1",

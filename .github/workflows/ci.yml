@@ -28,7 +28,7 @@ jobs:
           # Pin to MSRV (matches workspace.package.rust-version in Cargo.toml).
           # This keeps CI reproducible across Rust releases — new clippy lints
           # in stable don't break builds until MSRV is bumped intentionally.
-          toolchain: "1.94"
+          toolchain: "1.95"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -58,7 +58,7 @@ jobs:
         with:
           # Pin to MSRV to match the check job — shared cache keys require
           # identical toolchain versions to avoid incompatible artifacts.
-          toolchain: "1.94"
+          toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
         with:
           # Ubuntu shares the check job's cache (same shared-key); win/mac

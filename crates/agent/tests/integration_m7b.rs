@@ -1,7 +1,7 @@
 //! M7b E2E integration tests.
 //!
-//! Tests the full integration of AgentCoordinator, AgentSession, AgentTool,
-//! TaskTools, SkillRegistry, and Worker together.
+//! Tests the full integration of `AgentCoordinator`, `AgentSession`, `AgentTool`,
+//! `TaskTools`, `SkillRegistry`, and Worker together.
 
 use std::sync::Arc;
 
@@ -200,17 +200,17 @@ async fn agent_tool_produces_spawn_request() {
 #[test]
 fn task_list_dependency_resolution() {
     let mut list = TaskList::new();
-    let blocker = list.create("Setup env".into(), "Install deps".into());
-    let blocked = list.create("Run tests".into(), "Execute test suite".into());
-    list.add_blocked_by(&blocked, &blocker);
+    let setup_id = list.create("Setup env".into(), "Install deps".into());
+    let tests_id = list.create("Run tests".into(), "Execute test suite".into());
+    list.add_blocked_by(&tests_id, &setup_id);
 
     // blocked task not available until blocker completes
-    assert!(list.available_tasks().iter().all(|t| t.id != blocked));
+    assert!(list.available_tasks().iter().all(|t| t.id != tests_id));
 
-    list.update(&blocker, Some(TaskStatus::Completed), None, None, None);
+    list.update(&setup_id, Some(TaskStatus::Completed), None, None, None);
 
     // Now it's available
-    assert!(list.available_tasks().iter().any(|t| t.id == blocked));
+    assert!(list.available_tasks().iter().any(|t| t.id == tests_id));
 }
 
 #[test]
@@ -231,11 +231,15 @@ fn shared_task_list_cross_thread() {
     });
     handle.join().unwrap();
 
-    let list = shared.lock().unwrap();
-    let tasks = list.list();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::InProgress);
-    assert_eq!(tasks[0].owner.as_deref(), Some("worker_1"));
+    let guard = shared.lock().unwrap();
+    let tasks = guard.list();
+    let len = tasks.len();
+    let status = tasks[0].status;
+    let owner = tasks[0].owner.clone();
+    drop(guard);
+    assert_eq!(len, 1);
+    assert_eq!(status, TaskStatus::InProgress);
+    assert_eq!(owner.as_deref(), Some("worker_1"));
 }
 
 // ─── SkillRegistry integration ───
@@ -549,7 +553,7 @@ fn query_config_is_cloneable() {
         fallback_model: None,
         source: crab_core::query::QuerySource::Repl,
     };
-    let cloned = config.clone();
+    let cloned = config;
     assert_eq!(cloned.model.as_str(), "test-model");
     assert_eq!(cloned.max_tokens, 4096);
     assert!(cloned.cache_enabled);

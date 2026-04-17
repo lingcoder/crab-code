@@ -222,8 +222,7 @@ impl AutoComplete {
                 });
             }
         }
-        self.candidates
-            .sort_by(|a, b| a.text.len().cmp(&b.text.len()));
+        self.candidates.sort_by_key(|a| a.text.len());
     }
 
     fn complete_file_paths(&mut self, token: &str) {

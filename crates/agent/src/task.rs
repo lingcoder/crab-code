@@ -249,10 +249,10 @@ mod tests {
     #[test]
     fn available_tasks_filters_correctly() {
         let mut list = TaskList::new();
-        let id1 = list.create("Available".into(), "".into());
-        let id2 = list.create("Blocked".into(), "".into());
-        let id3 = list.create("Owned".into(), "".into());
-        list.create("In progress".into(), "".into());
+        let id1 = list.create("Available".into(), String::new());
+        let id2 = list.create("Blocked".into(), String::new());
+        let id3 = list.create("Owned".into(), String::new());
+        list.create("In progress".into(), String::new());
 
         list.add_blocked_by(&id2, &id1);
         list.update(&id3, None, None, None, Some("bob".into()));
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn unblocked_after_completion() {
         let mut list = TaskList::new();
-        let id1 = list.create("Blocker".into(), "".into());
-        let id2 = list.create("Blocked".into(), "".into());
+        let id1 = list.create("Blocker".into(), String::new());
+        let id2 = list.create("Blocked".into(), String::new());
         list.add_blocked_by(&id2, &id1);
 
         assert!(list.available_tasks().iter().all(|t| t.id != id2));
@@ -280,15 +280,15 @@ mod tests {
     #[test]
     fn add_blocks_creates_bidirectional_dependency() {
         let mut list = TaskList::new();
-        let id1 = list.create("Blocker".into(), "".into());
-        let id2 = list.create("Blocked".into(), "".into());
+        let id1 = list.create("Blocker".into(), String::new());
+        let id2 = list.create("Blocked".into(), String::new());
         list.add_blocks(&id1, &id2);
 
-        let blocker = list.get(&id1).unwrap();
-        assert!(blocker.blocks.contains(&id2));
+        let upstream = list.get(&id1).unwrap();
+        assert!(upstream.blocks.contains(&id2));
 
-        let blocked = list.get(&id2).unwrap();
-        assert!(blocked.blocked_by.contains(&id1));
+        let downstream = list.get(&id2).unwrap();
+        assert!(downstream.blocked_by.contains(&id1));
     }
 
     #[test]
@@ -314,11 +314,11 @@ mod tests {
         let shared2 = Arc::clone(&shared);
         let handle = std::thread::spawn(move || {
             let mut list = shared2.lock().unwrap();
-            list.create("From thread".into(), "".into());
+            list.create("From thread".into(), String::new());
         });
         handle.join().unwrap();
-        let list = shared.lock().unwrap();
-        assert_eq!(list.list().len(), 1);
+        let len = shared.lock().unwrap().list().len();
+        assert_eq!(len, 1);
     }
 
     #[test]
@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn add_blocked_by_duplicate_is_idempotent() {
         let mut list = TaskList::new();
-        let id1 = list.create("A".into(), "".into());
-        let id2 = list.create("B".into(), "".into());
+        let id1 = list.create("A".into(), String::new());
+        let id2 = list.create("B".into(), String::new());
         list.add_blocked_by(&id2, &id1);
         list.add_blocked_by(&id2, &id1); // duplicate
         let task = list.get(&id2).unwrap();
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn available_tasks_excludes_completed() {
         let mut list = TaskList::new();
-        let id = list.create("Done".into(), "".into());
+        let id = list.create("Done".into(), String::new());
         list.update(&id, Some(TaskStatus::Completed), None, None, None);
         assert!(list.available_tasks().is_empty());
     }
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn available_tasks_excludes_in_progress() {
         let mut list = TaskList::new();
-        let id = list.create("Working".into(), "".into());
+        let id = list.create("Working".into(), String::new());
         list.update(&id, Some(TaskStatus::InProgress), None, None, None);
         assert!(list.available_tasks().is_empty());
     }
@@ -395,9 +395,9 @@ mod tests {
     #[test]
     fn multiple_dependencies() {
         let mut list = TaskList::new();
-        let id1 = list.create("Dep 1".into(), "".into());
-        let id2 = list.create("Dep 2".into(), "".into());
-        let id3 = list.create("Blocked".into(), "".into());
+        let id1 = list.create("Dep 1".into(), String::new());
+        let id2 = list.create("Dep 2".into(), String::new());
+        let id3 = list.create("Blocked".into(), String::new());
         list.add_blocked_by(&id3, &id1);
         list.add_blocked_by(&id3, &id2);
 
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn get_mut_modifies_task() {
         let mut list = TaskList::new();
-        let id = list.create("Mutable".into(), "".into());
+        let id = list.create("Mutable".into(), String::new());
         let task = list.get_mut(&id).unwrap();
         task.subject = "Modified".into();
         assert_eq!(list.get(&id).unwrap().subject, "Modified");

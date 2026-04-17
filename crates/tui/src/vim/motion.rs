@@ -56,26 +56,26 @@ impl Motion {
             },
             Self::Right => CursorPos {
                 row,
-                col: (col + 1).min(line.len().saturating_sub(1).max(0)),
+                col: (col + 1).min(line.len().saturating_sub(1)),
             },
             Self::Up => {
                 let new_row = row.saturating_sub(1);
                 CursorPos {
                     row: new_row,
-                    col: col.min(lines[new_row].len().saturating_sub(1).max(0)),
+                    col: col.min(lines[new_row].len().saturating_sub(1)),
                 }
             }
             Self::Down => {
                 let new_row = (row + 1).min(lines.len() - 1);
                 CursorPos {
                     row: new_row,
-                    col: col.min(lines[new_row].len().saturating_sub(1).max(0)),
+                    col: col.min(lines[new_row].len().saturating_sub(1)),
                 }
             }
             Self::LineStart => CursorPos { row, col: 0 },
             Self::LineEnd => CursorPos {
                 row,
-                col: line.len().saturating_sub(1).max(0),
+                col: line.len().saturating_sub(1),
             },
             Self::FirstNonBlank => {
                 let first = line
@@ -128,7 +128,7 @@ fn next_word_start(line: &str, col: usize) -> usize {
         i += 1;
     }
 
-    i.min(len.saturating_sub(1).max(0))
+    i.min(len.saturating_sub(1))
 }
 
 /// Find the start of the previous word before `col` in `line`.

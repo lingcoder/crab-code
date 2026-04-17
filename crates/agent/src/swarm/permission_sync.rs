@@ -137,13 +137,13 @@ mod tests {
         let mgr = PermissionSyncManager::new(16);
         assert_eq!(mgr.subscriber_count(), 0);
 
-        let _rx1 = mgr.subscribe();
+        let rx1 = mgr.subscribe();
         assert_eq!(mgr.subscriber_count(), 1);
 
         let _rx2 = mgr.subscribe();
         assert_eq!(mgr.subscriber_count(), 2);
 
-        drop(_rx1);
+        drop(rx1);
         assert_eq!(mgr.subscriber_count(), 1);
     }
 

@@ -63,12 +63,8 @@ pub fn run() -> anyhow::Result<()> {
 
 fn check_api_key(settings: &crab_config::Settings) -> Check {
     let has_settings_key = settings.api_key.as_ref().is_some_and(|k| !k.is_empty());
-    let has_anthropic_env = std::env::var("ANTHROPIC_API_KEY")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let has_openai_env = std::env::var("OPENAI_API_KEY")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
+    let has_anthropic_env = std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.is_empty());
+    let has_openai_env = std::env::var("OPENAI_API_KEY").is_ok_and(|v| !v.is_empty());
 
     let passed = has_settings_key || has_anthropic_env || has_openai_env;
 

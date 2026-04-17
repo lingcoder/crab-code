@@ -117,45 +117,37 @@ fn apply_sgr(params: &[u16], mut style: Style) -> Style {
             100..=107 => style = style.bg(bright_color(params[i] - 100)),
 
             // Extended color: 38;5;n (256-color) or 38;2;r;g;b (truecolor)
-            38 => {
-                if i + 1 < params.len() {
-                    match params[i + 1] {
-                        5 if i + 2 < params.len() => {
-                            style = style.fg(color_256(params[i + 2]));
-                            i += 2;
-                        }
-                        2 if i + 4 < params.len() => {
-                            style = style.fg(Color::Rgb(
-                                truncate_u8(params[i + 2]),
-                                truncate_u8(params[i + 3]),
-                                truncate_u8(params[i + 4]),
-                            ));
-                            i += 4;
-                        }
-                        _ => i += 1,
-                    }
+            38 if i + 1 < params.len() => match params[i + 1] {
+                5 if i + 2 < params.len() => {
+                    style = style.fg(color_256(params[i + 2]));
+                    i += 2;
                 }
-            }
+                2 if i + 4 < params.len() => {
+                    style = style.fg(Color::Rgb(
+                        truncate_u8(params[i + 2]),
+                        truncate_u8(params[i + 3]),
+                        truncate_u8(params[i + 4]),
+                    ));
+                    i += 4;
+                }
+                _ => i += 1,
+            },
             // Extended background
-            48 => {
-                if i + 1 < params.len() {
-                    match params[i + 1] {
-                        5 if i + 2 < params.len() => {
-                            style = style.bg(color_256(params[i + 2]));
-                            i += 2;
-                        }
-                        2 if i + 4 < params.len() => {
-                            style = style.bg(Color::Rgb(
-                                truncate_u8(params[i + 2]),
-                                truncate_u8(params[i + 3]),
-                                truncate_u8(params[i + 4]),
-                            ));
-                            i += 4;
-                        }
-                        _ => i += 1,
-                    }
+            48 if i + 1 < params.len() => match params[i + 1] {
+                5 if i + 2 < params.len() => {
+                    style = style.bg(color_256(params[i + 2]));
+                    i += 2;
                 }
-            }
+                2 if i + 4 < params.len() => {
+                    style = style.bg(Color::Rgb(
+                        truncate_u8(params[i + 2]),
+                        truncate_u8(params[i + 3]),
+                        truncate_u8(params[i + 4]),
+                    ));
+                    i += 4;
+                }
+                _ => i += 1,
+            },
             _ => {} // unknown code — ignore
         }
         i += 1;

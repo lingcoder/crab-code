@@ -1050,7 +1050,7 @@ mod tests {
         let result = reg.execute("export", "", &ctx).unwrap();
         if let SlashCommandResult::Action(SlashAction::Export(path)) = result {
             assert!(path.starts_with("session_"));
-            assert!(path.ends_with(".md"));
+            assert!(path.to_ascii_lowercase().ends_with(".md"));
         } else {
             panic!("expected Export action");
         }

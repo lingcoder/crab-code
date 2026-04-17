@@ -1015,15 +1015,13 @@ async fn print_events(
         }
 
         match event {
-            Event::ContentDelta { index, delta } => {
-                // Only print text content (index 0), not tool arguments (index 1000+)
-                if index == 0 {
-                    if let Some(mut s) = spinner.take() {
-                        s.stop();
-                    }
-                    print!("{delta}");
-                    let _ = stdout.flush();
+            // Only print text content (index 0), not tool arguments (index 1000+)
+            Event::ContentDelta { index: 0, delta } => {
+                if let Some(mut s) = spinner.take() {
+                    s.stop();
                 }
+                print!("{delta}");
+                let _ = stdout.flush();
             }
             Event::ToolUseStart { name, input, .. } => {
                 if let Some(mut s) = spinner.take() {
@@ -1723,8 +1721,7 @@ mod tests {
         for event in &events {
             assert!(
                 event_to_json(event).is_some(),
-                "event_to_json returned None for {:?}",
-                event,
+                "event_to_json returned None for {event:?}",
             );
         }
     }

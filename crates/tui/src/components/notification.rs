@@ -437,7 +437,7 @@ impl Widget for &ProgressIndicator {
 
             let bar = format!(
                 "[{}{}] {:>3}%",
-                "=".repeat(filled.saturating_sub(1).max(0)) + if filled > 0 { ">" } else { "" },
+                "=".repeat(filled.saturating_sub(1)) + if filled > 0 { ">" } else { "" },
                 " ".repeat(empty),
                 (pct * 100.0) as u32
             );

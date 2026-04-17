@@ -293,10 +293,8 @@ async fn drain_events(mut rx: tokio::sync::mpsc::Receiver<Event>, format: Output
                     eprint!("{delta}");
                     let _ = std::io::stderr().flush();
                 }
-                Event::ToolResult { output, .. } => {
-                    if output.is_error {
-                        eprintln!("[tool error] {}", output.text());
-                    }
+                Event::ToolResult { output, .. } if output.is_error => {
+                    eprintln!("[tool error] {}", output.text());
                 }
                 Event::Error { message } => {
                     eprintln!("[error] {message}");

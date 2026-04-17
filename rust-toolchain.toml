@@ -2,5 +2,5 @@
 # Pin to MSRV so local dev + CI + cargo-deny docker all use the same
 # toolchain. Bump intentionally when raising `workspace.package.rust-version`
 # in Cargo.toml.
-channel = "1.94"
+channel = "1.95"
 components = ["rustfmt", "clippy", "rust-analyzer"]

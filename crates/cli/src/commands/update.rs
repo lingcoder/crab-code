@@ -107,8 +107,7 @@ fn read_cache() -> Option<String> {
 fn write_cache(version: &str) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let cache = VersionCheckCache {
         latest_version: version.to_owned(),
         checked_at_epoch_secs: now,
@@ -449,10 +448,12 @@ mod tests {
     #[test]
     fn platform_asset_name_has_extension() {
         let name = platform_asset_name();
-        assert!(
-            name.ends_with(".tar.gz") || name.ends_with(".zip"),
-            "got: {name}"
-        );
+        let lower = name.to_ascii_lowercase();
+        let has_valid_ext = lower.ends_with(".tar.gz")
+            || std::path::Path::new(&lower)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+        assert!(has_valid_ext, "got: {name}");
         assert!(name.starts_with("crab-code-"));
     }
 
@@ -563,12 +564,12 @@ mod tests {
     fn cache_roundtrip() {
         let cache = VersionCheckCache {
             latest_version: "1.2.3".into(),
-            checked_at_epoch_secs: 1700000000,
+            checked_at_epoch_secs: 1_700_000_000,
         };
         let json = serde_json::to_string(&cache).unwrap();
         let back: VersionCheckCache = serde_json::from_str(&json).unwrap();
         assert_eq!(back.latest_version, "1.2.3");
-        assert_eq!(back.checked_at_epoch_secs, 1700000000);
+        assert_eq!(back.checked_at_epoch_secs, 1_700_000_000);
     }
 
     #[test]

@@ -461,8 +461,8 @@ mod tests {
             DaemonResponse::Attached { session_id } => {
                 assert!(!session_id.is_empty());
                 // Session should exist and be attached
-                let pool = pool.lock().await;
-                assert!(pool.get(&session_id).unwrap().attached);
+                let attached = pool.lock().await.get(&session_id).unwrap().attached;
+                assert!(attached);
             }
             _ => panic!("expected Attached"),
         }

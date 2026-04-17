@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn team_member_clone() {
         let member = alice();
-        let cloned = member.clone();
+        let cloned = member;
         assert_eq!(cloned.agent_id, "a1");
         assert_eq!(cloned.name, "Alice");
     }

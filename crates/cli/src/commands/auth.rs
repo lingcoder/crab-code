@@ -47,9 +47,7 @@ fn check_providers(settings: &crab_config::Settings) -> Vec<ProviderStatus> {
     checks
         .iter()
         .map(|&(provider, env_var)| {
-            let has_env = std::env::var(env_var)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
+            let has_env = std::env::var(env_var).is_ok_and(|v| !v.is_empty());
             let has_settings = !settings_key.is_empty() && settings_provider == provider;
 
             ProviderStatus {
