@@ -85,6 +85,24 @@ impl ToolRegistry {
         schemas
     }
 
+    /// Retain only the tools whose names appear in `allow`, dropping the rest.
+    ///
+    /// Used by Coordinator Mode (`crab_agent::coordinator`) to strip a
+    /// coordinator-role registry down to the `{Agent, SendMessage, TaskStop}`
+    /// allow-list. Unknown names in `allow` are ignored.
+    pub fn retain_names(&mut self, allow: &[&str]) {
+        let allow_set: std::collections::HashSet<&str> = allow.iter().copied().collect();
+        self.tools
+            .retain(|name, _| allow_set.contains(name.as_str()));
+    }
+
+    /// Remove tools whose names appear in `deny`. Unknown names are ignored.
+    pub fn remove_names(&mut self, deny: &[&str]) {
+        for name in deny {
+            self.tools.remove(*name);
+        }
+    }
+
     /// Get schemas for a filtered set of tools.
     #[must_use]
     pub fn tool_schemas_filtered(&self, names: &[&str]) -> Vec<serde_json::Value> {
@@ -196,5 +214,49 @@ mod tests {
         reg.register(Arc::new(DummyTool { tool_name: "c" }));
         let filtered = reg.tool_schemas_filtered(&["a", "c", "missing"]);
         assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn retain_names_keeps_only_allowed() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool { tool_name: "a" }));
+        reg.register(Arc::new(DummyTool { tool_name: "b" }));
+        reg.register(Arc::new(DummyTool { tool_name: "c" }));
+        reg.retain_names(&["a", "c"]);
+        assert_eq!(reg.len(), 2);
+        assert!(reg.get("a").is_some());
+        assert!(reg.get("b").is_none());
+        assert!(reg.get("c").is_some());
+    }
+
+    #[test]
+    fn retain_names_ignores_unknown() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool { tool_name: "a" }));
+        reg.retain_names(&["a", "missing", "other"]);
+        assert_eq!(reg.len(), 1);
+        assert!(reg.get("a").is_some());
+    }
+
+    #[test]
+    fn retain_names_empty_clears_all() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool { tool_name: "a" }));
+        reg.register(Arc::new(DummyTool { tool_name: "b" }));
+        reg.retain_names(&[]);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn remove_names_drops_denied() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool { tool_name: "a" }));
+        reg.register(Arc::new(DummyTool { tool_name: "b" }));
+        reg.register(Arc::new(DummyTool { tool_name: "c" }));
+        reg.remove_names(&["b", "missing"]);
+        assert_eq!(reg.len(), 2);
+        assert!(reg.get("a").is_some());
+        assert!(reg.get("b").is_none());
+        assert!(reg.get("c").is_some());
     }
 }

@@ -55,6 +55,10 @@ impl AgentSession {
         backend: Arc<LlmBackend>,
         mut registry: ToolRegistry,
     ) -> Self {
+        // Snapshot the coordinator_mode flag before any partial-move of
+        // session_config below. `bool: Copy`, so this is cheap.
+        let coordinator_mode = session_config.coordinator_mode;
+
         // Register StructuredOutput tool when --json-schema is provided
         if let Some(ref schema_arg) = session_config.json_schema {
             match crab_tools::builtin::structured_output::StructuredOutputTool::from_arg(schema_arg)
@@ -119,6 +123,19 @@ impl AgentSession {
             for msg in messages {
                 conversation.push(msg);
             }
+        }
+
+        // Layer 2b — apply Coordinator Mode if gated on. This strips the
+        // registry to the allow-list and appends the anti-pattern prompt
+        // overlay. No-op when coordinator_mode is false.
+        if coordinator_mode
+            && let Some(coordinator) = crate::coordinator::Coordinator::from_flag(coordinator_mode)
+        {
+            coordinator.apply(&mut registry, &mut conversation.system_prompt);
+            tracing::info!(
+                allowed_tools = ?coordinator.allowed_tools(),
+                "Coordinator Mode active"
+            );
         }
 
         let tool_schemas = registry.tool_schemas();
@@ -567,6 +584,40 @@ mod tests {
         let session = AgentSession::new(config, backend, registry);
 
         session.save_memory("test.md", "content").unwrap();
+    }
+
+    #[test]
+    fn coordinator_mode_session_injects_overlay_into_system_prompt() {
+        use crab_tools::builtin::create_default_registry;
+
+        let mut config = base_config("coord-overlay");
+        config.system_prompt = "Base instructions.".into();
+        config.coordinator_mode = true;
+
+        let session = AgentSession::new(config, test_backend(), create_default_registry());
+
+        // System prompt retains the original base plus the coordinator overlay.
+        let prompt = &session.conversation.system_prompt;
+        assert!(prompt.contains("Base instructions."));
+        assert!(prompt.contains("Coordinator Mode"));
+        assert!(prompt.contains("Based on your findings"));
+    }
+
+    #[test]
+    fn non_coordinator_session_leaves_system_prompt_untouched() {
+        use crab_tools::builtin::create_default_registry;
+
+        let mut config = base_config("no-coord");
+        config.system_prompt = "Base instructions.".into();
+        // coordinator_mode default is false
+        let session = AgentSession::new(config, test_backend(), create_default_registry());
+
+        let prompt = &session.conversation.system_prompt;
+        assert!(prompt.contains("Base instructions."));
+        assert!(
+            !prompt.contains("Coordinator Mode"),
+            "overlay must not leak into non-coordinator sessions"
+        );
     }
 
     #[test]

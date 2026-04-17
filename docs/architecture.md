@@ -4044,11 +4044,14 @@ aligned with CCB's design but structured in Rust-idiomatic form.
 | 7 concrete `*Task` classes | `trait TaskExecutor` + 4 concrete impls (planned) | Rust trait polymorphism vs JS duck typing |
 | CCB gates Agent Teams behind env + CLI flag | L1 Teams ships unconditional; only Coordinator Mode is gated | Teams is base plumbing for crab's multi-agent story — not an experiment to toggle |
 
-### Current state (Phase 1)
+### Current state (Phase 3 shipped)
 
-- `SessionConfig` carries a single `coordinator_mode: bool` propagated from env (`CRAB_COORDINATOR_MODE`).
-- `coordinator/manager.rs::AgentCoordinator` is currently a **misnamed worker pool**; its doc comment now declares Phase 2 will rename it to `teams::WorkerPool`. No runtime behavior is gated on `coordinator_mode` yet — that lands in Phase 3.
-- `swarm/` directory contents are slated to migrate to `teams/backend/` in Phase 2; `swarm/permission_sync.rs` will move to `coordinator/permission_sync.rs` (it's L2b logic mis-filed as L1).
+- `SessionConfig.coordinator_mode: bool` is propagated from env (`CRAB_COORDINATOR_MODE=1`).
+- `crates/agent/src/teams/worker_pool.rs::WorkerPool` is the Layer 1 worker pool (was `AgentCoordinator` pre-Phase 2).
+- `crates/agent/src/coordinator/` holds the Layer 2b overlay: `Coordinator::from_flag(true).apply(&mut registry, &mut prompt)` retains the registry to `{Agent, SendMessage, TaskStop}` and appends the anti-pattern prompt overlay.
+- `session/runtime.rs::AgentSession::new` invokes the coordinator if `coordinator_mode` is set; otherwise no-op.
+- `crates/agent/src/coordinator/tool_acl.rs` hosts the `COORDINATOR_TOOLS` / `WORKER_DENIED_TOOLS` constants; `ToolRegistry::retain_names` / `remove_names` in `crates/tools/src/registry.rs` implement the filter.
+- Workers spawned via `Agent` still receive the default registry — per-worker `WORKER_DENIED_TOOLS` enforcement (subtracting `TeamCreate`/`TeamDelete`/`SendMessage` from their registry) is the Phase 3 follow-up when `WorkerPool::spawn_worker` is extended to accept a child registry.
 
 ---
 
