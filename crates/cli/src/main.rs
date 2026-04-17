@@ -412,6 +412,17 @@ async fn run_with_resume(cli: &Cli, resume_id: Option<String>) -> anyhow::Result
 
 /// Resolve well-known model aliases to their full model IDs.
 /// Unknown strings are returned unchanged.
+/// Read Coordinator Mode gate from env (no CLI flag by design — insiders opt
+/// in via `CRAB_COORDINATOR_MODE=1`). Agent Teams base infrastructure is
+/// unconditional; only Coordinator Mode (tool ACL + prompt overlay) is gated.
+pub(crate) fn coordinator_mode_enabled() -> bool {
+    coordinator_mode_from(|k| std::env::var(k).ok())
+}
+
+fn coordinator_mode_from(lookup: impl Fn(&str) -> Option<String>) -> bool {
+    lookup("CRAB_COORDINATOR_MODE").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+}
+
 fn resolve_model_alias(model: &str) -> String {
     match model {
         "sonnet" => "claude-sonnet-4-6".to_string(),
@@ -750,6 +761,9 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         Some(global_dir.join("memory"))
     };
 
+    // Coordinator Mode gate (env only; Teams infra is unconditional).
+    let coordinator_mode = coordinator_mode_enabled();
+
     let session_config = SessionConfig {
         session_id,
         system_prompt,
@@ -783,6 +797,7 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         disable_skills: cli.disable_slash_commands,
         beta_headers: cli.betas.clone(),
         ide_connect: cli.ide,
+        coordinator_mode,
     };
 
     print_banner(
@@ -1341,6 +1356,37 @@ fn event_to_json(event: &Event) -> Option<Value> {
 mod tests {
     use super::*;
     use crab_skill::{Skill, SkillRegistry, SkillTrigger};
+
+    #[test]
+    fn coordinator_gate_off_when_env_unset() {
+        assert!(!coordinator_mode_from(|_| None));
+    }
+
+    #[test]
+    fn coordinator_gate_on_with_1() {
+        assert!(coordinator_mode_from(
+            |k| (k == "CRAB_COORDINATOR_MODE").then(|| "1".into())
+        ));
+    }
+
+    #[test]
+    fn coordinator_gate_accepts_true_word_variants() {
+        for v in ["true", "TRUE"] {
+            assert!(coordinator_mode_from(
+                |k| (k == "CRAB_COORDINATOR_MODE").then(|| v.into())
+            ));
+        }
+    }
+
+    #[test]
+    fn coordinator_gate_rejects_unknown_values() {
+        for v in ["yes", "0", "on", "false", ""] {
+            assert!(
+                !coordinator_mode_from(|k| (k == "CRAB_COORDINATOR_MODE").then(|| v.into())),
+                "value {v:?} should not enable coordinator"
+            );
+        }
+    }
 
     #[test]
     fn build_skill_dirs_includes_global_and_project() {

@@ -218,6 +218,7 @@ impl acp::Agent for CrabAcpAgent {
             disable_skills: true,
             beta_headers: Vec::new(),
             ide_connect: false,
+            coordinator_mode: false,
         };
 
         let registry = create_default_registry();

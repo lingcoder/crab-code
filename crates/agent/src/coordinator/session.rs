@@ -340,6 +340,7 @@ mod tests {
             disable_skills: false,
             beta_headers: Vec::new(),
             ide_connect: false,
+            coordinator_mode: false,
         }
     }
 

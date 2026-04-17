@@ -133,12 +133,10 @@ impl RecoveryStrategy {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::category::ErrorCategory;
-
+    use super::*;
 
     #[test]
     fn recovery_action_display() {
@@ -252,5 +250,4 @@ mod tests {
         let action = s.recommend_with_attempts(ErrorCategory::Permanent, 0);
         assert!(matches!(action, RecoveryAction::Abort { .. }));
     }
-
 }

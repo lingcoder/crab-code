@@ -168,6 +168,7 @@ pub async fn run_once(config: RunConfig) -> anyhow::Result<()> {
     let session_id = crab_common::utils::id::new_ulid();
 
     // 6. Build session config
+    let coordinator_mode = crate::coordinator_mode_enabled();
     let session_config = SessionConfig {
         session_id,
         system_prompt,
@@ -205,6 +206,7 @@ pub async fn run_once(config: RunConfig) -> anyhow::Result<()> {
         disable_skills: false,
         beta_headers: Vec::new(),
         ide_connect: false,
+        coordinator_mode,
     };
 
     // 7. Create agent session and run

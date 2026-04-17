@@ -12,6 +12,4 @@
 pub mod handlers;
 pub mod types;
 
-pub use types::{
-    SlashAction, SlashCommandContext, SlashCommandRegistry, SlashCommandResult,
-};
+pub use types::{SlashAction, SlashCommandContext, SlashCommandRegistry, SlashCommandResult};

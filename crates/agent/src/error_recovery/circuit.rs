@@ -163,7 +163,6 @@ impl CircuitBreaker {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +288,4 @@ mod tests {
         assert_eq!(cb.state(), CircuitState::Closed);
         assert_eq!(cb.consecutive_failures(), 0);
     }
-
 }

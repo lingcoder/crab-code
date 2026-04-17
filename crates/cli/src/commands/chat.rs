@@ -178,6 +178,7 @@ pub async fn run_chat(config: ChatConfig) -> anyhow::Result<()> {
     );
 
     // 8. Build session config
+    let coordinator_mode = crate::coordinator_mode_enabled();
     let session_config = SessionConfig {
         session_id,
         system_prompt,
@@ -211,6 +212,7 @@ pub async fn run_chat(config: ChatConfig) -> anyhow::Result<()> {
         disable_skills: false,
         beta_headers: Vec::new(),
         ide_connect: false,
+        coordinator_mode,
     };
 
     // 9. Launch TUI or fallback REPL

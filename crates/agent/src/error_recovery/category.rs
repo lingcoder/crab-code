@@ -120,7 +120,6 @@ impl ErrorClassifier {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

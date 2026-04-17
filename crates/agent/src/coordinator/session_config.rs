@@ -58,6 +58,12 @@ pub struct SessionConfig {
     pub beta_headers: Vec<String>,
     /// Connect to IDE extension.
     pub ide_connect: bool,
+
+    // ─── Coordinator Mode gating (Phase 1) ───
+    /// Enable Layer 2b Coordinator Mode (tool ACL + anti-pattern prompt overlay).
+    /// Gated on `CRAB_COORDINATOR_MODE=1` env only — Agent Teams, `TaskList`, and
+    /// `Mailbox` are unconditional base infrastructure and do not need a flag.
+    pub coordinator_mode: bool,
 }
 
 #[cfg(test)]
@@ -95,8 +101,10 @@ mod tests {
             disable_skills: false,
             beta_headers: Vec::new(),
             ide_connect: false,
+            coordinator_mode: false,
         };
         assert_eq!(config.session_id, "sess_1");
         assert_eq!(config.context_window, 200_000);
+        assert!(!config.coordinator_mode);
     }
 }

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 
 use super::types::{SlashAction, SlashCommandContext, SlashCommandRegistry, SlashCommandResult};
 
-
 pub(super) fn cmd_help(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult {
     // We build the help text from a fresh registry to list all commands.
     // This avoids needing &self in the handler signature.

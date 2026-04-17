@@ -1,5 +1,15 @@
 //! Multi-agent orchestration: [`AgentCoordinator`], [`AgentHandle`],
 //! and the internal `RunningWorker` bookkeeping for spawned sub-agents.
+//!
+//! **Naming honesty (Phase 1 marker)**: despite the name, `AgentCoordinator`
+//! is *not* CCB's Layer 2b Coordinator Mode — it has no tool ACL, no
+//! Coordinator-specific system prompt overlay, no env gating. It is
+//! actually a **worker pool**: `spawn_worker` / `collect_*` / `cancel_*` plus
+//! message routing. Phase 2 will move this body to `teams/worker_pool.rs`
+//! and rename the struct to `WorkerPool`; the Layer 2b Coordinator Mode
+//! implementation will then live in a new `coordinator/` module with
+//! `Coordinator { tool_acl, prompt_overlay }` on top of this pool.
+//! See `docs/architecture.md` § Multi-Agent Three-Layer Architecture.
 
 use std::collections::HashMap;
 use std::sync::Arc;

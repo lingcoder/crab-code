@@ -4016,6 +4016,42 @@ src/
 
 ---
 
+## 6.X Multi-Agent Three-Layer Architecture
+
+crab models multi-agent collaboration in **three conceptually distinct layers**,
+aligned with CCB's design but structured in Rust-idiomatic form.
+
+| Layer | Purpose | CCB equivalent | crab location |
+|-------|---------|----------------|---------------|
+| **L1 — Teams (infrastructure)** | Mailbox, shared task list with `claimTask()`, spawner backends, worker pool, roster (team/member) | `isAgentSwarmsEnabled()` gate + `TeamCreate/Delete/SendMessage` tools + `teammateMailbox` | `crates/agent/src/teams/` *(planned, Phase 2)* |
+| **L2a — Swarm (flat topology)** | Peer-to-peer, competitive task claiming; default usage when Teams is on and Coordinator Mode is off | "opened Teams but didn't enable Coordinator Mode" | `TeamMode::PeerToPeer` enum variant — no separate module |
+| **L2b — Coordinator Mode (star overlay)** | Coordinator agent stripped of hands-on tools, workers run with allow-list, anti-pattern prompt ("understand before delegating") | `feature('COORDINATOR_MODE') && CLAUDE_CODE_COORDINATOR_MODE=1` | `crates/agent/src/coordinator/` *(planned, Phase 3)* |
+| **L3 — Session runtime** | `AgentSession` ties conversation + backend + executor + topology choice | — | `crates/agent/src/session/` *(planned, Phase 2)* |
+
+### Gating
+
+- **L1 (Teams infrastructure)** is **unconditional** — it's crab's base multi-agent plumbing and ships enabled by default. No env/settings flag.
+- **L2a (Swarm)** is the natural usage pattern whenever multiple agents exist and no overlay is active. Not a feature — just a topology choice via `TeamMode::PeerToPeer`.
+- **L2b (Coordinator Mode)** is gated on `CRAB_COORDINATOR_MODE=1` env only (no CLI flag — keeps the surface hidden from `--help`). Helper: `crates/cli/src/main.rs::coordinator_mode_enabled()`.
+
+### Divergence from CCB
+
+| CCB choice | crab choice | Reason |
+|------------|-------------|--------|
+| `feature('COORDINATOR_MODE')` GrowthBook feature flag | `settings.experimental.coordinator_mode_enabled` (planned) + env var | No remote telemetry; no GrowthBook in crab |
+| `<task-notification>` XML protocol | Reuse `crab_core::Event` + `serde_json` | Rust serde is idiomatic; XML is a JS/TS artefact |
+| Node `proper-lockfile` for `claimTask()` | `fd-lock` crate (planned Phase 4) | Rust-native, cross-platform |
+| 7 concrete `*Task` classes | `trait TaskExecutor` + 4 concrete impls (planned) | Rust trait polymorphism vs JS duck typing |
+| CCB gates Agent Teams behind env + CLI flag | L1 Teams ships unconditional; only Coordinator Mode is gated | Teams is base plumbing for crab's multi-agent story — not an experiment to toggle |
+
+### Current state (Phase 1)
+
+- `SessionConfig` carries a single `coordinator_mode: bool` propagated from env (`CRAB_COORDINATOR_MODE`).
+- `coordinator/manager.rs::AgentCoordinator` is currently a **misnamed worker pool**; its doc comment now declares Phase 2 will rename it to `teams::WorkerPool`. No runtime behavior is gated on `coordinator_mode` yet — that lands in Phase 3.
+- `swarm/` directory contents are slated to migrate to `teams/backend/` in Phase 2; `swarm/permission_sync.rs` will move to `coordinator/permission_sync.rs` (it's L2b logic mis-filed as L1).
+
+---
+
 ## 7. Design Principles
 
 | # | Principle | Description | Rationale |

@@ -854,6 +854,7 @@ mod tests {
                 disable_skills: false,
                 beta_headers: Vec::new(),
                 ide_connect: false,
+                coordinator_mode: false,
             },
             backend: Arc::new(crab_api::LlmBackend::OpenAi(
                 crab_api::openai::OpenAiClient::new("http://localhost:0/v1", None),
