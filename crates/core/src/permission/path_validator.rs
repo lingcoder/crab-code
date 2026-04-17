@@ -333,13 +333,13 @@ impl PathValidator {
 
         for pattern in &self.denied_patterns {
             // Support both glob matching and simple suffix matching
-            if super::glob_match(pattern, path_str) {
+            if super::filter::glob_match(pattern, path_str) {
                 return Some(pattern.clone());
             }
 
             // Also check just the filename for basename-only patterns (e.g., "*.env")
             if let Some(filename) = path.file_name().and_then(|f| f.to_str())
-                && super::glob_match(pattern, filename)
+                && super::filter::glob_match(pattern, filename)
             {
                 return Some(pattern.clone());
             }

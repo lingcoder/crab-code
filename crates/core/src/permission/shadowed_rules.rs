@@ -106,7 +106,7 @@ fn rule_shadows(a: &PermissionRule, b: &PermissionRule) -> bool {
                 key: key_b,
                 value: val_b,
             }),
-        ) => key_a == key_b && super::glob_match(pat_a, val_b),
+        ) => key_a == key_b && super::filter::glob_match(pat_a, val_b),
         // All other combinations: conservative — don't claim shadowing
         _ => false,
     }
@@ -124,7 +124,7 @@ fn tool_name_covers(a: &str, b: &str) -> bool {
     }
     // Check if `a` as a glob pattern would match `b`
     // e.g., "mcp__*" covers "mcp__server__tool"
-    super::glob_match(a, b)
+    super::filter::glob_match(a, b)
 }
 
 /// Check whether glob pattern `a` covers all matches of glob pattern `b`.

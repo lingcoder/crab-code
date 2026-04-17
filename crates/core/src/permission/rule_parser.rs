@@ -233,7 +233,7 @@ fn parse_rule_content(content: &str) -> Result<RuleContent, ParseError> {
 /// Returns `true` if the rule matches the given tool name and input arguments.
 pub fn matches_rule(rule: &PermissionRule, tool_name: &str, args: &serde_json::Value) -> bool {
     // First check tool name
-    if !super::glob_match(&rule.tool_name, tool_name) {
+    if !super::filter::glob_match(&rule.tool_name, tool_name) {
         return false;
     }
 
@@ -243,7 +243,7 @@ pub fn matches_rule(rule: &PermissionRule, tool_name: &str, args: &serde_json::V
         Some(RuleContent::Glob { key, pattern }) => args
             .get(key)
             .and_then(|v| v.as_str())
-            .is_some_and(|s| super::glob_match(pattern, s)),
+            .is_some_and(|s| super::filter::glob_match(pattern, s)),
         Some(RuleContent::Exact { key, value }) => args
             .get(key)
             .and_then(|v| v.as_str())
