@@ -8,6 +8,28 @@ const CONFIG_DIR: &str = ".crab";
 /// Settings file name within config directories.
 const SETTINGS_FILE: &str = "settings.json";
 
+/// Anti-tracking and anti-upgrade configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AntiTrackConfig {
+    /// Disable version check requests.
+    pub disable_version_check: bool,
+    /// Disable telemetry/analytics.
+    pub disable_telemetry: bool,
+    /// Disable update checks.
+    pub disable_update_check: bool,
+    /// Block known tracking domains.
+    pub block_tracking_domains: bool,
+    /// Use fake version identifiers.
+    pub spoof_version: bool,
+    /// Spoofed version string.
+    pub spoofed_version: String,
+    /// Disable crash reporting.
+    pub disable_crash_reports: bool,
+    /// Disable feedback submission.
+    pub disable_feedback: bool,
+}
+
 /// Application settings, loaded from `~/.crab/settings.json` (global)
 /// and `.crab/settings.json` (project-level).
 ///
@@ -31,6 +53,8 @@ pub struct Settings {
     /// Environment variables to inject into the process.
     /// CC-compatible: `{"env": {"ANTHROPIC_API_KEY": "sk-ant-xxx"}}`.
     pub env: Option<HashMap<String, String>>,
+    /// Anti-tracking and anti-upgrade settings.
+    pub anti_track: Option<AntiTrackConfig>,
 }
 
 /// Configuration for git context injection into system prompts.
@@ -80,6 +104,7 @@ impl Settings {
                 (Some(base), None) => Some(base.clone()),
                 (None, None) => None,
             },
+            anti_track: other.anti_track.clone().or(self.anti_track),
         }
     }
 }
