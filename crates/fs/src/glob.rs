@@ -111,7 +111,7 @@ pub fn find_files(opts: &GlobOptions<'_>) -> crab_common::Result<GlobResult> {
     }
 
     // 4. Sort by mtime descending (most recent first)
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
     // 5. Truncate at limit
     let truncated = opts.limit > 0 && entries.len() > opts.limit;

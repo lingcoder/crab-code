@@ -80,19 +80,40 @@ impl CaBundle {
 /// Returns `Err` only on invalid PEM data in a file that was otherwise
 /// readable. Missing files / missing env vars are not errors.
 pub fn load_ca_bundle(extra_paths: &[PathBuf]) -> crate::Result<CaBundle> {
+    let env = EnvSources {
+        crab_bundle: std::env::var(CRAB_CA_BUNDLE_ENV).ok(),
+        ssl_cert_file: std::env::var(SSL_CERT_FILE_ENV).ok(),
+        ssl_cert_dir: std::env::var(SSL_CERT_DIR_ENV).ok(),
+    };
+    load_ca_bundle_with_env(&env, extra_paths)
+}
+
+/// Env-var inputs to the CA loader.
+///
+/// Split out from [`load_ca_bundle`] so tests can inject a hermetic
+/// environment instead of reading the process's real env (which on CI
+/// runners includes system-wide cert bundles that pollute assertions).
+#[derive(Debug, Default, Clone)]
+struct EnvSources {
+    crab_bundle: Option<String>,
+    ssl_cert_file: Option<String>,
+    ssl_cert_dir: Option<String>,
+}
+
+fn load_ca_bundle_with_env(env: &EnvSources, extra_paths: &[PathBuf]) -> crate::Result<CaBundle> {
     let mut bundle = CaBundle::default();
 
     // 1. CRAB_CA_BUNDLE (single file, takes priority)
-    if let Ok(path) = std::env::var(CRAB_CA_BUNDLE_ENV) {
-        try_load_file(&mut bundle, Path::new(&path));
+    if let Some(path) = env.crab_bundle.as_deref() {
+        try_load_file(&mut bundle, Path::new(path));
     }
     // 2. SSL_CERT_FILE
-    if let Ok(path) = std::env::var(SSL_CERT_FILE_ENV) {
-        try_load_file(&mut bundle, Path::new(&path));
+    if let Some(path) = env.ssl_cert_file.as_deref() {
+        try_load_file(&mut bundle, Path::new(path));
     }
     // 3. SSL_CERT_DIR
-    if let Ok(dir) = std::env::var(SSL_CERT_DIR_ENV) {
-        try_load_dir(&mut bundle, Path::new(&dir));
+    if let Some(dir) = env.ssl_cert_dir.as_deref() {
+        try_load_dir(&mut bundle, Path::new(dir));
     }
     // 4. Caller extras
     for path in extra_paths {
@@ -256,13 +277,19 @@ mod tests {
         );
     }
 
+    /// Hermetic load: no env vars, only explicit paths. Used by tests to
+    /// avoid picking up the CI runner's system cert bundle (e.g. Ubuntu
+    /// sets `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`, which
+    /// would add hundreds of certs and break `assert_eq!(b.len(), N)`).
+    fn load_hermetic(extra_paths: &[PathBuf]) -> CaBundle {
+        load_ca_bundle_with_env(&EnvSources::default(), extra_paths).unwrap()
+    }
+
     #[test]
     fn load_missing_env_returns_empty_bundle() {
-        // None of the env vars are set in this test; nothing loaded.
-        let b = load_ca_bundle(&[]).unwrap();
-        // May not be empty if the user's env already has SSL_CERT_FILE set,
-        // so check the weaker property: no-extra-paths load succeeds.
-        let _ = b;
+        let b = load_hermetic(&[]);
+        assert!(b.is_empty());
+        assert_eq!(b.len(), 0);
     }
 
     #[test]
@@ -272,7 +299,7 @@ mod tests {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(CERT_A.as_bytes()).unwrap();
 
-        let b = load_ca_bundle(std::slice::from_ref(&path)).unwrap();
+        let b = load_hermetic(std::slice::from_ref(&path));
         assert_eq!(b.len(), 1);
         assert_eq!(b.sources, vec![path]);
     }
@@ -284,15 +311,15 @@ mod tests {
         fs::write(tmp.path().join("b.crt"), CERT_B).unwrap();
         fs::write(tmp.path().join("readme.txt"), "ignored").unwrap();
 
-        let b = load_ca_bundle(std::slice::from_ref(&tmp.path().to_path_buf())).unwrap();
+        let b = load_hermetic(std::slice::from_ref(&tmp.path().to_path_buf()));
         assert_eq!(b.len(), 2);
         assert_eq!(b.sources.len(), 2);
     }
 
     #[test]
     fn load_extra_path_nonexistent_is_silent() {
-        let b = load_ca_bundle(&[PathBuf::from("/definitely/does/not/exist/bundle.pem")]).unwrap();
-        let _ = b;
+        let b = load_hermetic(&[PathBuf::from("/definitely/does/not/exist/bundle.pem")]);
+        assert!(b.is_empty());
     }
 
     #[test]
@@ -301,7 +328,7 @@ mod tests {
         let path = tmp.path().join("empty.pem");
         fs::write(&path, "just some text, no BEGIN CERTIFICATE").unwrap();
 
-        let b = load_ca_bundle(std::slice::from_ref(&path)).unwrap();
+        let b = load_hermetic(std::slice::from_ref(&path));
         // The file was readable but had no valid blocks; bundle stays empty.
         assert_eq!(b.len(), 0);
     }

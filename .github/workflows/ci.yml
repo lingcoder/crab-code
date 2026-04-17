@@ -8,6 +8,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
+  # Disable incremental compilation on CI: unused by fresh builds and
+  # wastes cache space. See https://matklad.github.io/2021/09/04/fast-rust-builds.html
+  CARGO_INCREMENTAL: 0
+  # Use git CLI for cargo fetches — more reliable on Windows than libgit2.
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  # Shrink debuginfo to speed compile + cache. Tests still run fine.
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
 
 jobs:
   check:
@@ -20,6 +28,14 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Share cache between check & test on ubuntu — same toolchain
+          # + Cargo.lock → same dependency graph, so this is safe and
+          # roughly halves cold-start time for the test-ubuntu job.
+          shared-key: "ubuntu-stable"
+          # Save cache even if a step fails. Keeps warm cache primed so
+          # the next run (after fix) can benefit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
@@ -39,6 +55,11 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Ubuntu shares the check job's cache (same shared-key); win/mac
+          # get their own per-OS cache (rust-cache keys on OS automatically).
+          shared-key: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-stable' || '' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@nextest
         continue-on-error: true
         id: nextest
