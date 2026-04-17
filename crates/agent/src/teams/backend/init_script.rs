@@ -3,7 +3,7 @@
 //! Produces a shell script string that configures environment variables and
 //! launches `crab --agent-mode` inside a tmux pane.
 
-use crate::swarm::teammate::TeammateConfig;
+use crate::teams::backend::teammate::TeammateConfig;
 
 /// Escape a string for safe embedding inside single-quoted shell strings.
 ///

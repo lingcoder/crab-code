@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::swarm::init_script::generate_init_script;
-use crate::swarm::pane_manager::PaneManager;
-use crate::swarm::teammate::{Teammate, TeammateConfig, TeammateState};
+use crate::teams::backend::init_script::generate_init_script;
+use crate::teams::backend::teammate::{Teammate, TeammateConfig, TeammateState};
+use crate::teams::backend::tmux::PaneManager;
 
 /// Trait for swarm execution backends.
 ///

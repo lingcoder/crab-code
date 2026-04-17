@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use tokio::sync::mpsc;
 
-use crate::message_bus::Envelope;
+use crate::teams::bus::Envelope;
 
 /// Capacity for each agent's inbox channel.
 const DEFAULT_INBOX_SIZE: usize = 128;
@@ -139,7 +139,7 @@ impl Default for MessageRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_bus::{AgentMessage, AgentStatus};
+    use crate::teams::bus::{AgentMessage, AgentStatus};
 
     #[test]
     fn router_new_is_empty() {

@@ -1,13 +1,12 @@
 //! M7b E2E integration tests.
 //!
-//! Tests the full integration of `AgentCoordinator`, `AgentSession`, `AgentTool`,
+//! Tests the full integration of `WorkerPool`, `AgentSession`, `AgentTool`,
 //! `TaskTools`, `SkillRegistry`, and Worker together.
 
 use std::sync::Arc;
 
 use crab_agent::{
-    AgentCoordinator, AgentSession, SessionConfig, TaskList, TaskStatus, WorkerResult,
-    shared_task_list,
+    AgentSession, SessionConfig, TaskList, TaskStatus, WorkerPool, WorkerResult, shared_task_list,
 };
 use crab_api::LlmBackend;
 use crab_core::message::{ContentBlock, Message, Role};
@@ -83,32 +82,32 @@ fn test_session_config() -> SessionConfig {
     }
 }
 
-// ─── AgentCoordinator multi-worker tests ───
+// ─── WorkerPool multi-worker tests ───
 
 #[test]
 fn coordinator_starts_empty() {
-    let coord = AgentCoordinator::new("main".into(), "Main".into());
+    let coord = WorkerPool::new("main".into(), "Main".into());
     assert_eq!(coord.running_count(), 0);
     assert!(coord.completed_results().is_empty());
 }
 
 #[tokio::test]
 async fn coordinator_collect_all_on_empty_returns_empty() {
-    let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+    let mut coord = WorkerPool::new("main".into(), "Main".into());
     let results = coord.collect_all().await;
     assert!(results.is_empty());
 }
 
 #[tokio::test]
 async fn coordinator_collect_completed_on_empty_returns_empty() {
-    let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+    let mut coord = WorkerPool::new("main".into(), "Main".into());
     let results = coord.collect_completed().await;
     assert!(results.is_empty());
 }
 
 #[test]
 fn coordinator_cancel_nonexistent_returns_false() {
-    let coord = AgentCoordinator::new("main".into(), "Main".into());
+    let coord = WorkerPool::new("main".into(), "Main".into());
     assert!(!coord.cancel_worker("w999"));
 }
 

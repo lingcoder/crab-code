@@ -1,15 +1,11 @@
-//! Multi-agent orchestration: [`AgentCoordinator`], [`AgentHandle`],
-//! and the internal `RunningWorker` bookkeeping for spawned sub-agents.
+//! Layer 1 worker pool — [`WorkerPool`] owns running sub-agent workers
+//! (`spawn_worker` / `collect_*` / `cancel_*`) plus a [`MessageRouter`]
+//! and an optional [`Team`] for communication-rule enforcement.
 //!
-//! **Naming honesty (Phase 1 marker)**: despite the name, `AgentCoordinator`
-//! is *not* CCB's Layer 2b Coordinator Mode — it has no tool ACL, no
-//! Coordinator-specific system prompt overlay, no env gating. It is
-//! actually a **worker pool**: `spawn_worker` / `collect_*` / `cancel_*` plus
-//! message routing. Phase 2 will move this body to `teams/worker_pool.rs`
-//! and rename the struct to `WorkerPool`; the Layer 2b Coordinator Mode
-//! implementation will then live in a new `coordinator/` module with
-//! `Coordinator { tool_acl, prompt_overlay }` on top of this pool.
-//! See `docs/architecture.md` § Multi-Agent Three-Layer Architecture.
+//! This is base infrastructure: Swarm (flat) and Coordinator Mode (star) both
+//! layer on top of the same pool. Coordinator Mode additionally applies a
+//! tool ACL + prompt overlay at session init — it does *not* subclass this
+//! struct. See `docs/architecture.md` § Multi-Agent Three-Layer Architecture.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,17 +19,17 @@ use tokio_util::sync::CancellationToken;
 
 use crab_engine::QueryConfig;
 
-use crate::message_bus::{AgentMessage, Envelope, MessageBus};
-use crate::message_router::MessageRouter;
-use crate::retry::{RetryDecision, RetryPolicy, RetryTracker};
-use crate::team::{Team, TeamMode};
-use crate::worker::{AgentWorker, WorkerConfig, WorkerResult};
+use crate::task_executor::local_agent::{AgentWorker, WorkerConfig, WorkerResult};
+use crate::teams::bus::{AgentMessage, Envelope, MessageBus};
+use crate::teams::mailbox::MessageRouter;
+use crate::teams::retry::{RetryDecision, RetryPolicy, RetryTracker};
+use crate::teams::roster::{Team, TeamMode};
 
 /// Multi-agent orchestrator. Manages the main agent and worker pool.
 ///
 /// The coordinator tracks running workers via `JoinHandle`s and provides
 /// methods to spawn, cancel, and collect worker results.
-pub struct AgentCoordinator {
+pub struct WorkerPool {
     pub main_agent: AgentHandle,
     pub workers: Vec<AgentHandle>,
     pub bus: mpsc::Sender<AgentMessage>,
@@ -64,7 +60,7 @@ pub struct AgentHandle {
     pub tx: mpsc::Sender<AgentMessage>,
 }
 
-impl AgentCoordinator {
+impl WorkerPool {
     /// Create a new coordinator with a message bus.
     pub fn new(main_id: String, main_name: String) -> Self {
         let bus = MessageBus::new(64);
@@ -310,7 +306,7 @@ mod tests {
 
     #[test]
     fn coordinator_creation() {
-        let coord = AgentCoordinator::new("main".into(), "Main Agent".into());
+        let coord = WorkerPool::new("main".into(), "Main Agent".into());
         assert_eq!(coord.main_agent.id, "main");
         assert_eq!(coord.main_agent.name, "Main Agent");
         assert!(coord.workers.is_empty());
@@ -320,7 +316,7 @@ mod tests {
 
     #[test]
     fn coordinator_add_worker() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         coord.add_worker("w1".into(), "Worker 1".into());
         coord.add_worker("w2".into(), "Worker 2".into());
         assert_eq!(coord.workers.len(), 2);
@@ -330,41 +326,41 @@ mod tests {
 
     #[test]
     fn coordinator_cancel_nonexistent_worker() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         assert!(!coord.cancel_worker("nonexistent"));
     }
 
     #[test]
     fn coordinator_cancel_all_empty() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         // Should not panic
         coord.cancel_all();
     }
 
     #[tokio::test]
     async fn coordinator_collect_nonexistent_worker() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let result = coord.collect_worker("nonexistent").await;
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn coordinator_collect_completed_empty() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let results = coord.collect_completed().await;
         assert!(results.is_empty());
     }
 
     #[tokio::test]
     async fn coordinator_collect_all_empty() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let results = coord.collect_all().await;
         assert!(results.is_empty());
     }
 
     #[test]
     fn coordinator_worker_id_increments() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         assert_eq!(coord.next_worker_id, 1);
     }
 
@@ -383,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_inject_and_collect_worker() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let cancel = CancellationToken::new();
 
         let handle = tokio::spawn(async { mock_worker_result("w1", true) });
@@ -408,7 +404,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_collect_worker_twice_returns_none() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let cancel = CancellationToken::new();
 
         let handle = tokio::spawn(async { mock_worker_result("w1", true) });
@@ -421,7 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_collect_all_multiple_workers() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         for i in 1..=3 {
             let id = format!("w{i}");
@@ -443,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_collect_completed_only_finished() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         // Worker that finishes immediately
         let cancel1 = CancellationToken::new();
@@ -479,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_cancel_running_worker() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
@@ -499,7 +495,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_cancel_all_workers() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         for i in 1..=3 {
             let id = format!("w{i}");
@@ -525,7 +521,7 @@ mod tests {
 
     #[test]
     fn coordinator_running_worker_ids() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let cancel = CancellationToken::new();
 
         let handle = tokio::runtime::Runtime::new()
@@ -540,7 +536,7 @@ mod tests {
 
     #[test]
     fn coordinator_worker_id_auto_increments_on_spawn_worker() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         assert_eq!(coord.next_worker_id, 1);
 
         // We can't call spawn_worker without a real backend/executor,
@@ -554,7 +550,7 @@ mod tests {
 
     #[test]
     fn coordinator_has_router() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         // Main agent should be registered in the router
         assert!(coord.router.is_registered("Main"));
         assert_eq!(coord.router.agent_count(), 1);
@@ -562,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_route_directed_message() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let mut worker_rx = coord.router.register("Worker1");
 
         let env = Envelope::new(
@@ -584,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_route_broadcast() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         let mut rx1 = coord.router.register("W1");
         let mut rx2 = coord.router.register("W2");
 
@@ -600,20 +596,20 @@ mod tests {
 
     #[test]
     fn coordinator_no_team_by_default() {
-        let coord = AgentCoordinator::new("main".into(), "Main".into());
+        let coord = WorkerPool::new("main".into(), "Main".into());
         assert!(coord.team.is_none());
         assert!(coord.team_mode().is_none());
     }
 
     #[test]
     fn coordinator_set_team() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         let mut team = Team::with_mode("dev".into(), TeamMode::PeerToPeer);
-        let mut alice = crate::team::TeamMember::new("a1", "Alice", "model");
+        let mut alice = crate::teams::roster::TeamMember::new("a1", "Alice", "model");
         alice.is_leader = true;
         team.add_member(alice);
-        team.add_member(crate::team::TeamMember::new("a2", "Bob", "model"));
+        team.add_member(crate::teams::roster::TeamMember::new("a2", "Bob", "model"));
 
         coord.set_team(team);
         assert_eq!(coord.team_mode(), Some(TeamMode::PeerToPeer));
@@ -621,14 +617,14 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_leader_worker_blocks_worker_to_worker() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         let mut team = Team::new("dev".into()); // LeaderWorker by default
-        let mut leader = crate::team::TeamMember::new("a1", "Leader", "model");
+        let mut leader = crate::teams::roster::TeamMember::new("a1", "Leader", "model");
         leader.is_leader = true;
         team.add_member(leader);
-        team.add_member(crate::team::TeamMember::new("a2", "W1", "model"));
-        team.add_member(crate::team::TeamMember::new("a3", "W2", "model"));
+        team.add_member(crate::teams::roster::TeamMember::new("a2", "W1", "model"));
+        team.add_member(crate::teams::roster::TeamMember::new("a3", "W2", "model"));
         coord.set_team(team);
 
         let _rx1 = coord.router.register("W1");
@@ -650,11 +646,11 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_peer_to_peer_allows_all() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         let mut team = Team::with_mode("dev".into(), TeamMode::PeerToPeer);
-        team.add_member(crate::team::TeamMember::new("a1", "A", "model"));
-        team.add_member(crate::team::TeamMember::new("a2", "B", "model"));
+        team.add_member(crate::teams::roster::TeamMember::new("a1", "A", "model"));
+        team.add_member(crate::teams::roster::TeamMember::new("a2", "B", "model"));
         coord.set_team(team);
 
         let _rx_a = coord.router.register("A");
@@ -673,8 +669,8 @@ mod tests {
 
     #[test]
     fn coordinator_set_retry_policy() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
-        coord.set_retry_policy(crate::retry::RetryPolicy::no_retry());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
+        coord.set_retry_policy(crate::teams::retry::RetryPolicy::no_retry());
 
         // First failure should give up immediately
         let decision = coord.on_worker_failure("t1");
@@ -683,7 +679,7 @@ mod tests {
 
     #[test]
     fn coordinator_on_worker_failure_retries() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
         // Default policy: 2 retries
 
         let decision = coord.on_worker_failure("t1");
@@ -699,7 +695,7 @@ mod tests {
 
     #[test]
     fn coordinator_success_clears_retry_state() {
-        let mut coord = AgentCoordinator::new("main".into(), "Main".into());
+        let mut coord = WorkerPool::new("main".into(), "Main".into());
 
         coord.on_worker_failure("t1");
         assert_eq!(coord.retry_tracker.attempts_for("t1"), 1);

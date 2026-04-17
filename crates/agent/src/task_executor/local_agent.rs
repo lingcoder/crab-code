@@ -312,7 +312,7 @@ fn extract_last_assistant_text(conversation: &Conversation) -> Option<String> {
 pub struct Worker {
     pub id: String,
     pub name: String,
-    pub tx: mpsc::Sender<crate::message_bus::AgentMessage>,
+    pub tx: mpsc::Sender<crate::teams::bus::AgentMessage>,
 }
 
 impl Worker {
@@ -320,7 +320,7 @@ impl Worker {
     pub fn new(
         id: String,
         name: String,
-        tx: mpsc::Sender<crate::message_bus::AgentMessage>,
+        tx: mpsc::Sender<crate::teams::bus::AgentMessage>,
     ) -> Self {
         Self { id, name, tx }
     }

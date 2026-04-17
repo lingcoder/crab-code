@@ -20,7 +20,8 @@ use tokio_util::sync::CancellationToken;
 
 use crab_engine::{QueryConfig, query_loop};
 
-use super::manager::AgentCoordinator;
+use crate::teams::WorkerPool;
+
 use super::session_config::SessionConfig;
 
 /// A running agent session with all the pieces wired together.
@@ -215,7 +216,7 @@ impl AgentSession {
     /// and spawns a worker via the provided coordinator. Returns the worker ID.
     pub fn handle_spawn_request(
         &self,
-        coordinator: &mut AgentCoordinator,
+        coordinator: &mut WorkerPool,
         spawn_request: &serde_json::Value,
     ) -> Option<String> {
         if spawn_request.get("action")?.as_str()? != "spawn_agent" {
