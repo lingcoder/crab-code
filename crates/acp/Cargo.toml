@@ -1,0 +1,24 @@
+[package]
+name = "crab-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent Client Protocol (ACP) — crab as an external agent for Zed / Neovim / other ACP-speaking editors"
+
+[dependencies]
+crab-common.workspace = true
+crab-core.workspace = true
+# protocol / serde
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+# async + io
+tokio.workspace = true
+# diagnostics
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

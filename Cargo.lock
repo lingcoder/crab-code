@@ -665,6 +665,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crab-acp"
+version = "0.1.0"
+dependencies = [
+ "crab-common",
+ "crab-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "crab-agent"
 version = "0.1.0"
 dependencies = [
