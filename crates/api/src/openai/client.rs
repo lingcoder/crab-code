@@ -15,10 +15,19 @@ pub struct OpenAiClient {
     http: reqwest::Client,
     base_url: String,
     api_key: Option<String>,
+    anti_track: Option<crab_config::AntiTrackConfig>,
 }
 
 impl OpenAiClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
+        Self::new_with_anti_track(base_url, api_key, None)
+    }
+
+    pub fn new_with_anti_track(
+        base_url: &str,
+        api_key: Option<String>,
+        anti_track: Option<crab_config::AntiTrackConfig>,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .pool_max_idle_per_host(4)
@@ -29,6 +38,22 @@ impl OpenAiClient {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
+            anti_track,
+        }
+    }
+
+    /// Apply anti-track sanitization to a request before sending.
+    fn apply_anti_track(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref config) = self.anti_track {
+            match builder.build() {
+                Ok(mut request) => {
+                    crate::anti_track::sanitize_request(&mut request, config);
+                    self.http.request(request.method().clone(), request.url().clone()).headers(request.headers().clone()).body(request.body().cloned().unwrap_or_default())
+                }
+                Err(_) => builder,
+            }
+        } else {
+            builder
         }
     }
 
@@ -60,7 +85,7 @@ impl OpenAiClient {
         // We need to use stream::once + flatten to handle the async request
         // setup followed by the streaming response.
         stream::once(async move {
-            let resp = self.build_request(&chat_req).send().await.map_err(|e| {
+            let resp = self.apply_anti_track(self.build_request(&chat_req)).send().await.map_err(|e| {
                 if e.is_timeout() {
                     ApiError::Timeout
                 } else {
@@ -93,7 +118,7 @@ impl OpenAiClient {
     pub async fn send(&self, req: MessageRequest<'_>) -> Result<MessageResponse> {
         let chat_req = convert::to_chat_completion_request(&req, false);
 
-        let resp = self.build_request(&chat_req).send().await.map_err(|e| {
+        let resp = self.apply_anti_track(self.build_request(&chat_req)).send().await.map_err(|e| {
             if e.is_timeout() {
                 ApiError::Timeout
             } else {
@@ -130,6 +155,7 @@ impl OpenAiClient {
             builder = builder.bearer_auth(key);
         }
 
+        let builder = self.apply_anti_track(builder);
         let response = builder.send().await.map_err(|e| {
             if e.is_timeout() {
                 crate::error::ApiError::Timeout
@@ -184,6 +210,7 @@ impl OpenAiClient {
             builder = builder.bearer_auth(key);
         }
 
+        let builder = self.apply_anti_track(builder);
         match builder.send().await {
             Ok(resp) => {
                 let status = resp.status();
