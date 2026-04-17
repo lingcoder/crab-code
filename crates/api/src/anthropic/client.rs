@@ -16,10 +16,19 @@ pub struct AnthropicClient {
     http: reqwest::Client,
     base_url: String,
     auth: Box<dyn crab_auth::AuthProvider>,
+    anti_track: Option<crab_config::AntiTrackConfig>,
 }
 
 impl AnthropicClient {
     pub fn new(base_url: &str, auth: Box<dyn crab_auth::AuthProvider>) -> Self {
+        Self::new_with_anti_track(base_url, auth, None)
+    }
+
+    pub fn new_with_anti_track(
+        base_url: &str,
+        auth: Box<dyn crab_auth::AuthProvider>,
+        anti_track: Option<crab_config::AntiTrackConfig>,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .pool_max_idle_per_host(4)
@@ -30,6 +39,7 @@ impl AnthropicClient {
             http,
             base_url: base_url.to_string(),
             auth,
+            anti_track,
         }
     }
 
@@ -57,6 +67,21 @@ impl AnthropicClient {
         Ok(builder)
     }
 
+    /// Apply anti-track sanitization to a request before sending.
+    fn apply_anti_track(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref config) = self.anti_track {
+            match builder.build() {
+                Ok(mut request) => {
+                    crate::anti_track::sanitize_request(&mut request, config);
+                    self.http.request(request.method().clone(), request.url().clone()).headers(request.headers().clone()).body(request.body().cloned().unwrap_or_default())
+                }
+                Err(_) => builder,
+            }
+        } else {
+            builder
+        }
+    }
+
     /// Streaming call — POST `/v1/messages` with `stream: true`.
     ///
     /// Returns a stream of `StreamEvent` mapped from Anthropic SSE events.
@@ -70,6 +95,7 @@ impl AnthropicClient {
         futures::stream::once(async move {
             let body = serde_json::to_vec(&api_req).map_err(ApiError::Json)?;
             let request = self.build_request(&body).await?;
+            let request = self.apply_anti_track(request);
             let response = request.send().await.map_err(ApiError::Http)?;
 
             let status = response.status();
@@ -115,6 +141,7 @@ impl AnthropicClient {
         let api_req = convert::to_anthropic_request(&req, false);
         let body = serde_json::to_vec(&api_req).map_err(ApiError::Json)?;
         let request = self.build_request(&body).await?;
+        let request = self.apply_anti_track(request);
         let response = request.send().await.map_err(ApiError::Http)?;
 
         let status = response.status();
@@ -162,6 +189,7 @@ impl AnthropicClient {
             }
         }
 
+        let builder = self.apply_anti_track(builder);
         let response = builder.send().await.map_err(ApiError::Http)?;
         let status = response.status();
         if !status.is_success() {
@@ -197,7 +225,7 @@ impl AnthropicClient {
         Ok(models)
     }
 
-    /// Health check — verify the API is reachable and the key is valid.
+    /// Health check — verify the API is reachable and the API key is valid.
     ///
     /// Sends a minimal request to validate connectivity and authentication.
     pub async fn health_check(&self) -> crate::capabilities::HealthStatus {
@@ -232,6 +260,7 @@ impl AnthropicClient {
             }
         }
 
+        let builder = self.apply_anti_track(builder);
         match builder.send().await {
             Ok(resp) => {
                 let status = resp.status();
