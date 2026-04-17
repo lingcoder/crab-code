@@ -11,6 +11,7 @@
 //! - [`types`] — `Skill`, `SkillTrigger`, `SkillContext`, `SkillSource`
 //! - [`frontmatter`] — Parse `.md` files with YAML frontmatter into skills
 //! - [`registry`] — `SkillRegistry` for discovery, registration, and lookup
+//! - [`matcher`] — Fuzzy matcher for skill names / slash commands (nucleo-matcher)
 //! - [`builder`] — Fluent API for constructing skills programmatically
 //! - [`bundled`] — Built-in skills shipped with crab-code
 //!
@@ -21,6 +22,7 @@
 pub mod builder;
 pub mod bundled;
 pub mod frontmatter;
+pub mod matcher;
 pub mod registry;
 pub mod types;
 

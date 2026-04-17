@@ -1003,6 +1003,7 @@ name = "crab-skill"
 version = "0.1.0"
 dependencies = [
  "crab-common",
+ "nucleo-matcher",
  "regex",
  "serde",
  "serde_json",
