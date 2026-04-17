@@ -11,44 +11,7 @@
 
 use std::sync::LazyLock;
 
-/// Anti-tracking configuration.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AntiTrackConfig {
-    /// Disable version check requests.
-    pub disable_version_check: bool,
-    /// Disable telemetry/analytics.
-    pub disable_telemetry: bool,
-    /// Disable update checks.
-    pub disable_update_check: bool,
-    /// Block known tracking domains.
-    pub block_tracking_domains: bool,
-    /// Use fake version identifiers.
-    pub spoof_version: bool,
-    /// Spoofed version string.
-    pub spoofed_version: String,
-    /// Disable crash reporting.
-    pub disable_crash_reports: bool,
-    /// Disable feedback submission.
-    pub disable_feedback: bool,
-}
-
-impl AntiTrackConfig {
-    /// Create a new config with all protections enabled.
-    #[must_use]
-    pub fn enabled() -> Self {
-        Self {
-            disable_version_check: true,
-            disable_telemetry: true,
-            disable_update_check: true,
-            block_tracking_domains: true,
-            spoof_version: true,
-            spoofed_version: "1.0.0".to_string(),
-            disable_crash_reports: true,
-            disable_feedback: true,
-        }
-    }
-}
+pub use crab_config::AntiTrackConfig;
 
 /// Domains known to be used for tracking/telemetry.
 pub static TRACKING_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
@@ -147,14 +110,20 @@ mod tests {
 
     #[test]
     fn test_block_tracking_domain() {
-        let config = AntiTrackConfig::enabled();
+        let config = AntiTrackConfig {
+            block_tracking_domains: true,
+            ..Default::default()
+        };
         assert!(should_block_url("https://telemetry.anthropic.com/v1/track", &config));
         assert!(!should_block_url("https://api.anthropic.com/v1/messages", &config));
     }
 
     #[test]
     fn test_sanitize_request() {
-        let config = AntiTrackConfig::enabled();
+        let config = AntiTrackConfig {
+            spoof_version: false,
+            ..Default::default()
+        };
         let mut request = reqwest::Request::new(
             reqwest::Method::GET,
             "https://api.anthropic.com/v1/models".parse().unwrap(),
