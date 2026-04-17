@@ -390,7 +390,7 @@ fn cmd_history(_args: &str, ctx: &SlashCommandContext<'_>) -> SlashCommandResult
         })
         .collect();
 
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
     if entries.is_empty() {
         return SlashCommandResult::Message("No sessions found.".into());
