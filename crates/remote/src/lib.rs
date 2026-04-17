@@ -26,7 +26,9 @@
 //! crate speaks `crab-proto` (our own, session-focused).
 
 pub mod auth;
+pub mod client;
 pub mod protocol;
 pub mod server;
 
+pub use client::{ClientConfig, ClientError, RemoteClient};
 pub use protocol::PROTOCOL_VERSION;
