@@ -38,6 +38,13 @@ impl Conversation {
         self.inner.push(msg);
     }
 
+    /// Drop every message from the conversation while keeping the system
+    /// prompt, id, and context window intact. Cumulative usage is preserved
+    /// so `/clear` does not reset the cost accumulator.
+    pub fn clear(&mut self) {
+        self.inner = CoreConversation::new();
+    }
+
     /// Push a user text message.
     pub fn push_user(&mut self, text: impl Into<String>) {
         self.inner.push(Message::user(text));

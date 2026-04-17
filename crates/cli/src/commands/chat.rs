@@ -230,18 +230,15 @@ pub async fn run_chat(config: ChatConfig) -> anyhow::Result<()> {
     #[cfg(not(feature = "tui"))]
     {
         use crab_agent::AgentSession;
+        use std::io::{BufRead, Write};
 
         let mut session = AgentSession::new(session_config, backend, registry);
         // In non-TUI mode, use a simple stdin-based permission handler.
         // The actual handler is defined in main.rs — here we just start the REPL.
         eprintln!("Interactive mode (no TUI). Type /exit or Ctrl+D to quit.\n");
-        eprintln!(
-            "Provider: {}, Model: {}, Permissions: {}",
-            provider, model_id, permission_mode
-        );
+        eprintln!("Provider: {provider}, Model: {model_id}, Permissions: {permission_mode}");
 
         // Minimal REPL loop
-        use std::io::{BufRead, Write};
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout();
 

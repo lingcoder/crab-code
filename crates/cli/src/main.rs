@@ -964,6 +964,8 @@ async fn run_repl(
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
+    let slash_registry = crab_agent::SlashCommandRegistry::new();
+
     loop {
         // Print prompt
         print!("crab> ");
@@ -985,34 +987,156 @@ async fn run_repl(
             continue;
         }
 
-        if input == "/exit" || input == "/quit" {
-            eprintln!("Goodbye!");
-            break;
-        }
-
-        // Resolve /command to skill content
-        let effective_input = resolve_slash_command(input, skill_registry);
-
-        let event_rx = take_event_rx(session);
-        let registry = session.executor.registry_arc();
-        let printer = tokio::spawn(print_events(event_rx, OutputFormat::Text, registry));
-
-        match session.handle_user_input(&effective_input).await {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("\n[error] {e}");
+        // Intercept slash commands before they hit the LLM. Only treat input
+        // starting with `/<letter>` as a slash command so real paths like
+        // `/tmp/foo` still flow through as prompts.
+        if let Some(cmd_rest) = input.strip_prefix('/')
+            && cmd_rest
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            match dispatch_slash_command(session, skill_registry, &slash_registry, cmd_rest) {
+                SlashOutcome::Continue => continue,
+                SlashOutcome::Exit => break,
+                SlashOutcome::FallThrough(expanded) => {
+                    run_turn(session, &expanded).await;
+                    continue;
+                }
             }
         }
 
-        // Replace tx so the printer's rx sees all senders dropped and finishes.
-        let (fresh_tx, fresh_rx) = mpsc::channel::<Event>(1);
-        session.event_tx = fresh_tx;
-        drop(fresh_rx);
-        let _ = printer.await;
-        println!();
+        run_turn(session, input).await;
     }
 
     Ok(())
+}
+
+/// Outcome of a slash-command dispatch that controls the REPL loop.
+#[cfg(not(feature = "tui"))]
+enum SlashOutcome {
+    /// Stay in the loop (message was printed, action handled).
+    Continue,
+    /// Exit the REPL.
+    Exit,
+    /// Expand the input (e.g. a user-defined skill) and feed it back as a turn.
+    FallThrough(String),
+}
+
+/// Parse and execute a slash command. Returns the loop control outcome.
+///
+/// `cmd_rest` is the input with the leading `/` already stripped.
+#[cfg(not(feature = "tui"))]
+fn dispatch_slash_command(
+    session: &mut AgentSession,
+    skill_registry: &crab_skill::SkillRegistry,
+    slash_registry: &crab_agent::SlashCommandRegistry,
+    cmd_rest: &str,
+) -> SlashOutcome {
+    let (name, args) = cmd_rest
+        .split_once(char::is_whitespace)
+        .map_or((cmd_rest, ""), |(n, a)| (n, a.trim()));
+
+    // Built-in shortcut: /exit and /quit terminate the REPL even before the
+    // registry is consulted (cmd_exit returns SlashAction::Exit, same effect,
+    // but this keeps REPL termination independent of registry state).
+    if matches!(name, "exit" | "quit") {
+        eprintln!("Goodbye!");
+        return SlashOutcome::Exit;
+    }
+
+    // Snapshot session fields before executing (execute borrows session
+    // through the context, but we also read session state below).
+    let ctx = crab_agent::SlashCommandContext {
+        model: &session.config.model,
+        session_id: &session.conversation.id,
+        working_dir: &session.tool_ctx.working_dir,
+        permission_mode: session.tool_ctx.permission_mode,
+        cost: &session.cost,
+        estimated_tokens: 0,
+        message_count: session.conversation.len(),
+        memory_dir: session
+            .memory_store
+            .as_ref()
+            .map(|_| std::path::Path::new(".crab/memory")),
+    };
+
+    let result = slash_registry.execute(name, args, &ctx);
+
+    match result {
+        Some(crab_agent::SlashCommandResult::Message(msg)) => {
+            println!("{msg}");
+            SlashOutcome::Continue
+        }
+        Some(crab_agent::SlashCommandResult::Action(action)) => {
+            handle_slash_action(session, action)
+        }
+        Some(crab_agent::SlashCommandResult::Silent) => SlashOutcome::Continue,
+        None => {
+            // Unknown to our registry — fall back to skill expansion so
+            // user-defined `/my-skill` style commands still resolve.
+            let expanded = resolve_slash_command(&format!("/{cmd_rest}"), skill_registry);
+            if expanded == format!("/{cmd_rest}") {
+                eprintln!("Unknown command: /{name}. Try /help.");
+                SlashOutcome::Continue
+            } else {
+                SlashOutcome::FallThrough(expanded)
+            }
+        }
+    }
+}
+
+/// Apply a [`SlashAction`](crab_agent::SlashAction) to the running session.
+#[cfg(not(feature = "tui"))]
+fn handle_slash_action(
+    session: &mut AgentSession,
+    action: crab_agent::SlashAction,
+) -> SlashOutcome {
+    use crab_agent::SlashAction;
+
+    match action {
+        SlashAction::Exit => {
+            eprintln!("Goodbye!");
+            SlashOutcome::Exit
+        }
+        SlashAction::Clear => {
+            session.conversation.clear();
+            println!("[info] Conversation cleared. System prompt and cost accumulator retained.");
+            SlashOutcome::Continue
+        }
+        SlashAction::Compact => {
+            // Wired to summarizer in a follow-up commit.
+            println!("[info] /compact is not yet wired to the summarizer.");
+            SlashOutcome::Continue
+        }
+        other => {
+            // SwitchModel / Resume / Export / Init / TogglePlanMode / SetEffort /
+            // ToggleFast / AddDir / CopyLast all need plumbing beyond REPL
+            // state; accept the command but inform the user the runtime
+            // effect is pending.
+            println!("[info] Slash action {other:?} is not yet wired in the REPL.");
+            SlashOutcome::Continue
+        }
+    }
+}
+
+/// Run one turn of the agent loop for a plain user prompt.
+#[cfg(not(feature = "tui"))]
+async fn run_turn(session: &mut AgentSession, input: &str) {
+    let event_rx = take_event_rx(session);
+    let registry = session.executor.registry_arc();
+    let printer = tokio::spawn(print_events(event_rx, OutputFormat::Text, registry));
+
+    if let Err(e) = session.handle_user_input(input).await {
+        eprintln!("\n[error] {e}");
+    }
+
+    // Replace tx so the printer's rx sees all senders dropped and finishes.
+    let (fresh_tx, fresh_rx) = mpsc::channel::<Event>(1);
+    session.event_tx = fresh_tx;
+    drop(fresh_rx);
+    let _ = printer.await;
+    println!();
 }
 
 /// Swap the session's `event_rx` with a fresh one, returning the old receiver.
