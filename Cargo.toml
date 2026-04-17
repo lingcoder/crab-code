@@ -164,6 +164,10 @@ unsafe_code = "forbid"
 # Keep in sync with CI (RUSTFLAGS=-Dwarnings)
 unused_mut = "deny"
 unused_comparisons = "deny"
+# `workspace.lints.clippy.duration_suboptimal_units` below targets a clippy
+# lint that only exists on rust ≥1.95. The local toolchain is 1.94 and emits
+# `unknown_lints` for it; we allow that so both toolchains build cleanly.
+unknown_lints = "allow"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

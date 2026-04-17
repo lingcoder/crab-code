@@ -153,7 +153,7 @@ mod tests {
             method::SESSION_CANCEL,
             method::SESSION_EVENT,
         ];
-        let mut sorted: Vec<_> = all.iter().copied().collect();
+        let mut sorted: Vec<_> = all.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), all.len(), "method names must be distinct");

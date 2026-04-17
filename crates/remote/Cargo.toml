@@ -17,8 +17,10 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 # server side
-axum = { workspace = true, optional = true }
+axum = { workspace = true }
+futures.workspace = true
 tokio-tungstenite.workspace = true
+tokio-util.workspace = true
 jsonwebtoken.workspace = true
 # client side
 reqwest.workspace = true
@@ -28,11 +30,16 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [features]
-# Server side is on by default (multi-entry-point architecture: web/app/desktop
-# all attach via server). `rest-api` stays optional because axum HTTP routes are
-# only needed by the REST companion API, not the core WS session-attach flow.
 default = []
-rest-api = ["dep:axum"]
+
+[dev-dependencies]
+# Integration tests under `tests/` already transitively get the above
+# crates via the main `[dependencies]` block, but listing them as
+# dev-dependencies makes the intent explicit and survives a future
+# tightening of the main deps.
+tokio-tungstenite.workspace = true
+futures.workspace = true
+tokio-util.workspace = true
 
 [lints]
 workspace = true
