@@ -117,6 +117,7 @@ nucleo-matcher = "0.3"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
 agent-client-protocol = "0.10.4"
+async-trait = "0.1"
 # ─── Phase 7-auth：MCP OAuth 打开浏览器 + URL 编码 ───
 webbrowser = "1"
 urlencoding = "2"

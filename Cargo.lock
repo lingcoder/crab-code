@@ -814,9 +814,12 @@ dependencies = [
 name = "crab-cli"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
+ "async-trait",
  "clap",
  "clap_complete",
+ "crab-acp",
  "crab-agent",
  "crab-api",
  "crab-auth",
@@ -842,6 +845,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

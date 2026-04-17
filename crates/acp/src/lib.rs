@@ -22,7 +22,7 @@
 
 pub mod server;
 
-pub use server::{AcpServeError, AcpServer};
+pub use server::{AcpServeError, AcpServer, NotificationRx, NotificationTx, notification_channel};
 
 /// Re-export of the upstream [`agent_client_protocol`] crate so
 /// consumers can implement the [`Agent`] trait without adding the SDK

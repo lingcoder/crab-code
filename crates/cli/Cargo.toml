@@ -26,6 +26,7 @@ crab-agent.workspace = true
 crab-plugin.workspace = true
 crab-skill.workspace = true
 crab-telemetry.workspace = true
+crab-acp.workspace = true
 crab-tui = { workspace = true, optional = true }
 clap.workspace = true
 clap_complete.workspace = true
@@ -39,6 +40,10 @@ jsonc-parser.workspace = true
 serde.workspace = true
 semver.workspace = true
 reqwest.workspace = true
+# ACP mode uses the upstream SDK's Agent trait via async-trait macro.
+agent-client-protocol.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

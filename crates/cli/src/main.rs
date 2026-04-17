@@ -1,3 +1,4 @@
+mod acp_mode;
 #[allow(dead_code, clippy::doc_markdown)]
 mod commands;
 #[allow(
@@ -65,6 +66,13 @@ struct Cli {
     /// Skip ALL permission checks (dangerous!)
     #[arg(long)]
     dangerously_skip_permissions: bool,
+
+    /// Run as an ACP (Agent Client Protocol) agent over stdio. The
+    /// editor (Zed, Neovim, …) spawns crab as a child process and
+    /// drives it via JSON-RPC; all other flags are ignored in this
+    /// mode. See <https://agentclientprotocol.com>.
+    #[arg(long)]
+    acp: bool,
 
     /// Output format: text (human-readable), json (single JSON result),
     /// stream-json (NDJSON real-time stream).
@@ -341,6 +349,17 @@ impl Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // ACP mode: bypass all interactive / print-mode plumbing and run
+    // as a JSON-RPC stdio child process for the spawning editor. All
+    // other CLI flags are ignored. `flavor = "current_thread"` because
+    // the upstream SDK requires a LocalSet-compatible runtime.
+    if cli.acp {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        return rt.block_on(acp_mode::run());
+    }
 
     // Handle subcommands
     if let Some(command) = &cli.command {
