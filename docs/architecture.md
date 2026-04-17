@@ -657,10 +657,10 @@ crab-code/
 
 > **Intra-crate expansions in v2.3** (not shown above):
 > - `crates/agent/src/proactive/` (4 files) — replaces placeholder `prompt_suggestion.rs`
-> - `crates/tui/src/components/vim/` (7 files)
+> - `crates/tui/src/vim/` (6 files: mode / motion / operator / register / text_object / transition) — sibling of `keybindings`/`overlay`/`theme`/`traits`, NOT under `components/`. Vim is a key-handling state machine, not a visual widget. Matches CCB's `src/vim/` top-level layout.
 > - `crates/tui/src/components/buddy/` (expanded 4 → 7 files)
 > - `crates/tui/src/components/{bridge_status,sandbox_*,remote_session}.rs`
-> - `crates/cli/src/deep_link/` (5 files) + `crates/cli/src/installer/` (6 files)
+> - `crates/cli/src/deep_link.rs` (single file, 229 LOC) + `crates/cli/src/installer.rs` (single file, 201 LOC) — kept monolithic; sub-dir split deferred until real use exposes natural split points (platform-specific protocol registrars, per-manager adapters).
 > - `crates/tools/src/builtin/computer_use/` (expanded 4 → 10 files + platform subdir)
 > - `crates/core/src/{bridge,remote,sandbox,proactive,query}.rs` — 5 new shared type modules
 
@@ -2979,7 +2979,7 @@ impl StreamingToolExecutor {
 CC uses React/Ink to render the terminal UI; Crab uses ratatui + crossterm to achieve equivalent experience. Control flow between tui and other Layer 3 crates (agent / session / bridge / engine) follows Rule 6 (§5.3): state is consumed via `core::Event` broadcasts. Read-only access to `session::Conversation` and cost accumulators is allowed.
 
 **v2.3 additions**:
-- `components/vim/` — new 7-file module (mode / motions / operators / text_objects / transitions / register)
+- `vim/` (top-level, NOT under `components/`) — extended from 4 → 6 files (mode / motion / operator / register / text_object / transition). Vim is a key-handling state machine, so it sits alongside `keybindings`/`overlay`/`theme`/`traits` rather than among visual widgets. Aligns with CCB's `src/vim/` top-level layout.
 - `components/buddy/` — expanded from 4 to 7 files (+ companion / prompt / render)
 - `components/bridge_status.rs` — subscribes to `core::Event::BridgeStatusChanged`
 - `components/sandbox_*.rs` — tabs mirroring CCB SandboxSettings / ConfigTab / DoctorSection
@@ -3020,11 +3020,14 @@ src/
 │   ├── status_bar.rs       // Enhanced status bar (mode/provider/token/latency)
 │   └── tool_output.rs      // Collapsible tool output display (expandable/collapsible)
 │
-├── vim/                    // Vim mode
-│   ├── mod.rs
-│   ├── motion.rs           // hjkl, w/b/e, 0/$, gg/G
-│   ├── operator.rs         // d/c/y + motion
-│   └── mode.rs             // Normal/Insert/Visual
+├── vim/                    // Vim mode — top-level, sibling of keybindings/theme/overlay
+│   ├── mod.rs              // VimHandler wrapping InputBox key events
+│   ├── mode.rs             // Normal/Insert/Visual/Command
+│   ├── motion.rs           // hjkl, w/b/e, 0/$, gg/G, f/t
+│   ├── operator.rs         // d/c/y + motion composition
+│   ├── register.rs         // Unnamed/named/system-clipboard registers (v2.3 stub)
+│   ├── text_object.rs      // iw/aw/i"/a(/ip (v2.3 stub)
+│   └── transition.rs       // State transition table (v2.3 stub)
 │
 └── theme.rs                // Color theme (dark/light/solarized/customizable)
 ```
