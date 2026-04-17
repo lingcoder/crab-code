@@ -4,7 +4,7 @@
 //! Includes command allow/deny lists, dangerous-pattern detection with detailed
 //! explanations, sandbox policy generation, and an audit log for all executed commands.
 
-use crab_process::sandbox::{PathAccess, PathRule, SandboxPolicy};
+use crab_sandbox::{PathAccess, PathRule, SandboxPolicy};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

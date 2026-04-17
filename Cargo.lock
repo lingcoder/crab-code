@@ -1032,7 +1032,9 @@ dependencies = [
  "landlock",
  "serde",
  "serde_json",
+ "sysinfo",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 
@@ -1091,6 +1093,7 @@ dependencies = [
  "crab-fs",
  "crab-mcp",
  "crab-process",
+ "crab-sandbox",
  "globset",
  "jsonschema",
  "pdf-extract",

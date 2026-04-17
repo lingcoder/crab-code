@@ -13,6 +13,7 @@ crab-core.workspace = true
 crab-config.workspace = true
 crab-fs.workspace = true
 crab-process.workspace = true
+crab-sandbox.workspace = true
 crab-mcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true

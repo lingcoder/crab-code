@@ -5,16 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Process sandbox — trait + platform backends (seatbelt / landlock / wsl / noop)"
-
-[features]
-default = ["noop", "auto"]
-auto = []
-noop = []
-seatbelt = []
-landlock = ["dep:landlock"]
-wsl = []
-all = ["noop", "seatbelt", "landlock", "wsl"]
+description = "Process sandbox — trait + platform backends (landlock / Windows Job Object / noop)"
 
 [dependencies]
 crab-common.workspace = true
@@ -23,9 +14,16 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# tokio for std process Command + async tests on every backend
+tokio.workspace = true
+# sysinfo only needed by the Linux landlock backend for kernel-version sniff;
+# small enough that a target-cfg gate isn't worth the Cargo.toml complexity.
+sysinfo.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-landlock = { workspace = true, optional = true }
+# Landlock bindings only compile on Linux. No feature gate needed —
+# `cfg(target_os = "linux")` keeps it out of Windows / macOS builds.
+landlock.workspace = true
 
 [lints]
 workspace = true

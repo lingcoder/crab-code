@@ -348,8 +348,7 @@ crab-code/
 │   │       ├── spawn.rs               # Subprocess launching, environment inheritance
 │   │       ├── pty.rs                 # Pseudo-terminal (feature = "pty")
 │   │       ├── tree.rs                # Process tree kill (sysinfo)
-│   │       ├── signal.rs              # Signal handling, graceful shutdown
-│   │       └── sandbox.rs             # Sandbox policy (feature = "sandbox")
+│   │       └── signal.rs              # Signal handling, graceful shutdown
 │   │
 │   ├── tools/                         # crab-tools: tool system
 │   │   ├── Cargo.toml
@@ -1956,8 +1955,8 @@ src/
 ├── spawn.rs              // Subprocess launching, environment inheritance
 ├── pty.rs                // Pseudo-terminal allocation (feature = "pty")
 ├── tree.rs               // Process tree kill (sysinfo)
-├── signal.rs             // Signal handling, graceful shutdown
-└── sandbox.rs            // Sandbox policy (feature = "sandbox")
+└── signal.rs             // Signal handling, graceful shutdown
+// sandbox logic moved to crates/sandbox (2026-04; Phase β)
 ```
 
 **Core Interface**
@@ -4066,17 +4065,13 @@ wasm = ["wasmtime"]                                   # WASM plugin sandbox
 [features]
 default = []
 pty = ["portable-pty"]                                # Pseudo-terminal allocation
-sandbox = []                                          # legacy flag; real sandbox lives in crates/sandbox since v2.3
 
-# --- crates/sandbox/Cargo.toml (new v2.3) ---
+# --- crates/sandbox/Cargo.toml (revised 2026-04: feature gates dropped) ---
+# Backend selection is cfg(target_os=...) — no per-backend feature flags.
+# `landlock` crate dep only compiles on Linux via target-cfg'd entry in
+# [target.'cfg(target_os = "linux")'.dependencies].
 [features]
-default  = ["noop", "auto"]
-auto     = []                                         # runtime backend auto-pick
-noop     = []                                         # dev / fallback
-seatbelt = []                                         # macOS: spawns sandbox-exec (zero ext deps)
-landlock = ["dep:landlock"]                           # Linux 5.13+
-wsl      = []                                         # Windows: spawns wsl.exe
-all      = ["noop", "seatbelt", "landlock", "wsl"]
+default = []
 
 # --- crates/remote/Cargo.toml (revised 2026-04: bridge merged in, claude.ai dropped) ---
 # Server WS listener + WS client both ship default-on (no gates on protocol
