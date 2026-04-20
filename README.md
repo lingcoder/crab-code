@@ -69,10 +69,3 @@ PRs welcome.
 
 [Apache License 2.0](LICENSE)
 
----
-
-<div align="center">
-
-**Built with Rust by [lingcoder](https://github.com/lingcoder)**
-
-</div>
