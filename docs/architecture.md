@@ -2979,44 +2979,79 @@ impl StreamingToolExecutor {
 
 CC uses React/Ink to render the terminal UI; Crab uses ratatui + crossterm to achieve equivalent experience. Control flow between tui and other Layer 3 crates (agent / session / remote / engine) follows Rule 6 (§5.3): state is consumed via `core::Event` broadcasts. Read-only access to `session::Conversation` and cost accumulators is allowed.
 
-**Layout notes**:
-- `vim/` sits at the top level (not under `components/`) — it's a key-handling state machine with 6 files (mode / motion / operator / register / text_object / transition), naturally grouped with `keybindings`/`theme`/`animation`/`markdown`/`design_system` rather than with visual widgets.
-- `keybindings/` is a module directory with 18 `KeyContext` variants, a chord-aware `Resolver`, and JSON user overrides at `~/.crab/keybindings.json`.
-- `theme/` is a module directory covering ~120 semantic fields, shimmer derivation, an 8-slot agent palette, reserved brand accents, and OSC 10/11 background detection.
-- `animation/` hosts the `FrameScheduler`, frame-driven `Spinner`, and the shimmer animation adapter.
-- `markdown/` adds a 500-entry LRU cache and a dedicated background thread for `syntect` highlighting in front of the base `components::markdown` renderer.
-- `design_system/` exposes Dialog / Tabs / Pane / Button / ScrollBox primitives that higher-level views compose.
-- `components/buddy/` — 7 files (companion / prompt / render plus cache / mini-agent siblings)
-- `components/bridge_status.rs` — subscribes to `core::Event::BridgeStatusChanged`
-- `components/sandbox_*.rs` — tabs mirroring CCB SandboxSettings / ConfigTab / DoctorSection
-- `components/remote_session.rs` — inbound `RemoteSession*` event display
+**Architecture overview**:
+
+The TUI is organized into 11 top-level module directories plus core files. Modules are grouped by concern:
+
+- **Core loop**: `app.rs` (state machine + main loop), `runner.rs` (terminal init/restore + panic hook), `event.rs` / `app_event.rs` / `event_broker.rs` (event pipeline), `layout.rs` (responsive panel allocation), `frame_requester.rs` (redraw coalescing)
+- **Component system**: `component.rs` (`Component` trait with `handle_event` / `handle_action` / `keybindings`), `component_id.rs` (`ComponentId` enum), `focus.rs` (focus stack), `traits.rs` (`Renderable` trait -- `render(area, buf)` + `desired_height(width)`)
+- **Action dispatch**: `action.rs` (single `Action` enum with `serde::Serialize` + `schemars::JsonSchema` derives, used by keybinding resolver and potential multi-frontend JSON-RPC)
+- **Keybinding system** (`keybindings/`): chord-aware resolver with `KeySequenceParser`, 18 `KeyContext` variants, TOML user overrides at `~/.crab/keybindings.toml`
+- **Overlay system** (`overlay/`): `OverlayKind` enum with 21 variants (Transcript, Help, Permission, Diff, ModelPicker, SessionPicker, HistorySearch, GlobalSearch, PermissionRules, ThemePicker, Doctor, Onboarding, OAuthFlow, ApproveApiKey, Export, BackgroundTasks, AgentsPanel, McpPanel, MemoryPanel, CostThreshold, MessageSelector). Each variant owns its state struct and dispatches `handle_key` / `render` / `contexts` / `name`.
+- **Cell types** (`cells/`): `Cell` enum with 10 variants (UserMessage, AssistantMessage, ToolCall, ToolRejected, Thinking, Diff, Progress, Error, PlanApproval, AgentProgress, RateLimit). Each cell implements `Renderable`.
+- **Streaming** (`streaming/`): `LineBuffer` (line-committed streaming text), `AutoScrollPolicy` (smart scroll-lock during streaming)
+- **Services** (`services/`): stateless/stateful services decoupled from components -- `PermissionService` (4-tier state machine), `NotificationService` (TTL-based queue), `ClipboardService` (Arboard/OSC52 backends), `CostTracker` (token accumulation + threshold warnings), `SessionStore` (session metadata), `TerminalCapabilities` (`OnceLock` singleton detecting truecolor/kitty/sixel/osc8/osc52), `OscReporter` (title/progress/hyperlink escape sequences), accessibility (reduce-motion global), `OutputStyle` (structured/compact/verbose/minimal), `MultiAgentBackend` (in-process + tmux pane stubs), `intl` (relative time / number / duration / byte formatting)
+- **Theme** (`theme/`): ~120 semantic color fields, shimmer derivation, 8-slot agent palette, brand accents, OSC 10/11 background detection, dark/light auto-switching
+- **Animation** (`animation/`): `FrameScheduler`, braille/dots/line `Spinner`, `ShimmerState` (per-column color lookup), all gated on `services::accessibility::reduce_motion()`
+- **Markdown** (`markdown/`): 500-entry LRU cache keyed by (content, theme, width), background `syntect` highlighting thread, GFM table renderer
+- **Vim** (`vim/`): 8-file key-handling state machine (mode / motion / operator / register / text_object / transition / handler), supports Normal/Insert/Visual/Command modes with operator-motion composition
+- **Design system** (`design_system/`): Dialog, Tabs, Pane, Button, ScrollBox, StatusIcon, KeyboardHint, ProgressBar -- reusable primitives composed by higher-level views
+- **Components** (`components/`): ~45 higher-level views including input_area, message_list, header, bottom_bar, virtual_list, call_card, permission, autocomplete, command_palette, toast_queue, notification_banner, token_warning, message_pill, sticky_header, update_banner, context_visualization, prompt_chips, message_actions, at_mention, buddy/ cluster, and more
 
 **Directory Structure**
 
 ```
 src/
 ├── lib.rs
+├── action.rs                  // Action enum (Serialize + JsonSchema)
 ├── app.rs                     // App state machine, main loop
 ├── app_event.rs               // App-level event enum
+├── component.rs               // Component trait (handle_event/action/keybindings)
+├── component_id.rs            // ComponentId enum
 ├── event.rs                   // crossterm Event -> AppEvent mapping
 ├── event_broker.rs            // Internal event bus
+├── focus.rs                   // Focus stack management
 ├── frame_requester.rs         // Redraw coalescing
 ├── layout.rs                  // Layout calculation (panel allocation, responsive)
-├── overlay.rs                 // Overlay focus / context stack
-├── runner.rs                  // TUI runner (initialize/start/stop terminal)
-├── traits.rs                  // Renderable / Focus traits
+├── runner.rs                  // TUI runner (init/restore terminal, panic hook)
+├── traits.rs                  // Renderable trait
+│
+├── cells/                     // Message cell types (Cell enum, 10 variants)
+│   ├── mod.rs                 // Cell enum + dispatch
+│   ├── user_message.rs
+│   ├── assistant_message.rs
+│   ├── tool_call.rs
+│   ├── tool_rejected.rs
+│   ├── thinking.rs
+│   ├── diff.rs
+│   ├── progress.rs
+│   ├── error.rs
+│   ├── plan_approval.rs
+│   ├── agent_progress.rs      // Multi-agent progress tree
+│   └── rate_limit.rs          // Rate limit action card
+│
+├── streaming/                 // Streaming text support
+│   ├── mod.rs
+│   ├── line_buffer.rs         // Line-committed streaming buffer
+│   └── auto_scroll.rs         // Smart scroll-lock policy
 │
 ├── keybindings/               // Chord-aware keybinding system
-│   ├── mod.rs                 // Keybindings façade + re-exports
+│   ├── mod.rs
 │   ├── types.rs               // Action / KeyContext (18) / KeyChord / Sequence
 │   ├── parser.rs              // "ctrl+k ctrl+s" text → Sequence
 │   ├── resolver.rs            // Feed-per-key resolver with chord + timeout
+│   ├── sequence.rs            // KeySequenceParser (multi-key sequences)
 │   ├── defaults.rs            // Built-in bindings per context
-│   └── config.rs              // ~/.crab/keybindings.json user overrides
+│   └── config.rs              // ~/.crab/keybindings.toml user overrides
+│
+├── overlay/                   // Modal overlay system (21 variants)
+│   ├── mod.rs                 // OverlayKind enum + re-exports
+│   └── kind.rs                // State structs, key handlers, render functions
 │
 ├── theme/                     // Color + brand semantics
-│   ├── mod.rs                 // Theme struct + palette switcher + OSC adapter
-│   ├── accents.rs             // Claude/permission/fast-mode/brief-label colors
+│   ├── mod.rs                 // Theme struct + palette switcher
+│   ├── current.rs             // Global current theme accessor
+│   ├── accents.rs             // Permission/fast-mode/brief-label colors
 │   ├── agents.rs              // 8-slot agent accent palette (dark + light)
 │   ├── osc.rs                 // OSC 10/11 system-color probe + classifier
 │   └── shimmer.rs             // Shimmer lift derivation from any base color
@@ -3032,24 +3067,43 @@ src/
 │   ├── highlight.rs           // Background syntect worker + HighlightJob
 │   └── table.rs               // GFM table with column-aligned cells
 │
+├── services/                  // Decoupled state-machine services
+│   ├── mod.rs
+│   ├── permission.rs          // PermissionService (4-tier: once/session/always/deny)
+│   ├── notification.rs        // NotificationService (TTL-based queue, 50 max)
+│   ├── clipboard.rs           // ClipboardService (Arboard / OSC 52 backends)
+│   ├── cost_tracker.rs        // CostTracker (token accumulation + threshold)
+│   ├── session_store.rs       // SessionStore (metadata, current session)
+│   ├── terminal_caps.rs       // TerminalCapabilities (OnceLock singleton)
+│   ├── osc_reporter.rs        // OscReporter (title/progress/hyperlink)
+│   ├── accessibility.rs       // Reduce-motion global (AtomicBool)
+│   ├── output_style.rs        // OutputStyle enum (structured/compact/verbose/minimal)
+│   ├── multi_agent.rs         // MultiAgentBackend trait + in-process/tmux impls
+│   └── intl.rs                // Formatting: relative time, numbers, duration, bytes
+│
 ├── design_system/             // Reusable visual primitives
 │   ├── mod.rs
 │   ├── dialog.rs              // Modal shell with accent, title, action footer
 │   ├── tabs.rs                // Horizontal tab strip
 │   ├── pane.rs                // Titled bordered content block
 │   ├── button.rs              // 3-state button (default/focused/disabled)
-│   └── scrollbox.rs           // Viewport + thumb-style scroll indicator
+│   ├── scrollbox.rs           // Viewport + thumb-style scroll indicator
+│   ├── status_icon.rs         // StatusIcon (5 variants with colored glyphs)
+│   ├── keyboard_hint.rs       // KeyboardHint ([Ctrl+K] styled display)
+│   └── progress_bar.rs        // Horizontal progress bar with percentage
 │
-├── components/                // Higher-level views
+├── components/                // Higher-level views (~45 files)
 │   ├── mod.rs
 │   ├── ansi.rs                // ANSI escape -> ratatui Span conversion
 │   ├── approval_queue.rs      // Pending permission queue
+│   ├── at_mention.rs          // @ file mention UI
 │   ├── autocomplete.rs        // Autocomplete popup
 │   ├── bottom_bar.rs          // Bottom status bar
 │   ├── call_card.rs           // Foldable tool-call card
 │   ├── code_block.rs          // Code block + copy affordance
 │   ├── command_palette.rs     // Command palette (fuzzy)
 │   ├── context_collapse.rs    // Long-context fold view
+│   ├── context_visualization.rs // Compaction stats display
 │   ├── cost_bar.rs            // Token/cost status line
 │   ├── diff.rs                // Diff visualization
 │   ├── fuzzy.rs               // Fuzzy match primitive
@@ -3057,16 +3111,20 @@ src/
 │   ├── header.rs              // Top header bar
 │   ├── history_search.rs      // Ctrl+R history search overlay
 │   ├── input.rs               // Text input (single/multi-line)
-│   ├── input_area.rs          // Input area shell
+│   ├── input_area.rs          // Input area shell (ghost text, Vim mode)
 │   ├── input_history.rs       // Input history navigation
-│   ├── loading.rs             // Simple loading placeholder
+│   ├── loading.rs             // Loading placeholder
 │   ├── markdown.rs            // Base pulldown-cmark → ratatui renderer
+│   ├── message_actions.rs     // Per-message action buttons
 │   ├── message_list.rs        // Chronological message list
+│   ├── message_pill.rs        // "N new messages" / "Jump to bottom" pill
 │   ├── model_picker.rs        // Model switcher overlay
 │   ├── notification.rs        // Toast notification system
+│   ├── notification_banner.rs // Persistent sticky banners
 │   ├── output_styles.rs       // Shared styling helpers
 │   ├── permission.rs          // Permission dialog
 │   ├── progress_indicator.rs  // Progress bar
+│   ├── prompt_chips.rs        // Mode / context chips on prompt line
 │   ├── search.rs              // In-conversation search
 │   ├── select.rs              // Selection list
 │   ├── session_sidebar.rs     // Session sidebar
@@ -3074,17 +3132,33 @@ src/
 │   ├── spinner.rs             // Spinner data adapter
 │   ├── status_bar.rs          // Status bar
 │   ├── status_line.rs         // One-line status slot
+│   ├── sticky_header.rs       // Pinned user prompt on scroll-up
 │   ├── syntax.rs              // syntect-backed code highlight
 │   ├── task_list.rs           // Task panel
 │   ├── text_utils.rs          // Text helpers
+│   ├── toast_queue.rs         // Timed notification toasts (3 max visible)
+│   ├── token_warning.rs       // Context budget alerts (80%/90%)
 │   ├── tool_output.rs         // Collapsible tool output
-│   ├── transcript.rs          // Transcript view
 │   ├── transcript_overlay.rs  // Transcript overlay host
-│   ├── virtual_list.rs        // Viewport-sliced, width-keyed LRU message list
+│   ├── update_banner.rs       // Auto-update status display
+│   ├── virtual_list.rs        // Viewport-sliced, width-keyed LRU list
 │   └── buddy/                 // Companion / mini-agent cluster
+│       ├── mod.rs
+│       ├── buddy.rs
+│       ├── companion.rs
+│       ├── notification.rs
+│       ├── personality.rs
+│       ├── prompt.rs
+│       ├── render.rs
+│       └── sprite.rs
 │
-└── vim/                       // Vim mode — top-level, sibling of keybindings/theme
+├── history/                   // Legacy history cells (retained during migration)
+│   ├── mod.rs
+│   └── cells/
+│
+└── vim/                       // Vim mode (top-level, sibling of keybindings/theme)
     ├── mod.rs
+    ├── handler.rs             // Event handler integration
     ├── mode.rs                // Normal/Insert/Visual/Command
     ├── motion.rs              // hjkl, w/b/e, 0/$, gg/G, f/t
     ├── operator.rs            // d/c/y + motion composition
@@ -3093,240 +3167,17 @@ src/
     └── transition.rs          // State transition table
 ```
 
-**App Main Loop**
+**Key design decisions**:
 
-```rust
-// app.rs -- ratatui App
-use ratatui::prelude::*;
-use crossterm::event::{self, Event as TermEvent, KeyCode};
-use crab_core::event::Event;
-use tokio::sync::mpsc;
+- `OverlayKind` is a flat enum (not trait objects) dispatching `handle_key` / `render` / `contexts` / `name`. Shared handler helpers (`handle_scrollable_key`, `handle_list_key`, `handle_confirm_key`, `handle_dismiss_only`) reduce duplication across variants.
+- `Cell` is a flat enum (not trait objects) for message display. Each variant owns its data and implements `Renderable`.
+- `PermissionService` is a state machine with 4 tiers (allow once / session / always / deny), decoupled from overlay rendering.
+- `TerminalCapabilities` uses `OnceLock` for process-lifetime caching. Detection is env-var-based (TERM, TERM_PROGRAM, COLORTERM).
+- All animation code checks `services::accessibility::reduce_motion()` before animating.
+- The `Action` enum derives `schemars::JsonSchema` to support future multi-frontend (CLI / IDE / web) dispatch via JSON-RPC.
+- Keybinding config uses TOML at `~/.crab/keybindings.toml` with `Action` variant names that round-trip through serde.
 
-/// App-level shared resources (initialized once, avoid rebuilding on each render)
-pub struct SharedResources {
-    pub syntax_set: syntect::parsing::SyntaxSet,
-    pub theme_set: syntect::highlighting::ThemeSet,
-}
-
-impl SharedResources {
-    pub fn new() -> Self {
-        Self {
-            syntax_set: syntect::parsing::SyntaxSet::load_defaults_newlines(),
-            theme_set: syntect::highlighting::ThemeSet::load_defaults(),
-        }
-    }
-}
-
-pub struct App {
-    /// Input buffer
-    input: String,
-    /// Status bar update channel (watch channel -- only cares about latest value, no backlog)
-    status_watch_rx: tokio::sync::watch::Receiver<StatusBarData>,
-    /// Message display area
-    messages: Vec<DisplayMessage>,
-    /// Composite state (replaces single enum, supports overlay layers)
-    state: UiState,
-    /// Events from agent
-    event_rx: mpsc::Receiver<Event>,
-    /// Shared resources (SyntaxSet/ThemeSet etc., initialized once)
-    resources: SharedResources,
-}
-
-/// Composite state pattern -- main state + overlay + notifications + focus + active tool progress
-pub struct UiState {
-    /// Main interaction state
-    pub main: MainState,
-    /// Modal overlay (only one modal at a time: permission dialog or command palette)
-    /// Uses Option instead of Vec: modal UI only shows one at a time; queuing multiples is meaningless
-    pub overlay: Option<Overlay>,
-    /// Non-modal notification queue (toast style, auto-dismiss, doesn't block input)
-    pub notifications: std::collections::VecDeque<Toast>,
-    /// Current focus position (determines which component receives keyboard events)
-    pub focus: FocusTarget,
-    /// Active tool execution progress (supports concurrent tool tracking)
-    pub active_tools: Vec<ToolProgress>,
-}
-
-/// Non-modal notification (toast-like, auto-dismisses after display)
-pub struct Toast {
-    pub message: String,
-    pub level: ToastLevel,
-    pub created_at: std::time::Instant,
-    /// Display duration (default 3 seconds)
-    pub ttl: std::time::Duration,
-}
-
-pub enum ToastLevel {
-    Info,
-    Warning,
-    Error,
-}
-
-/// Focus target -- determines keyboard event routing
-pub enum FocusTarget {
-    /// Input box (default focus) -- receives text input and Enter to submit
-    InputBox,
-    /// Modal overlay -- receives Esc to close, arrow keys to select, Enter to confirm
-    Overlay,
-    /// Message scroll area -- receives j/k/PgUp/PgDn scrolling
-    MessageScroll,
-}
-
-// Focus routing logic:
-// - When overlay.is_some(), focus is forced to FocusTarget::Overlay
-// - When overlay closes, focus returns to FocusTarget::InputBox
-// - User can press Ctrl+Up/Down to temporarily switch to MessageScroll to browse history
-
-pub enum MainState {
-    /// Waiting for user input
-    Idle,
-    /// API call in progress (show spinner)
-    Thinking,
-    /// Streaming response being received -- supports incremental rendering
-    Streaming(StreamingMessage),
-}
-
-/// Streaming message state -- supports delta appending + incremental parsing
-/// Note: "incremental" here means **parsing optimization** (avoid re-parsing already processed Markdown),
-/// not skipping rendering -- each frame still fully renders all parsed blocks.
-pub struct StreamingMessage {
-    /// Complete text received so far
-    pub buffer: String,
-    /// Parsed offset (only need to parse buffer[parsed_offset..] for new content)
-    pub parsed_offset: usize,
-    /// List of parsed render blocks (Markdown -> structured blocks, incrementally appended)
-    pub parsed_blocks: Vec<RenderedBlock>,
-    /// Whether complete
-    pub complete: bool,
-}
-
-/// Parsed render block (structured representation of Markdown parse results)
-pub enum RenderedBlock {
-    Paragraph(String),
-    CodeBlock { language: String, code: String },
-    Heading { level: u8, text: String },
-    List(Vec<String>),
-    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
-    BlockQuote(String),
-    HorizontalRule,
-    Link { text: String, url: String },
-    Image { alt: String, url: String }, // placeholder -- terminal cannot render images, shows alt text
-}
-
-impl StreamingMessage {
-    pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-            parsed_offset: 0,
-            parsed_blocks: Vec::new(),
-            complete: false,
-        }
-    }
-
-    /// Append incremental text
-    pub fn append_delta(&mut self, delta: &str) {
-        self.buffer.push_str(delta);
-    }
-
-    /// Incremental parse: only parse new content in buffer[parsed_offset..], append to parsed_blocks
-    pub fn parse_pending(&mut self) {
-        let new_content = &self.buffer[self.parsed_offset..];
-        // Use pulldown-cmark to parse new content, generate RenderedBlock
-        // Note: need to handle block boundaries (e.g., unclosed code block spanning deltas)
-        // ...
-        self.parsed_offset = self.buffer.len();
-    }
-}
-
-pub enum Overlay {
-    /// Permission confirmation dialog
-    PermissionDialog { tool_name: String, request_id: String },
-    /// Command palette (Ctrl+K)
-    CommandPalette,
-}
-
-pub struct ToolProgress {
-    pub id: String,
-    pub name: String,
-    pub started_at: std::time::Instant,
-}
-
-pub struct DisplayMessage {
-    pub role: String,
-    pub content: String,
-    pub cost: Option<String>,
-}
-
-impl App {
-    /// Main render loop
-    /// Uses crossterm::event::EventStream instead of spawn_blocking+poll/read
-    /// Avoids race conditions: poll and read called from different threads may lose events
-    pub async fn run(
-        &mut self,
-        terminal: &mut Terminal<impl Backend>,
-    ) -> crab_common::Result<()> {
-        use crossterm::event::EventStream;
-        use futures::StreamExt;
-
-        let mut term_events = EventStream::new();
-        let target_fps = 30;
-        let frame_duration = std::time::Duration::from_millis(1000 / target_fps);
-
-        // Use tokio::time::interval instead of sleep(saturating_sub)
-        // MissedTickBehavior::Skip ensures: if a frame processing overruns, skip missed ticks instead of burst-catching-up
-        let mut frame_tick = tokio::time::interval(frame_duration);
-        frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        loop {
-            tokio::select! {
-                // Terminal input (EventStream is an async Stream, no race conditions)
-                Some(Ok(term_event)) = term_events.next() => {
-                    if let TermEvent::Key(key) = term_event {
-                        match key.code {
-                            KeyCode::Enter => {
-                                self.submit_input();
-                            }
-                            KeyCode::Char(c) => {
-                                self.input.push(c);
-                            }
-                            KeyCode::Esc => {
-                                return Ok(());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                // Agent events
-                Some(event) = self.event_rx.recv() => {
-                    self.handle_agent_event(event);
-                }
-                // Status bar refresh -- watch channel notification (cost updates, token count changes, etc.)
-                // watch::Receiver only keeps the latest value; multiple writes trigger changed() only once
-                // More suitable than mpsc for "latest state" scenarios (no backlog, no missed updates)
-                Ok(()) = self.status_watch_rx.changed() => {
-                    let status = self.status_watch_rx.borrow().clone();
-                    self.update_status_bar(status);
-                }
-                // Frame rate timer -- interval + Skip is more precise than sleep(saturating_sub)
-                // Avoids frame rate drift caused by time differences when computing saturating_sub
-                _ = frame_tick.tick() => {
-                    terminal.draw(|frame| self.render(frame))?;
-                }
-            }
-        }
-    }
-
-    fn render(&self, frame: &mut Frame) {
-        // Use ratatui Layout for partitioning
-        // Top: message history (Markdown rendering)
-        // Middle: tool output / spinner
-        // Bottom: input box + status bar
-        // ...
-    }
-}
-```
-
-**External Dependencies**: `ratatui`, `crossterm`, `syntect`, `pulldown-cmark`, `crab-core`, `crab-session`, `crab-config`, `crab-common`
+**External Dependencies**: `ratatui`, `crossterm`, `syntect`, `pulldown-cmark`, `schemars`, `crab-core`, `crab-session`, `crab-config`, `crab-common`
 
 > tui does not directly depend on tools; it receives tool execution state via the `crab_core::Event` enum, with crates/cli responsible for assembling agent+tui.
 
