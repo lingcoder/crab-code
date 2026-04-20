@@ -284,6 +284,7 @@ mod tests {
             output: body,
             is_error: false,
             display: None,
+            collapsed: false,
         }]);
         // ToolResultCell::transcript_lines emits 20 body lines + 1 blank.
         assert_eq!(overlay.total_lines(), 21);

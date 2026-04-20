@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use crab_fs::glob::{GlobOptions, find_files};
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -133,8 +133,12 @@ impl Tool for GlobTool {
         }
         Some(ToolDisplayResult {
             lines,
-            preview_lines: 1, // condensed: just "Found N files"
+            preview_lines: 1,
         })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Highlight
     }
 }
 

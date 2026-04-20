@@ -68,6 +68,9 @@ pub struct Notification {
     pub created_at: Instant,
     /// How long to display (None = until dismissed).
     pub duration: Option<Duration>,
+    /// Optional dedup key — if set, pushing a new notification with the
+    /// same key replaces the existing one instead of stacking.
+    pub key: Option<String>,
 }
 
 impl Notification {
@@ -79,6 +82,7 @@ impl Notification {
             message: message.into(),
             created_at: Instant::now(),
             duration: None,
+            key: None,
         }
     }
 
@@ -86,6 +90,13 @@ impl Notification {
     #[must_use]
     pub fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
+        self
+    }
+
+    /// Set a dedup key — notifications with the same key replace each other.
+    #[must_use]
+    pub fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
         self
     }
 
@@ -153,6 +164,19 @@ impl NotificationManager {
         duration: Duration,
     ) {
         let notification = Notification::new(level, message).with_duration(duration);
+        self.push(notification);
+    }
+
+    /// Push a notification with a dedup key — replaces any existing notification with the same key.
+    pub fn notify_keyed(
+        &mut self,
+        level: NotificationLevel,
+        message: impl Into<String>,
+        key: impl Into<String>,
+    ) {
+        let notification = Notification::new(level, message)
+            .with_duration(DEFAULT_TOAST_DURATION)
+            .with_key(key);
         self.push(notification);
     }
 
@@ -255,6 +279,9 @@ impl NotificationManager {
     }
 
     fn push(&mut self, notification: Notification) {
+        if let Some(ref key) = notification.key {
+            self.active.retain(|n| n.key.as_deref() != Some(key));
+        }
         self.active.push_back(notification);
     }
 }
@@ -791,5 +818,32 @@ mod tests {
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         assert_eq!(content.trim(), "");
+    }
+
+    // ─── Key dedup tests ───
+
+    #[test]
+    fn keyed_notification_replaces_existing() {
+        let mut mgr = NotificationManager::new();
+        mgr.notify_keyed(NotificationLevel::Info, "first", "progress");
+        mgr.notify_keyed(NotificationLevel::Info, "second", "progress");
+        assert_eq!(mgr.active_count(), 1);
+        assert_eq!(mgr.visible()[0].message, "second");
+    }
+
+    #[test]
+    fn different_keys_do_not_dedup() {
+        let mut mgr = NotificationManager::new();
+        mgr.notify_keyed(NotificationLevel::Info, "one", "key-a");
+        mgr.notify_keyed(NotificationLevel::Info, "two", "key-b");
+        assert_eq!(mgr.active_count(), 2);
+    }
+
+    #[test]
+    fn keyless_notifications_stack() {
+        let mut mgr = NotificationManager::new();
+        mgr.info("a");
+        mgr.info("a");
+        assert_eq!(mgr.active_count(), 2);
     }
 }

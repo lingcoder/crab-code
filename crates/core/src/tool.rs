@@ -95,11 +95,36 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Rich rejection rendering with multi-line preview of what was rejected.
+    ///
+    /// Returns `None` to fall back to the single-line `format_rejected_summary`.
+    fn format_rejected(&self, _input: &Value) -> Option<ToolDisplayResult> {
+        None
+    }
+
     /// Whether this tool supports real-time streaming progress display.
     ///
     /// E.g. `BashTool` can stream stdout as it runs.
     fn supports_streaming_progress(&self) -> bool {
         false
+    }
+
+    /// Specialized error rendering with contextual hints.
+    ///
+    /// Called when `output.is_error` is true. Receives the original `input`
+    /// so the error message can reference what was attempted (e.g. which
+    /// file was not found). Returns `None` to fall back to the default
+    /// red-text rendering.
+    fn format_error(&self, _output: &ToolOutput, _input: &Value) -> Option<ToolDisplayResult> {
+        None
+    }
+
+    /// Color hint for the tool-call header icon (the `●` glyph).
+    ///
+    /// The TUI maps this to a terminal color for the tool icon, giving
+    /// each tool category a distinct visual identity.
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Normal
     }
 }
 
@@ -158,6 +183,17 @@ pub enum ToolDisplayStyle {
     Muted,
     /// Highlighted / emphasized text.
     Highlight,
+}
+
+/// Real-time progress data emitted by long-running tools (e.g. Bash).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolProgress {
+    pub elapsed_secs: f64,
+    pub total_lines: usize,
+    pub total_bytes: usize,
+    /// Last few lines of output for preview.
+    pub tail_output: String,
+    pub timeout_secs: Option<u64>,
 }
 
 /// Execution context passed to every tool invocation.

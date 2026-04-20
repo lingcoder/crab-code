@@ -4,7 +4,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 
 /// File reading tool.
@@ -156,7 +156,6 @@ impl Tool for ReadTool {
     fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
         use crab_core::tool::{ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle};
         let text = output.text();
-        // CCB: "Read N lines" (N bold) — single line summary
         let line_count = text.lines().count();
         Some(ToolDisplayResult {
             lines: vec![ToolDisplayLine::new(
@@ -165,6 +164,33 @@ impl Tool for ReadTool {
             )],
             preview_lines: 1,
         })
+    }
+
+    fn format_error(&self, output: &ToolOutput, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayResult};
+        let text = output.text();
+        let path = input["file_path"].as_str().unwrap_or("?");
+
+        let mut lines = vec![ToolDisplayLine::new(
+            format!("Error reading {path}"),
+            ToolDisplayStyle::Error,
+        )];
+
+        if text.contains("not found") || text.contains("No such file") {
+            lines.push(ToolDisplayLine::new(
+                "Hint: Use Glob to search for files by pattern",
+                ToolDisplayStyle::Muted,
+            ));
+        }
+
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 2,
+        })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Muted
     }
 }
 

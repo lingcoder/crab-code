@@ -14,9 +14,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -214,22 +212,12 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
+        let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
         default_hook(info);
     }));
 
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        EnableMouseCapture
-    )?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let term_backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(term_backend)?;
 
@@ -239,6 +227,25 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     if let Ok(cwd) = std::env::current_dir() {
         app.set_working_dir(cwd.display().to_string());
         app.set_completion_cwd(cwd);
+    }
+
+    // Populate session sidebar from saved sessions
+    if let Some(ref history) = session_history
+        && let Ok(metas) = history.list_sessions_with_metadata()
+    {
+        let entries: Vec<_> = metas
+            .iter()
+            .map(|m| crate::components::session_sidebar::SessionEntry {
+                id: m.session_id.clone(),
+                name: m.name.clone().unwrap_or_else(|| m.session_id.clone()),
+                last_active: m
+                    .modified
+                    .and_then(|t| t.elapsed().ok())
+                    .map_or_else(|| "unknown".into(), |d| format!("{}s ago", d.as_secs())),
+                message_count: m.message_count,
+            })
+            .collect();
+        app.session_sidebar.set_sessions(entries);
     }
 
     // Register built-in slash commands for Tab completion
@@ -341,7 +348,6 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        DisableMouseCapture,
         DisableBracketedPaste,
         LeaveAlternateScreen
     )?;
@@ -571,13 +577,35 @@ async fn run_loop(
                 // Send response to the permission handler waiting in the agent task
                 let _ = perm_resp_tx.send((request_id, allowed));
             }
-            AppAction::NewSession | AppAction::SwitchSession(_) => {
-                // Session management actions are handled by the outer runner
-                // when multi-session support is fully wired up.
-                // For now, log to content buffer.
-                if matches!(action, AppAction::NewSession) {
-                    app.content_buffer
-                        .push_str("\n[session] New session requested (not yet wired)\n");
+            AppAction::NewSession => {
+                // Save current session
+                if let Some(history) = session_history {
+                    let _ = history.save(session_id, conversation.messages());
+                }
+                // Reset conversation and app state for a new session
+                conversation = Conversation::new(
+                    session_id.to_string(),
+                    conversation.system_prompt.clone(),
+                    conversation.context_window,
+                );
+                app.reset_for_new_session();
+            }
+            AppAction::SwitchSession(target_id) => {
+                if let Some(history) = session_history {
+                    // Save current session first
+                    let _ = history.save(session_id, conversation.messages());
+                    // Load target session
+                    if let Ok(Some(messages)) = history.load(&target_id) {
+                        conversation = Conversation::new(
+                            target_id.clone(),
+                            conversation.system_prompt.clone(),
+                            conversation.context_window,
+                        );
+                        for msg in messages {
+                            conversation.push(msg);
+                        }
+                        app.load_session_messages(&conversation);
+                    }
                 }
             }
             AppAction::ExternalEditor(initial_text) => {
@@ -586,7 +614,6 @@ async fn run_loop(
                 disable_raw_mode().ok();
                 execute!(
                     terminal.backend_mut(),
-                    DisableMouseCapture,
                     DisableBracketedPaste,
                     LeaveAlternateScreen
                 )
@@ -599,8 +626,7 @@ async fn run_loop(
                 execute!(
                     terminal.backend_mut(),
                     EnterAlternateScreen,
-                    EnableBracketedPaste,
-                    EnableMouseCapture
+                    EnableBracketedPaste
                 )
                 .ok();
                 terminal.clear().ok();

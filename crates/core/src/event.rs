@@ -58,6 +58,12 @@ pub enum Event {
     /// Incremental output from a running tool (e.g. bash stdout line).
     ToolOutputDelta { id: String, delta: String },
 
+    /// Real-time progress from a running tool (elapsed time, output size, tail).
+    ToolProgress {
+        id: String,
+        progress: crate::tool::ToolProgress,
+    },
+
     /// Tool execution has completed.
     ToolResult { id: String, output: ToolOutput },
 

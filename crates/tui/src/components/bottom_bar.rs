@@ -23,6 +23,8 @@ pub struct BottomBar<'a> {
     /// In-flight chord prefix. When present, rendered as
     /// `"Ctrl+K …"` to tell the user another key is expected.
     pub chord_prefix: Option<&'a [KeyChord]>,
+    /// Vim mode label (e.g. "NORMAL", "INSERT") when vim is active.
+    pub vim_mode: Option<&'a str>,
 }
 
 impl Renderable for BottomBar<'_> {
@@ -31,6 +33,22 @@ impl Renderable for BottomBar<'_> {
             render_chord_hint(prefix, area, buf);
             return;
         }
+
+        if let Some(vim_label) = self.vim_mode {
+            let (label_style, rest_area) = render_vim_badge(vim_label, area, buf);
+            let _ = label_style;
+            if rest_area.width > 0 {
+                render_bottom_bar(
+                    self.state,
+                    self.search_active,
+                    self.permission_mode,
+                    rest_area,
+                    buf,
+                );
+            }
+            return;
+        }
+
         render_bottom_bar(
             self.state,
             self.search_active,
@@ -43,6 +61,29 @@ impl Renderable for BottomBar<'_> {
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+}
+
+fn render_vim_badge(label: &str, area: Rect, buf: &mut Buffer) -> (Style, Rect) {
+    let badge = format!(" [{label}] ");
+    let badge_width = badge.len() as u16;
+    let style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let badge_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: badge_width.min(area.width),
+        height: 1,
+    };
+    Widget::render(Span::styled(badge, style), badge_area, buf);
+    let rest = Rect {
+        x: area.x + badge_area.width,
+        y: area.y,
+        width: area.width.saturating_sub(badge_area.width),
+        height: 1,
+    };
+    (style, rest)
 }
 
 fn render_chord_hint(prefix: &[KeyChord], area: Rect, buf: &mut Buffer) {
@@ -169,6 +210,7 @@ mod tests {
             search_active: false,
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: None,
+            vim_mode: None,
         };
         assert_eq!(bb.desired_height(80), 1);
     }
@@ -180,6 +222,7 @@ mod tests {
             search_active: false,
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: None,
+            vim_mode: None,
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -221,6 +264,7 @@ mod tests {
             search_active: false,
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: Some(&prefix),
+            vim_mode: None,
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);

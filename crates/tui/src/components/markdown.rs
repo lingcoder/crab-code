@@ -3,6 +3,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::syntax::SyntaxHighlighter;
+use crate::hyperlink;
+use crate::markdown::table::{TableRow, compute_min_table_width, render_gfm_table, render_vertical_table};
 use crate::theme::Theme;
 
 /// Renders Markdown text to ratatui `Line`s.
@@ -23,7 +25,7 @@ impl<'t> MarkdownRenderer<'t> {
 
     /// Parse and render a Markdown string into styled `Line`s.
     #[allow(clippy::too_many_lines)]
-    pub fn render(&self, markdown: &str) -> Vec<Line<'static>> {
+    pub fn render(&self, markdown: &str, width: u16) -> Vec<Line<'static>> {
         let opts =
             Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
         let parser = Parser::new_ext(markdown, opts);
@@ -36,6 +38,15 @@ impl<'t> MarkdownRenderer<'t> {
         let mut code_buf = String::new();
         let mut list_depth: usize = 0;
         let mut ordered_index: Option<u64> = None;
+
+        // Table accumulation state
+        let mut in_table = false;
+        let mut in_table_head = false;
+        let mut table_header: Vec<String> = Vec::new();
+        let mut table_rows: Vec<Vec<String>> = Vec::new();
+        let mut current_row: Vec<String> = Vec::new();
+        let mut current_cell = String::new();
+        let mut link_url: Option<String> = None;
 
         for event in parser {
             match event {
@@ -78,10 +89,19 @@ impl<'t> MarkdownRenderer<'t> {
                             .fg(self.theme.link)
                             .add_modifier(Modifier::UNDERLINED);
                         style_stack.push(style);
-                        // Store the URL for later — we'll append it after the link text
-                        // by using a sentinel approach: push URL as hidden state
-                        // Actually, we just render [text](url) inline for terminal
-                        let _ = dest_url; // URL rendered after End(Link)
+                        link_url = Some(dest_url.to_string());
+                    }
+                    Tag::Image { dest_url, title, .. } => {
+                        let alt = if title.is_empty() {
+                            "Image".to_string()
+                        } else {
+                            title.to_string()
+                        };
+                        let display = hyperlink::format_link(&dest_url, &format!("[{alt}]"));
+                        let style = Style::default()
+                            .fg(self.theme.link)
+                            .add_modifier(Modifier::UNDERLINED);
+                        current_spans.push(Span::styled(display, style));
                     }
                     Tag::List(start) => {
                         flush_line(&mut current_spans, &mut lines);
@@ -107,6 +127,23 @@ impl<'t> MarkdownRenderer<'t> {
                         let style = Style::default().fg(self.theme.blockquote);
                         current_spans.push(Span::styled("│ ".to_string(), style));
                         style_stack.push(Style::default().fg(self.theme.blockquote));
+                    }
+                    Tag::Table(_) => {
+                        flush_line(&mut current_spans, &mut lines);
+                        in_table = true;
+                        in_table_head = false;
+                        table_header.clear();
+                        table_rows.clear();
+                    }
+                    Tag::TableHead => {
+                        in_table_head = true;
+                        current_row.clear();
+                    }
+                    Tag::TableRow => {
+                        current_row.clear();
+                    }
+                    Tag::TableCell => {
+                        current_cell.clear();
                     }
                     _ => {}
                 },
@@ -135,8 +172,12 @@ impl<'t> MarkdownRenderer<'t> {
                         }));
                         code_buf.clear();
                     }
-                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                         style_stack.pop();
+                    }
+                    TagEnd::Link => {
+                        style_stack.pop();
+                        link_url = None;
                     }
                     TagEnd::Heading(_) | TagEnd::BlockQuote(_) => {
                         style_stack.pop();
@@ -151,15 +192,46 @@ impl<'t> MarkdownRenderer<'t> {
                     TagEnd::Item => {
                         flush_line(&mut current_spans, &mut lines);
                     }
+                    TagEnd::TableCell => {
+                        current_row.push(std::mem::take(&mut current_cell));
+                    }
+                    TagEnd::TableHead => {
+                        table_header = std::mem::take(&mut current_row);
+                        in_table_head = false;
+                    }
+                    TagEnd::TableRow if !in_table_head => {
+                        table_rows.push(std::mem::take(&mut current_row));
+                    }
+                    TagEnd::Table => {
+                        in_table = false;
+                        let header = TableRow::new(std::mem::take(&mut table_header));
+                        let body: Vec<TableRow> = std::mem::take(&mut table_rows)
+                            .into_iter()
+                            .map(TableRow::new)
+                            .collect();
+                        let min_w = compute_min_table_width(&header, &body);
+                        if min_w > width as usize {
+                            lines.extend(render_vertical_table(&header, &body, self.theme));
+                        } else {
+                            lines.extend(render_gfm_table(&header, &body, self.theme));
+                        }
+                    }
                     _ => {}
                 },
 
                 Event::Text(text) => {
                     if in_code_block {
                         code_buf.push_str(&text);
+                    } else if in_table {
+                        current_cell.push_str(&text);
                     } else {
                         let style = current_style(&style_stack);
-                        current_spans.push(Span::styled(text.to_string(), style));
+                        let content = if let Some(ref url) = link_url {
+                            hyperlink::format_link(url, &text)
+                        } else {
+                            text.to_string()
+                        };
+                        current_spans.push(Span::styled(content, style));
                     }
                 }
 
@@ -231,7 +303,7 @@ mod tests {
     fn render_plain_paragraph() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("Hello world");
+        let lines = r.render("Hello world", 80);
         assert!(!lines.is_empty());
         let text: String = lines
             .iter()
@@ -245,7 +317,7 @@ mod tests {
     fn render_heading() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("# Title");
+        let lines = r.render("# Title", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -259,7 +331,7 @@ mod tests {
     fn render_h2_heading() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("## Sub-heading");
+        let lines = r.render("## Sub-heading", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -272,7 +344,7 @@ mod tests {
     fn render_bold_and_italic() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("**bold** and *italic*");
+        let lines = r.render("**bold** and *italic*", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -286,7 +358,7 @@ mod tests {
     fn render_inline_code() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("Use `foo()` here");
+        let lines = r.render("Use `foo()` here", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -300,7 +372,7 @@ mod tests {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
         let md = "```rust\nfn main() {}\n```";
-        let lines = r.render(md);
+        let lines = r.render(md, 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -314,7 +386,7 @@ mod tests {
     fn render_unordered_list() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("- one\n- two\n- three");
+        let lines = r.render("- one\n- two\n- three", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -329,7 +401,7 @@ mod tests {
     fn render_ordered_list() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("1. first\n2. second");
+        let lines = r.render("1. first\n2. second", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -343,7 +415,7 @@ mod tests {
     fn render_link() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("[click](https://example.com)");
+        let lines = r.render("[click](https://example.com)", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -356,7 +428,7 @@ mod tests {
     fn render_horizontal_rule() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("---");
+        let lines = r.render("---", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -369,7 +441,7 @@ mod tests {
     fn render_blockquote() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("> quoted text");
+        let lines = r.render("> quoted text", 80);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -383,7 +455,7 @@ mod tests {
     fn render_empty_string() {
         let (theme, hl) = make_renderer();
         let r = MarkdownRenderer::new(&theme, &hl);
-        let lines = r.render("");
+        let lines = r.render("", 80);
         assert!(lines.is_empty());
     }
 
@@ -392,5 +464,36 @@ mod tests {
         assert_eq!(heading_prefix(HeadingLevel::H1), "# ");
         assert_eq!(heading_prefix(HeadingLevel::H3), "### ");
         assert_eq!(heading_prefix(HeadingLevel::H6), "###### ");
+    }
+
+    #[test]
+    fn render_gfm_table_horizontal() {
+        let (theme, hl) = make_renderer();
+        let r = MarkdownRenderer::new(&theme, &hl);
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let lines = r.render(md, 80);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("│"), "horizontal table should have box-drawing borders");
+        assert!(text.contains("A"));
+        assert!(text.contains("1"));
+    }
+
+    #[test]
+    fn render_gfm_table_vertical_fallback() {
+        let (theme, hl) = make_renderer();
+        let r = MarkdownRenderer::new(&theme, &hl);
+        let md = "| Name | Value |\n|---|---|\n| hello | world |";
+        let lines = r.render(md, 15);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("Name:"), "vertical table should show 'header: value' format");
+        assert!(text.contains("hello"));
     }
 }

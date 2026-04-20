@@ -75,21 +75,49 @@ pub fn cell_from_chat_message(msg: &crate::app::ChatMessage) -> Box<dyn HistoryC
     match msg {
         ChatMessage::User { text } => Box::new(UserCell::new(text.clone())),
         ChatMessage::Assistant { text } => Box::new(AssistantCell::new(text.clone())),
-        ChatMessage::ToolUse { name, summary } => {
-            Box::new(ToolCallCell::new(name.clone(), summary.clone()))
-        }
+        ChatMessage::ToolUse {
+            name,
+            summary,
+            color,
+        } => Box::new(ToolCallCell::new(name.clone(), summary.clone(), *color)),
         ChatMessage::ToolResult {
             tool_name,
             output,
             is_error,
             display,
+            collapsed,
         } => Box::new(ToolResultCell::new(
             tool_name.clone(),
             output.clone(),
             *is_error,
             display.clone(),
+            *collapsed,
         )),
         ChatMessage::System { text } => Box::new(SystemCell::new(text.clone())),
+        ChatMessage::CompactBoundary {
+            strategy,
+            after_tokens,
+            removed_messages,
+        } => Box::new(cells::CompactBoundaryCell::new(
+            strategy.clone(),
+            *after_tokens,
+            *removed_messages,
+        )),
+        ChatMessage::PlanStep {
+            title,
+            steps,
+            awaiting_approval,
+        } => Box::new(cells::PlanStepCell::new(
+            title.clone(),
+            steps.clone(),
+            *awaiting_approval,
+        )),
+        ChatMessage::ToolRejected {
+            summary, display, ..
+        } => Box::new(cells::ToolRejectedCell::new(
+            summary.clone(),
+            display.clone(),
+        )),
     }
 }
 
@@ -106,14 +134,31 @@ mod tests {
             ChatMessage::ToolUse {
                 name: "read".into(),
                 summary: None,
+                color: None,
             },
             ChatMessage::ToolResult {
                 tool_name: "read".into(),
                 output: "ok".into(),
                 is_error: false,
                 display: None,
+                collapsed: false,
             },
             ChatMessage::System { text: "s".into() },
+            ChatMessage::CompactBoundary {
+                strategy: "summary".into(),
+                after_tokens: 50000,
+                removed_messages: 5,
+            },
+            ChatMessage::PlanStep {
+                title: "Plan".into(),
+                steps: vec![("Step 1".into(), crate::components::plan_card::PlanStepStatus::Done)],
+                awaiting_approval: false,
+            },
+            ChatMessage::ToolRejected {
+                tool_name: "bash".into(),
+                summary: "Run rejected (ls)".into(),
+                display: None,
+            },
         ];
         for msg in &cases {
             let cell = cell_from_chat_message(msg);

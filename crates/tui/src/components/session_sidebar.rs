@@ -10,6 +10,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use super::tab_bar::TabBar;
+
 /// Metadata for a single session entry.
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
@@ -65,6 +67,8 @@ pub struct SessionSidebar {
     pub selected: usize,
     /// Whether the sidebar is visible.
     pub visible: bool,
+    /// Tab bar for filtering (Recent / Saved).
+    pub tab_bar: TabBar,
 }
 
 impl SessionSidebar {
@@ -75,6 +79,7 @@ impl SessionSidebar {
             sessions: Vec::new(),
             selected: 0,
             visible: false,
+            tab_bar: TabBar::new(vec!["Recent", "Saved"]),
         }
     }
 
@@ -162,14 +167,35 @@ impl Widget for &SessionSidebar {
             return;
         }
 
-        for (i, session) in self.sessions.iter().enumerate() {
-            if i as u16 >= inner.height {
+        // Tab bar at the top of inner area
+        let tab_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        Widget::render(&self.tab_bar, tab_area, buf);
+
+        let list_top = inner.y + 1;
+        let list_height = inner.height.saturating_sub(1);
+
+        // Filter sessions based on selected tab
+        let filtered: Vec<(usize, &SessionEntry)> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                if self.tab_bar.selected() == 1 {
+                    !s.name.is_empty() && s.name != s.id
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        for (row_i, (orig_i, session)) in filtered.iter().enumerate() {
+            if row_i as u16 >= list_height {
                 break;
             }
-            let is_selected = i == self.selected;
+            let is_selected = *orig_i == self.selected;
             let line = session.display_line(is_selected);
 
-            let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+            let row_area = Rect::new(inner.x, list_top + row_i as u16, inner.width, 1);
 
             if is_selected {
                 // Highlight selected row background

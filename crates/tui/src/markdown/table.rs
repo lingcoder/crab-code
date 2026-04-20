@@ -91,6 +91,66 @@ fn format_separator(widths: &[usize], theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(s, border))
 }
 
+/// Compute the minimum width (in characters) a horizontal table would need.
+///
+/// This accounts for cell content + column borders (`│ ` padding per col).
+#[must_use]
+pub fn compute_min_table_width(header: &TableRow, body: &[TableRow]) -> usize {
+    let col_count = header.cells.len();
+    if col_count == 0 {
+        return 0;
+    }
+    let mut widths: Vec<usize> = header.cells.iter().map(|c| display_width(c)).collect();
+    for row in body {
+        for (i, cell) in row.cells.iter().enumerate() {
+            if i >= widths.len() {
+                widths.push(display_width(cell));
+            } else {
+                widths[i] = widths[i].max(display_width(cell));
+            }
+        }
+    }
+    // Each column: content_width + 3 (` │ `) except the last gets 2 after + leading `│ `
+    // Formula: 2 (leading "│ ") + sum(width + 3 for each col)
+    2 + widths.iter().map(|w| w + 3).sum::<usize>()
+}
+
+/// Render a table in vertical (key: value) format for narrow terminals.
+///
+/// Each row is rendered as a block of `header: value` pairs separated by
+/// blank lines. Used when the terminal is too narrow for horizontal layout.
+#[must_use]
+pub fn render_vertical_table(
+    header: &TableRow,
+    body: &[TableRow],
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let label_style = Style::default()
+        .fg(theme.heading)
+        .add_modifier(Modifier::BOLD);
+    let value_style = Style::default().fg(theme.fg);
+    let sep_style = Style::default().fg(theme.border);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (row_idx, row) in body.iter().enumerate() {
+        if row_idx > 0 {
+            lines.push(Line::from(Span::styled("───", sep_style)));
+        }
+        for (col_idx, cell) in row.cells.iter().enumerate() {
+            let label = header
+                .cells
+                .get(col_idx)
+                .map_or("?", |s| s.as_str());
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label}: "), label_style),
+                Span::styled(cell.clone(), value_style),
+            ]));
+        }
+    }
+    lines
+}
+
 fn display_width(s: &str) -> usize {
     s.chars().count()
 }
@@ -146,5 +206,48 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         assert!(rendered.contains("a             "));
+    }
+
+    #[test]
+    fn compute_min_width_accounts_for_borders() {
+        let header = TableRow::new(vec!["AB".into(), "CD".into()]);
+        let body = [TableRow::new(vec!["x".into(), "y".into()])];
+        let w = compute_min_table_width(&header, &body);
+        // 2 (leading "│ ") + (2+3) + (2+3) = 12
+        assert_eq!(w, 12);
+    }
+
+    #[test]
+    fn compute_min_width_empty() {
+        let header = TableRow::new(Vec::new());
+        assert_eq!(compute_min_table_width(&header, &[]), 0);
+    }
+
+    #[test]
+    fn vertical_table_renders_key_value_pairs() {
+        let theme = Theme::dark();
+        let header = TableRow::new(vec!["Name".into(), "Age".into()]);
+        let body = [
+            TableRow::new(vec!["Alice".into(), "30".into()]),
+            TableRow::new(vec!["Bob".into(), "25".into()]),
+        ];
+        let lines = render_vertical_table(&header, &body, &theme);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("Name: "));
+        assert!(text.contains("Alice"));
+        assert!(text.contains("Age: "));
+        assert!(text.contains("30"));
+    }
+
+    #[test]
+    fn vertical_table_empty_body() {
+        let theme = Theme::dark();
+        let header = TableRow::new(vec!["X".into()]);
+        let lines = render_vertical_table(&header, &[], &theme);
+        assert!(lines.is_empty());
     }
 }

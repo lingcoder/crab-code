@@ -20,7 +20,7 @@ pub mod table;
 
 pub use cache::{MarkdownCache, MarkdownCacheKey};
 pub use highlight::{HighlightJob, HighlightRequest, HighlightWorker};
-pub use table::{TableRow, render_gfm_table};
+pub use table::{TableRow, compute_min_table_width, render_gfm_table, render_vertical_table};
 
 use std::sync::Arc;
 
@@ -72,7 +72,7 @@ impl CachedMarkdownRenderer {
             return cached;
         }
         let renderer = MarkdownRenderer::new(theme, highlighter);
-        let lines = renderer.render(content);
+        let lines = renderer.render(content, width);
         let arc = Arc::new(lines);
         self.cache.put(key, Arc::clone(&arc));
         arc

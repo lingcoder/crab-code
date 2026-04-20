@@ -97,7 +97,14 @@ pub fn classify(bg: Rgb) -> Detection {
 /// and this function will still work but may produce visible noise.
 ///
 /// On any I/O error or timeout, [`Detection::Unknown`] is returned.
+///
+/// On Windows, raw stdin read is blocking and the terminal may not
+/// respond to OSC 11 (causing a hang until the user presses a key).
+/// We skip detection entirely on Windows and return `Unknown`.
 pub fn detect_background(timeout: Duration) -> Detection {
+    if cfg!(windows) {
+        return Detection::Unknown;
+    }
     detect_with_io(timeout, std::io::stdout(), std::io::stdin())
 }
 

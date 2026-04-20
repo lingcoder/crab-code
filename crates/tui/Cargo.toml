@@ -36,6 +36,7 @@ nucleo-matcher.workspace = true
 lru.workspace = true
 schemars.workspace = true
 chrono.workspace = true
+arboard.workspace = true
 
 [lints]
 workspace = true

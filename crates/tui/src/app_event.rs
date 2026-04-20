@@ -44,6 +44,8 @@ pub enum AppEvent {
     OpenHistorySearch,
     /// Open model picker overlay.
     OpenModelPicker,
+    /// Open interactive diff viewer overlay.
+    OpenDiffViewer { diff_text: String },
     /// Open full-screen transcript.
     OpenTranscript,
     /// Close the topmost overlay.
@@ -79,6 +81,10 @@ pub enum AppEvent {
     /// The tool name is NOT in this variant — it is resolved from
     /// `App.current_tool` (set when the matching `ToolStart` was applied),
     /// because `crab_core::event::Event::ToolResult` does not carry a name.
+    /// Real-time progress from a running tool.
+    ToolProgress {
+        progress: crab_core::tool::ToolProgress,
+    },
     ToolFinished { output: crab_core::tool::ToolOutput },
     /// The agent message is complete.
     MessageComplete {

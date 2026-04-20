@@ -13,11 +13,15 @@ use ratatui::widgets::{Paragraph, Widget};
 use crate::components::approval_queue::ApprovalQueue;
 use crate::components::autocomplete::{AutoComplete, CommandInfo};
 use crate::components::bottom_bar::BottomBar;
+use crate::components::notification::NotificationManager;
+use crate::clipboard::Clipboard;
 use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
 use crate::components::context_collapse::{CollapsibleSection, ContextCollapse};
+use crate::components::cost_bar::CostBar;
 use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
 use crate::components::input_area::InputArea;
+use crate::vim::{VimAction, VimHandler};
 use crate::components::message_list::MessageList;
 use crate::components::output_styles::OutputStyles;
 use crate::components::permission::{PermissionCard, PermissionResponse};
@@ -125,17 +129,40 @@ pub enum ChatMessage {
         name: String,
         /// Custom summary from `Tool::format_use_summary()`.
         summary: Option<String>,
+        /// Color hint from `Tool::display_color()`.
+        color: Option<crab_core::tool::ToolDisplayStyle>,
     },
     /// Tool execution result — collapsible, rendered as output text.
     ToolResult {
         tool_name: String,
         output: String,
         is_error: bool,
-        /// Custom display from `Tool::format_result()`.
+        /// Custom display from `Tool::format_result()` or `format_error()`.
         display: Option<crab_core::tool::ToolDisplayResult>,
+        /// Whether the result is currently collapsed (only `preview_lines` shown).
+        collapsed: bool,
     },
     /// System/informational message — rendered in dim gray.
     System { text: String },
+    /// Compact boundary — visual separator after context compaction.
+    CompactBoundary {
+        strategy: String,
+        after_tokens: u64,
+        removed_messages: usize,
+    },
+    /// Plan step checklist — rendered with status glyphs and progress bar.
+    PlanStep {
+        title: String,
+        steps: Vec<(String, crate::components::plan_card::PlanStepStatus)>,
+        awaiting_approval: bool,
+    },
+    /// Tool invocation rejected by user — shows what was rejected.
+    ToolRejected {
+        tool_name: String,
+        summary: String,
+        /// Rich preview of the rejected content (command / diff / file).
+        display: Option<crab_core::tool::ToolDisplayResult>,
+    },
 }
 
 /// Main TUI application.
@@ -186,6 +213,11 @@ pub struct App {
     /// to carry the `tool_use_id` (it currently does not — see the `#13`
     /// audit brief, section 2, for the contract gap).
     current_tool: Option<String>,
+    /// Original input JSON for the currently running tool — saved at `ToolStart`,
+    /// consumed at `ToolFinished` to feed `format_error()` when `is_error`.
+    current_tool_input: Option<serde_json::Value>,
+    /// Live progress for the currently running tool (cleared on `ToolFinished`).
+    pub tool_progress: Option<crab_core::tool::ToolProgress>,
     /// Whether the sidebar is visible.
     pub sidebar_visible: bool,
     /// Session sidebar component (session list + navigation).
@@ -198,12 +230,16 @@ pub struct App {
     pub total_input_tokens: u64,
     /// Cumulative output token usage.
     pub total_output_tokens: u64,
+    /// Token/cost status bar.
+    pub cost_bar: CostBar,
     /// Content scroll offset (lines from bottom).
     content_scroll: usize,
     /// Tool output list with fold/unfold state.
     pub tool_outputs: ToolOutputList,
     /// Code block tracker for copy support.
     pub code_blocks: CodeBlockTracker,
+    /// System clipboard access.
+    clipboard: Clipboard,
     /// Search state for in-conversation search.
     pub search: SearchState,
     /// Image placeholders encountered during the session.
@@ -237,6 +273,12 @@ pub struct App {
     pub input_history_list: Vec<String>,
     /// Overlay stack for modal views (command palette, history search, etc.).
     pub overlay_stack: crate::overlay::OverlayStack,
+    /// Vim-style input handler.
+    pub vim: VimHandler,
+    /// Toast notification manager.
+    pub notifications: NotificationManager,
+    /// When agent processing started (for terminal notification after timeout).
+    processing_start: Option<Instant>,
 }
 
 impl App {
@@ -253,15 +295,19 @@ impl App {
             approval_queue: ApprovalQueue::new(),
             should_quit: false,
             current_tool: None,
+            current_tool_input: None,
+            tool_progress: None,
             sidebar_visible: false,
             session_sidebar: SessionSidebar::new(),
             session_id: String::new(),
             keybindings: Keybindings::defaults(),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            cost_bar: CostBar::new(),
             content_scroll: 0,
             tool_outputs: ToolOutputList::new(),
             code_blocks: CodeBlockTracker::new(),
+            clipboard: Clipboard::new(),
             search: SearchState::new(),
             image_placeholders: Vec::new(),
             autocomplete: AutoComplete::default(),
@@ -278,6 +324,9 @@ impl App {
             stash: None,
             input_history_list: Vec::new(),
             overlay_stack: crate::overlay::OverlayStack::new(),
+            vim: VimHandler::new(),
+            notifications: NotificationManager::new(),
+            processing_start: None,
         }
     }
 
@@ -289,6 +338,48 @@ impl App {
     /// Set the current session ID.
     pub fn set_session_id(&mut self, id: impl Into<String>) {
         self.session_id = id.into();
+    }
+
+    /// Reset app state for a new session (clear messages, input, counters).
+    pub fn reset_for_new_session(&mut self) {
+        self.messages.clear();
+        self.content_buffer.clear();
+        self.input.clear();
+        self.state = AppState::Idle;
+        self.spinner.stop();
+        self.current_tool = None;
+        self.current_tool_input = None;
+        self.total_input_tokens = 0;
+        self.total_output_tokens = 0;
+        self.cost_bar = CostBar::new();
+        self.content_scroll = 0;
+        self.scroll_anchor = None;
+        self.unseen_message_count = 0;
+    }
+
+    /// Toggle `collapsed` on the last `ToolResult` in the message list.
+    fn toggle_last_tool_result_collapsed(&mut self) {
+        for msg in self.messages.iter_mut().rev() {
+            if let ChatMessage::ToolResult { collapsed, .. } = msg {
+                *collapsed = !*collapsed;
+                return;
+            }
+        }
+    }
+
+    /// Rebuild the message list from a loaded conversation.
+    pub fn load_session_messages(&mut self, conversation: &crab_session::Conversation) {
+        self.reset_for_new_session();
+        self.session_id.clone_from(&conversation.id);
+        for msg in conversation.messages() {
+            let text = msg.text();
+            let chat_msg = match msg.role {
+                crab_core::message::Role::User => ChatMessage::User { text },
+                crab_core::message::Role::Assistant => ChatMessage::Assistant { text },
+                crab_core::message::Role::System => ChatMessage::System { text },
+            };
+            self.messages.push(chat_msg);
+        }
     }
 
     /// Set custom keybindings.
@@ -462,16 +553,27 @@ impl App {
                 }
                 Action::ToggleFold if self.state != AppState::Confirming => {
                     self.tool_outputs.toggle_selected();
+                    self.toggle_last_tool_result_collapsed();
                     return AppAction::None;
                 }
                 Action::CopyCodeBlock if self.state != AppState::Confirming => {
                     self.code_blocks.update(&self.content_buffer);
                     if let Some(text) = self.code_blocks.copy_focused() {
-                        let _ = write!(
-                            self.content_buffer,
-                            "\n[copied {} bytes to clipboard]",
-                            text.len()
-                        );
+                        match self.clipboard.copy(&text) {
+                            Ok(()) => {
+                                let _ = write!(
+                                    self.content_buffer,
+                                    "\n[copied {} bytes to clipboard]",
+                                    text.len()
+                                );
+                            }
+                            Err(e) => {
+                                let _ = write!(
+                                    self.content_buffer,
+                                    "\n[copy failed: {e}]"
+                                );
+                            }
+                        }
                     }
                     return AppAction::None;
                 }
@@ -588,8 +690,15 @@ impl App {
                     // `AppEvent::ExternalEditorClosed(text)` back into the app.
                     return AppAction::ExternalEditor(self.input.text());
                 }
+                Action::ToggleVimMode if self.state != AppState::Confirming => {
+                    self.vim.toggle();
+                    let label = if self.vim.is_enabled() { "ON" } else { "OFF" };
+                    self.messages.push(ChatMessage::System {
+                        text: format!("[vim mode {label}]"),
+                    });
+                    return AppAction::None;
+                }
                 Action::ImagePaste if self.state != AppState::Confirming => {
-                    // Image paste: placeholder (requires clipboard image access)
                     self.messages.push(ChatMessage::System {
                         text: "[image paste: clipboard image not available]".into(),
                     });
@@ -617,22 +726,31 @@ impl App {
         {
             self.code_blocks.update(&self.content_buffer);
             if let Some(text) = self.code_blocks.copy_focused() {
-                let _ = write!(
-                    self.content_buffer,
-                    "\n[copied {} bytes to clipboard]",
-                    text.len()
-                );
+                match self.clipboard.copy(&text) {
+                    Ok(()) => {
+                        let _ = write!(
+                            self.content_buffer,
+                            "\n[copied {} bytes to clipboard]",
+                            text.len()
+                        );
+                    }
+                    Err(e) => {
+                        let _ = write!(self.content_buffer, "\n[copy failed: {e}]");
+                    }
+                }
             }
             return AppAction::None;
         }
 
-        // Enter toggles fold when idle and input is empty
+        // Enter toggles fold when idle, input is empty, and there are tool outputs
         if self.state == AppState::Idle
             && key.code == KeyCode::Enter
             && key.modifiers.is_empty()
             && self.input.is_empty()
+            && !self.tool_outputs.is_empty()
         {
             self.tool_outputs.toggle_selected();
+            self.toggle_last_tool_result_collapsed();
             return AppAction::None;
         }
 
@@ -713,7 +831,27 @@ impl App {
                     return AppAction::None;
                 }
 
-                self.input.handle_key(key);
+                if self.vim.is_enabled() {
+                    match self.vim.handle_key(key, &mut self.input) {
+                        VimAction::Consumed => {}
+                        VimAction::Submit => {
+                            if !self.input.is_empty() {
+                                let text = self.input.submit();
+                                self.input_history_list.push(text.clone());
+                                self.messages
+                                    .push(ChatMessage::User { text: text.clone() });
+                                self.state = AppState::Processing;
+                                self.spinner.start_with_random_verb();
+                                return AppAction::Submit(text);
+                            }
+                        }
+                        VimAction::Ignored => {
+                            self.input.handle_key(key);
+                        }
+                    }
+                } else {
+                    self.input.handle_key(key);
+                }
                 AppAction::None
             }
         }
@@ -775,12 +913,33 @@ impl App {
             }
         }
 
+        let rejection_info = self
+            .approval_queue
+            .current()
+            .map(|pa| pa.card.rejection_summary());
+
         if let Some((request_id, response)) = self.approval_queue.handle_key(key.code) {
             let allowed = matches!(
                 response,
                 PermissionResponse::Allow | PermissionResponse::AllowAlways
             );
-            // If more approvals are queued, stay in Confirming; otherwise return to Processing.
+            if !allowed
+                && let Some((tool_name, summary)) = rejection_info
+            {
+                let tool_input = self.current_tool_input.as_ref();
+                let display = self
+                    .tool_registry
+                    .as_ref()
+                    .and_then(|reg| reg.get(&tool_name))
+                    .and_then(|tool| {
+                        tool.format_rejected(tool_input.unwrap_or(&serde_json::Value::Null))
+                    });
+                self.messages.push(ChatMessage::ToolRejected {
+                    tool_name,
+                    summary,
+                    display,
+                });
+            }
             if self.approval_queue.is_empty() {
                 self.state = AppState::Processing;
                 if allowed {
@@ -840,6 +999,11 @@ impl App {
                     vec![AppEvent::ToolStart {
                         name: name.clone(),
                         input: input.clone(),
+                    }]
+                }
+                Event::ToolProgress { progress, .. } => {
+                    vec![AppEvent::ToolProgress {
+                        progress: progress.clone(),
                     }]
                 }
                 Event::ToolResult { output, .. } => {
@@ -927,6 +1091,7 @@ impl App {
         match event {
             AppEvent::Tick => {
                 self.spinner.tick();
+                self.notifications.tick();
                 if let ThinkingState::ThoughtFor { finished_at, .. } = self.thinking
                     && finished_at.elapsed() >= ThinkingState::DISPLAY_DURATION
                 {
@@ -963,45 +1128,55 @@ impl App {
                 AppAction::None
             }
             AppEvent::ToolStart { name, input } => {
-                // Call the tool registry's rendering hook for the invocation summary
-                // (e.g. `BashTool` → `$ ls -la`). Falls back to `None` when no registry
-                // is attached or the tool is unknown — the renderer then shows `● {name}`.
-                let summary = self
+                let tool_ref = self
                     .tool_registry
                     .as_ref()
-                    .and_then(|reg| reg.get(&name))
-                    .and_then(|tool| tool.format_use_summary(&input));
+                    .and_then(|reg| reg.get(&name));
+                let summary = tool_ref.and_then(|t| t.format_use_summary(&input));
+                let color = tool_ref.map(|t| t.display_color());
                 self.current_tool = Some(name.clone());
+                self.current_tool_input = Some(input);
                 self.messages.push(ChatMessage::ToolUse {
                     name: name.clone(),
                     summary,
+                    color,
                 });
                 self.spinner.set_message(format!("Running {name}…"));
+                if self.processing_start.is_none() {
+                    self.processing_start = Some(Instant::now());
+                }
+                AppAction::None
+            }
+            AppEvent::ToolProgress { progress } => {
+                self.tool_progress = Some(progress);
                 AppAction::None
             }
             AppEvent::ToolFinished { output } => {
-                // `Event::ToolResult` doesn't carry a tool name. The authoritative
-                // tool name for the streaming sequence lives in `current_tool`,
-                // which was set when the matching `AppEvent::ToolStart` was applied.
-                // Using `take()` atomically reads-and-clears — no stale state between
-                // tool invocations.
+                self.tool_progress = None;
                 let tool_name = self.current_tool.take().unwrap_or_default();
+                let tool_input = self.current_tool_input.take();
                 self.spinner.clear_override();
-                // Call the tool registry's rendering hook for the result display
-                // (e.g. `BashTool` → styled stdout/stderr). Falls back to `None` for
-                // the default 10-line plain-text truncation.
-                let display = self
+                let tool_ref = self
                     .tool_registry
                     .as_ref()
-                    .and_then(|reg| reg.get(&tool_name))
-                    .and_then(|tool| tool.format_result(&output));
+                    .and_then(|reg| reg.get(&tool_name));
+                let display = if output.is_error {
+                    let input = tool_input.as_ref().unwrap_or(&serde_json::Value::Null);
+                    tool_ref
+                        .and_then(|tool| tool.format_error(&output, input))
+                        .or_else(|| tool_ref.and_then(|tool| tool.format_result(&output)))
+                } else {
+                    tool_ref.and_then(|tool| tool.format_result(&output))
+                };
                 let text = output.text();
                 let is_error = output.is_error;
+                let collapsed = tool_ref.is_some_and(|t| t.is_result_collapsible(&output));
                 self.messages.push(ChatMessage::ToolResult {
                     tool_name: tool_name.clone(),
                     output: text.clone(),
                     is_error,
                     display,
+                    collapsed,
                 });
                 self.tool_outputs
                     .push(ToolOutputEntry::new(&tool_name, text.clone(), is_error));
@@ -1024,18 +1199,36 @@ impl App {
             } => {
                 self.spinner.stop();
                 self.current_tool = None;
+                self.current_tool_input = None;
                 self.state = AppState::Idle;
                 self.total_input_tokens += input_tokens;
                 self.total_output_tokens += output_tokens;
+                self.cost_bar.update(
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                    0,
+                    0,
+                    0.0,
+                    0,
+                );
+                if let Some(start) = self.processing_start.take()
+                    && start.elapsed() > Duration::from_secs(10)
+                {
+                    crate::terminal_notify::notify("Crab Code", "Task completed");
+                }
                 AppAction::None
             }
             AppEvent::AgentError(message) => {
                 self.spinner.stop();
                 self.current_tool = None;
+                self.current_tool_input = None;
                 self.state = AppState::Idle;
+                self.processing_start = None;
                 self.messages.push(ChatMessage::System {
                     text: format!("Error: {message}"),
                 });
+                self.notifications.error(&message);
+                crate::terminal_notify::notify("Crab Code", "Agent error");
                 AppAction::None
             }
             AppEvent::PermissionRequested {
@@ -1076,6 +1269,7 @@ impl App {
             }
             AppEvent::ToggleFold => {
                 self.tool_outputs.toggle_selected();
+                self.toggle_last_tool_result_collapsed();
                 AppAction::None
             }
             AppEvent::CyclePermissionMode => {
@@ -1108,19 +1302,19 @@ impl App {
                 self.should_quit = true;
                 AppAction::Quit
             }
-            AppEvent::CompactStart { strategy } => {
-                self.messages.push(ChatMessage::System {
-                    text: format!("Compacting: {strategy}"),
-                });
+            AppEvent::CompactStart { .. } => {
                 AppAction::None
             }
             AppEvent::CompactEnd {
                 after_tokens,
                 removed_messages,
             } => {
-                self.messages.push(ChatMessage::System {
-                    text: format!("Removed {removed_messages} messages, now {after_tokens} tokens"),
+                self.messages.push(ChatMessage::CompactBoundary {
+                    strategy: "summary".into(),
+                    after_tokens,
+                    removed_messages,
                 });
+                self.notifications.success("Context compacted");
                 AppAction::None
             }
             AppEvent::TokenWarning {
@@ -1185,6 +1379,7 @@ impl App {
             | AppEvent::OpenModelPicker
             | AppEvent::OpenTranscript
             | AppEvent::CloseOverlay
+            | AppEvent::OpenDiffViewer { .. }
             // Content actions (handle_key mutates state directly)
             | AppEvent::CopyCodeBlock
             | AppEvent::ExternalEditorOpen
@@ -1227,9 +1422,11 @@ impl App {
         };
         message_list.render(layout.content, buf);
 
-        // Status line: only show spinner when active
+        // Status line: spinner when active, cost bar otherwise
         if self.spinner.is_active() {
             Widget::render(&self.spinner, layout.status, buf);
+        } else if self.cost_bar.total_tokens() > 0 {
+            Widget::render(&self.cost_bar, layout.status, buf);
         }
 
         // Separators
@@ -1279,11 +1476,17 @@ impl App {
         // Bottom bar — delegated to BottomBar Renderable.
         // Surface any in-flight chord prefix so the user sees "Ctrl+K …"
         // after the first key of a chord binding.
+        let vim_label = if self.vim.is_enabled() {
+            Some(self.vim.mode().label())
+        } else {
+            None
+        };
         let bottom_bar = BottomBar {
             state: self.state,
             search_active: self.search.is_active(),
             permission_mode: self.permission_mode,
             chord_prefix: self.keybindings.pending_chord(),
+            vim_mode: vim_label,
         };
         bottom_bar.render(layout.bottom_bar, buf);
 
@@ -1325,6 +1528,23 @@ impl App {
                 let paragraph = Paragraph::new(line.clone());
                 Widget::render(paragraph, line_area, buf);
             }
+        }
+
+        // Toast notifications — rendered above bottom bar
+        if self.notifications.has_active() {
+            let toast_height = self.notifications.visible().len() as u16;
+            let toast_y = layout.bottom_bar.y.saturating_sub(toast_height);
+            let toast_area = Rect {
+                x: layout.content.x,
+                y: toast_y,
+                width: layout.content.width,
+                height: toast_height,
+            };
+            Widget::render(
+                crate::components::notification::ToastRenderer::new(&self.notifications),
+                toast_area,
+                buf,
+            );
         }
 
         // Overlay stack (renders on top of everything)
@@ -1484,6 +1704,10 @@ mod tests {
             ChatMessage::ToolResult {
                 tool_name, output, ..
             } => tool_name.contains(needle) || output.contains(needle),
+            ChatMessage::ToolRejected {
+                tool_name, summary, ..
+            } => tool_name.contains(needle) || summary.contains(needle),
+            ChatMessage::CompactBoundary { .. } | ChatMessage::PlanStep { .. } => false,
         })
     }
 

@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 use std::future::Future;
 use std::path::Path;
@@ -155,6 +155,30 @@ impl Tool for WriteTool {
         let path = input["file_path"].as_str()?;
         let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
         Some(format!("Write rejected ({filename})"))
+    }
+
+    fn format_rejected(&self, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::ToolDisplayLine;
+        let content = input["content"].as_str()?;
+        let preview: Vec<&str> = content.lines().take(3).collect();
+        let mut lines = Vec::new();
+        for line in &preview {
+            lines.push(ToolDisplayLine::new(*line, ToolDisplayStyle::Muted));
+        }
+        if content.lines().count() > 3 {
+            lines.push(ToolDisplayLine::new(
+                format!("... ({} more lines)", content.lines().count() - 3),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 3,
+        })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::DiffAdd
     }
 }
 

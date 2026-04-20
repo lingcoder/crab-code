@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use crab_fs::grep::{GrepMatch, GrepOptions, search};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -185,8 +185,12 @@ impl Tool for GrepTool {
 
         Some(ToolDisplayResult {
             lines,
-            preview_lines: 1, // condensed: just "Found N files/results"
+            preview_lines: 1,
         })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Highlight
     }
 }
 

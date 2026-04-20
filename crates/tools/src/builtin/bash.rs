@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -177,8 +177,68 @@ impl Tool for BashTool {
             .map(|cmd| format!("Run rejected ({cmd})"))
     }
 
+    fn format_rejected(&self, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::ToolDisplayLine;
+        let cmd = input["command"].as_str()?;
+        let preview: Vec<&str> = cmd.lines().take(3).collect();
+        let mut lines = Vec::new();
+        for line in &preview {
+            lines.push(ToolDisplayLine::new(*line, ToolDisplayStyle::Highlight));
+        }
+        if cmd.lines().count() > 3 {
+            lines.push(ToolDisplayLine::new(
+                format!("... ({} more lines)", cmd.lines().count() - 3),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 3,
+        })
+    }
+
     fn supports_streaming_progress(&self) -> bool {
         true
+    }
+
+    fn format_error(&self, output: &ToolOutput, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::ToolDisplayLine;
+        let text = output.text();
+        let cmd = input["command"]
+            .as_str()
+            .map(|c| truncate_chars(c, 80, "…"))
+            .unwrap_or_default();
+
+        let mut lines = vec![ToolDisplayLine::new(
+            format!("Command failed: {cmd}"),
+            ToolDisplayStyle::Error,
+        )];
+
+        let tail: Vec<&str> = text.lines().rev().take(3).collect();
+        for line in tail.into_iter().rev() {
+            lines.push(ToolDisplayLine::new(line, ToolDisplayStyle::Muted));
+        }
+
+        if text.contains("not found") || text.contains("not recognized") {
+            lines.push(ToolDisplayLine::new(
+                "Hint: Command not found — check spelling or PATH",
+                ToolDisplayStyle::Muted,
+            ));
+        } else if text.contains("Permission denied") {
+            lines.push(ToolDisplayLine::new(
+                "Hint: Permission denied — check file permissions",
+                ToolDisplayStyle::Muted,
+            ));
+        }
+
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 2,
+        })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Highlight
     }
 }
 

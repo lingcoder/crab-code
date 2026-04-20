@@ -29,8 +29,11 @@ pub enum PermissionKind {
         description: Option<String>,
     },
     /// File edit operation.
-    /// CC: `FileEditPermissionRequest` — title "Edit file", shows path.
-    FileEdit { path: String },
+    /// CC: `FileEditPermissionRequest` — title "Edit file", shows path + optional diff preview.
+    FileEdit {
+        path: String,
+        diff: Option<String>,
+    },
     /// File creation or overwrite.
     /// CC: `FileWritePermissionRequest` — title "Create file" / "Overwrite file".
     FileWrite { path: String, file_exists: bool },
@@ -150,6 +153,41 @@ impl PermissionCard {
             request_id,
             options,
             selected: 0,
+        }
+    }
+
+    /// Return (`tool_name`, summary) for a rejection message.
+    pub fn rejection_summary(&self) -> (String, String) {
+        match &self.kind {
+            PermissionKind::Bash { command, .. } => {
+                let short = if command.len() > 60 {
+                    format!("{}…", &command[..60])
+                } else {
+                    command.clone()
+                };
+                ("bash".into(), format!("Run rejected ({short})"))
+            }
+            PermissionKind::FileEdit { path, .. } => {
+                let f = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                ("edit".into(), format!("Edit rejected ({f})"))
+            }
+            PermissionKind::FileWrite { path, .. } => {
+                let f = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                ("write".into(), format!("Write rejected ({f})"))
+            }
+            PermissionKind::WebFetch { url } => {
+                ("web_fetch".into(), format!("Fetch rejected ({url})"))
+            }
+            PermissionKind::NotebookEdit { path } => {
+                let f = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                ("notebook_edit".into(), format!("Notebook edit rejected ({f})"))
+            }
+            PermissionKind::Generic {
+                tool_name,
+                input_summary,
+            } => {
+                (tool_name.clone(), format!("{tool_name} rejected ({input_summary})"))
+            }
         }
     }
 
@@ -274,22 +312,35 @@ impl PermissionCard {
     }
 
     /// Render the per-tool-type content section.
-    fn render_content(&self, _width: usize) -> Vec<Line<'static>> {
+    fn render_content(&self, width: usize) -> Vec<Line<'static>> {
         let dim = Style::default().fg(muted_color());
         let normal = Style::default().fg(body_color());
         let emphasis = Style::default()
             .fg(label_color())
             .add_modifier(Modifier::BOLD);
+        let code_style = Style::default().fg(Color::Cyan);
 
         match &self.kind {
             PermissionKind::Bash {
                 command,
                 description,
             } => {
-                let mut lines = vec![Line::from(vec![
-                    Span::styled("  ", dim),
-                    Span::styled(command.clone(), Style::default().fg(label_color())),
-                ])];
+                let mut lines = Vec::new();
+                let cmd_lines: Vec<&str> = command.lines().collect();
+                let show_count = cmd_lines.len().min(5);
+                for (i, line) in cmd_lines[..show_count].iter().enumerate() {
+                    let prefix = if i == 0 { "  $ " } else { "    " };
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, dim),
+                        Span::styled((*line).to_string(), code_style),
+                    ]));
+                }
+                if cmd_lines.len() > 5 {
+                    lines.push(Line::from(Span::styled(
+                        format!("    ... ({} more lines)", cmd_lines.len() - 5),
+                        dim,
+                    )));
+                }
                 if let Some(desc) = description
                     && !desc.is_empty()
                 {
@@ -297,17 +348,45 @@ impl PermissionCard {
                 }
                 lines
             }
-            PermissionKind::FileEdit { path } | PermissionKind::NotebookEdit { path } => {
+            PermissionKind::FileEdit { path, diff } => {
+                let mut lines = vec![Line::from(vec![
+                    Span::styled("  ", dim),
+                    Span::styled(path.clone(), normal),
+                ])];
+                if let Some(diff_text) = diff {
+                    lines.push(Line::default());
+                    let diff_lines: Vec<&str> = diff_text.lines().collect();
+                    let show_count = diff_lines.len().min(5);
+                    for line in &diff_lines[..show_count] {
+                        let style = if line.starts_with('+') {
+                            Style::default().fg(Color::Green)
+                        } else if line.starts_with('-') {
+                            Style::default().fg(Color::Red)
+                        } else {
+                            dim
+                        };
+                        lines.push(Line::from(Span::styled(
+                            format!("  {line}"),
+                            style,
+                        )));
+                    }
+                    if diff_lines.len() > 5 {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ... ({} more lines)", diff_lines.len() - 5),
+                            dim,
+                        )));
+                    }
+                }
+                lines
+            }
+            PermissionKind::NotebookEdit { path } => {
                 vec![Line::from(vec![
                     Span::styled("  ", dim),
                     Span::styled(path.clone(), normal),
                 ])]
             }
             PermissionKind::WebFetch { url } => {
-                vec![Line::from(vec![
-                    Span::styled("  ", dim),
-                    Span::styled(url.clone(), normal),
-                ])]
+                render_parsed_url(url, width)
             }
             PermissionKind::FileWrite { path, file_exists } => {
                 let verb = if *file_exists { "overwrite" } else { "create" };
@@ -321,11 +400,20 @@ impl PermissionCard {
                 tool_name,
                 input_summary,
             } => {
-                let mut lines = vec![Line::from(vec![
-                    Span::styled("  ", dim),
-                    Span::styled(tool_name.clone(), emphasis),
-                ])];
-                // Truncate summary to 3 lines (CC: truncateToLines(text, 3))
+                let mut lines = Vec::new();
+                if let Some((server, tool)) = parse_mcp_tool_name(tool_name) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", dim),
+                        Span::styled(server, Style::default().fg(Color::Magenta)),
+                        Span::styled("::", dim),
+                        Span::styled(tool, emphasis),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", dim),
+                        Span::styled(tool_name.clone(), emphasis),
+                    ]));
+                }
                 let summary_lines: Vec<&str> = input_summary.lines().collect();
                 let show = summary_lines.len().min(3);
                 for line in &summary_lines[..show] {
@@ -472,6 +560,7 @@ fn classify_permission_kind(tool_name: &str, input_summary: &str) -> PermissionK
         },
         "edit" => PermissionKind::FileEdit {
             path: input_summary.to_string(),
+            diff: None,
         },
         "write" => PermissionKind::FileWrite {
             path: input_summary.to_string(),
@@ -570,6 +659,48 @@ fn build_options(kind: &PermissionKind) -> Vec<PermissionOption> {
             },
         ],
     }
+}
+
+/// Render a URL with structured display: scheme dimmed, domain bold, path muted.
+fn render_parsed_url(url: &str, _width: usize) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(muted_color());
+    let bold = Style::default()
+        .fg(label_color())
+        .add_modifier(Modifier::BOLD);
+
+    let (scheme, rest) = if let Some(after) = url.strip_prefix("https://") {
+        ("https://", after)
+    } else if let Some(after) = url.strip_prefix("http://") {
+        ("http://", after)
+    } else {
+        return vec![Line::from(vec![
+            Span::styled("  ", dim),
+            Span::styled(url.to_string(), Style::default().fg(body_color())),
+        ])];
+    };
+
+    let (domain, path) = rest
+        .find('/')
+        .map_or((rest, ""), |i| rest.split_at(i));
+
+    vec![Line::from(vec![
+        Span::styled("  ", dim),
+        Span::styled(scheme.to_string(), dim),
+        Span::styled(domain.to_string(), bold),
+        Span::styled(path.to_string(), dim),
+    ])]
+}
+
+/// Parse an MCP-style tool name (`mcp__server__tool`) into `(server, tool)`.
+fn parse_mcp_tool_name(name: &str) -> Option<(String, String)> {
+    let stripped = name.strip_prefix("mcp__")?;
+    let idx = stripped.find("__")?;
+    let server = &stripped[..idx];
+    let tool = &stripped[idx + 2..];
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some((server.to_string(), tool.to_string()))
 }
 
 /// Extract domain from a URL for display.
@@ -804,5 +935,92 @@ mod tests {
         let card = PermissionCard::from_event("notebook_edit", "analysis.ipynb", "req_n".into());
         assert!(matches!(card.kind, PermissionKind::NotebookEdit { .. }));
         assert_eq!(card.kind.title(), "Edit notebook");
+    }
+
+    // ── Phase 1: Enhanced rendering tests ──
+
+    #[test]
+    fn bash_multiline_command_shows_dollar_prefix() {
+        let card = PermissionCard::from_event(
+            "bash",
+            "echo hello\necho world\necho done",
+            "req_ml".into(),
+        );
+        let lines = card.render_lines(80);
+        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(all_text.contains("$ "));
+        assert!(all_text.contains("echo hello"));
+    }
+
+    #[test]
+    fn bash_long_command_truncated() {
+        let cmd = (0..10).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+        let card = PermissionCard::from_event("bash", &cmd, "req_trunc".into());
+        let lines = card.render_lines(80);
+        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(all_text.contains("5 more lines"));
+    }
+
+    #[test]
+    fn web_fetch_url_parsed_display() {
+        let card = PermissionCard::from_event(
+            "web_fetch",
+            "https://api.example.com/v1/data?q=test",
+            "req_url".into(),
+        );
+        let lines = card.render_lines(80);
+        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(all_text.contains("api.example.com"));
+        assert!(all_text.contains("https://"));
+    }
+
+    #[test]
+    fn mcp_tool_name_parsed() {
+        assert_eq!(
+            parse_mcp_tool_name("mcp__github__list_repos"),
+            Some(("github".to_string(), "list_repos".to_string()))
+        );
+        assert_eq!(parse_mcp_tool_name("regular_tool"), None);
+        assert_eq!(parse_mcp_tool_name("mcp____"), None);
+        assert_eq!(parse_mcp_tool_name("mcp__server__"), None);
+    }
+
+    #[test]
+    fn mcp_generic_card_renders_server_tool_format() {
+        let card = PermissionCard::from_event(
+            "mcp__myserver__do_thing",
+            "some input",
+            "req_mcp".into(),
+        );
+        let lines = card.render_lines(80);
+        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(all_text.contains("myserver"));
+        assert!(all_text.contains("do_thing"));
+    }
+
+    #[test]
+    fn file_edit_with_diff_shows_colored_lines() {
+        let kind = PermissionKind::FileEdit {
+            path: "src/main.rs".to_string(),
+            diff: Some("-old line\n+new line\n context".to_string()),
+        };
+        let options = build_options(&kind);
+        let card = PermissionCard {
+            kind,
+            request_id: "req_diff".into(),
+            options,
+            selected: 0,
+        };
+        let lines = card.render_lines(80);
+        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(all_text.contains("-old line"));
+        assert!(all_text.contains("+new line"));
+    }
+
+    #[test]
+    fn render_parsed_url_no_scheme_fallback() {
+        let lines = render_parsed_url("just-a-hostname", 80);
+        let text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(text.contains("just-a-hostname"));
     }
 }

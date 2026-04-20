@@ -62,6 +62,10 @@ impl GlobalSearchOverlay {
             ChatMessage::ToolResult {
                 tool_name, output, ..
             } => format!("{tool_name}: {output}"),
+            ChatMessage::ToolRejected {
+                tool_name, summary, ..
+            } => format!("{tool_name}: {summary}"),
+            ChatMessage::CompactBoundary { .. } | ChatMessage::PlanStep { .. } => String::new(),
         }
     }
 
@@ -193,7 +197,12 @@ impl Renderable for GlobalSearchOverlay {
                 Some(ChatMessage::Assistant { .. }) => "[asst]",
                 Some(ChatMessage::ToolUse { .. }) => "[tool]",
                 Some(ChatMessage::ToolResult { .. }) => "[rslt]",
-                Some(ChatMessage::System { .. }) => "[sys] ",
+                Some(ChatMessage::ToolRejected { .. }) => "[deny]",
+                Some(
+                    ChatMessage::System { .. }
+                    | ChatMessage::CompactBoundary { .. }
+                    | ChatMessage::PlanStep { .. },
+                ) => "[sys] ",
                 None => "[???] ",
             };
             let truncated = if result.preview.len() > area.width as usize - 12 {

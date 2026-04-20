@@ -132,6 +132,14 @@ fn register_chat(r: &mut Resolver) {
         single(KeyChord::alt(KeyCode::Char('v'))),
         Action::EnterSelectionMode,
     );
+    r.bind(
+        KeyContext::Chat,
+        single(KeyChord::new(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+        )),
+        Action::ToggleVimMode,
+    );
 
     // Chord bindings (Ctrl+K prefix is the common CCB pattern).
     r.bind(

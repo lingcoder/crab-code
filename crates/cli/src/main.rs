@@ -1376,6 +1376,13 @@ fn event_to_json(event: &Event) -> Option<Value> {
             "id": id,
             "delta": delta,
         })),
+        Event::ToolProgress { id, progress } => Some(json!({
+            "type": "tool_progress",
+            "id": id,
+            "elapsed_secs": progress.elapsed_secs,
+            "total_lines": progress.total_lines,
+            "total_bytes": progress.total_bytes,
+        })),
         Event::ToolResult { id, output } => Some(json!({
             "type": "tool_result",
             "id": id,
@@ -1868,6 +1875,16 @@ mod tests {
             Event::ToolOutputDelta {
                 id: "t".into(),
                 delta: "line".into(),
+            },
+            Event::ToolProgress {
+                id: "t".into(),
+                progress: crab_core::tool::ToolProgress {
+                    elapsed_secs: 1.0,
+                    total_lines: 10,
+                    total_bytes: 256,
+                    tail_output: String::new(),
+                    timeout_secs: None,
+                },
             },
             Event::ToolResult {
                 id: "t".into(),

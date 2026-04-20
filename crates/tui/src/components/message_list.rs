@@ -116,12 +116,14 @@ mod tests {
             ChatMessage::ToolUse {
                 name: "read".into(),
                 summary: Some("src/lib.rs".into()),
+                color: None,
             },
             ChatMessage::ToolResult {
                 tool_name: "read".into(),
                 output: "line1\nline2\nline3".into(),
                 is_error: false,
                 display: None,
+                collapsed: false,
             },
             ChatMessage::System {
                 text: "note".into(),

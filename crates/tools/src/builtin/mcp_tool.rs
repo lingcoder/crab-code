@@ -3,7 +3,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent, ToolSource};
+use crab_core::tool::{
+    Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
+    ToolOutputContent, ToolSource,
+};
 use crab_mcp::McpClient;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -133,8 +136,100 @@ impl Tool for McpTool {
         true
     }
 
-    fn format_use_summary(&self, _input: &Value) -> Option<String> {
-        Some(self.name().to_string())
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        let display_name = format!("{}::{}", self.server_name, self.original_name);
+
+        let params = if let Some(obj) = input.as_object() {
+            let pairs: Vec<String> = obj
+                .iter()
+                .take(3)
+                .map(|(k, v)| {
+                    let val = match v {
+                        Value::String(s) => {
+                            if s.len() > 30 {
+                                format!("\"{}…\"", &s[..27])
+                            } else {
+                                format!("\"{s}\"")
+                            }
+                        }
+                        other => {
+                            let s = other.to_string();
+                            if s.len() > 30 {
+                                format!("{}…", &s[..27])
+                            } else {
+                                s
+                            }
+                        }
+                    };
+                    format!("{k}={val}")
+                })
+                .collect();
+            if pairs.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", pairs.join(", "))
+            }
+        } else {
+            String::new()
+        };
+
+        Some(format!("{display_name}{params}"))
+    }
+
+    fn format_result(&self, output: &ToolOutput) -> Option<ToolDisplayResult> {
+        let text = output.text();
+        if text.is_empty() {
+            return Some(ToolDisplayResult {
+                lines: vec![ToolDisplayLine::new("(empty)", ToolDisplayStyle::Muted)],
+                preview_lines: 1,
+            });
+        }
+
+        // Try to detect JSON and format it nicely
+        if let Ok(json) = serde_json::from_str::<Value>(&text)
+            && let Ok(pretty) = serde_json::to_string_pretty(&json)
+        {
+            let lines: Vec<ToolDisplayLine> = pretty
+                .lines()
+                .take(10)
+                .map(|l| ToolDisplayLine::new(l, ToolDisplayStyle::Normal))
+                .collect();
+            let total = pretty.lines().count();
+            let mut result_lines = lines;
+            if total > 10 {
+                result_lines.push(ToolDisplayLine::new(
+                    format!("... {total} total lines"),
+                    ToolDisplayStyle::Muted,
+                ));
+            }
+            return Some(ToolDisplayResult {
+                preview_lines: 3,
+                lines: result_lines,
+            });
+        }
+
+        // Plain text: show first 10 lines
+        let lines: Vec<ToolDisplayLine> = text
+            .lines()
+            .take(10)
+            .map(|l| ToolDisplayLine::new(l, ToolDisplayStyle::Normal))
+            .collect();
+        let total = text.lines().count();
+        let mut result_lines = lines;
+        if total > 10 {
+            result_lines.push(ToolDisplayLine::new(
+                format!("... {total} total lines"),
+                ToolDisplayStyle::Muted,
+            ));
+        }
+        Some(ToolDisplayResult {
+            preview_lines: 3,
+            lines: result_lines,
+        })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::Highlight
     }
 }
 
@@ -441,5 +536,173 @@ mod tests {
             ToolSource::McpExternal { server_name } if server_name == "srv"
         ));
         assert!(tool_a.requires_confirmation());
+    }
+
+    #[test]
+    fn format_use_summary_shows_server_tool_format() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "playwright".into(),
+                "click".into(),
+                "Click an element".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let input = serde_json::json!({"selector": "#btn", "timeout": 5000});
+            let summary = adapter.format_use_summary(&input).unwrap();
+            assert!(summary.starts_with("playwright::click"));
+            assert!(summary.contains("selector"));
+            assert!(summary.contains("#btn"));
+        });
+    }
+
+    #[test]
+    fn format_use_summary_truncates_long_values() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let long_val = "a".repeat(50);
+            let input = serde_json::json!({"key": long_val});
+            let summary = adapter.format_use_summary(&input).unwrap();
+            assert!(summary.contains("…"));
+            assert!(summary.len() < 80);
+        });
+    }
+
+    #[test]
+    fn format_use_summary_empty_input() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let summary = adapter.format_use_summary(&serde_json::json!({})).unwrap();
+            assert_eq!(summary, "srv::tool");
+        });
+    }
+
+    #[test]
+    fn format_result_json() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let output = ToolOutput::success(r#"{"key": "value", "num": 42}"#);
+            let result = adapter.format_result(&output).unwrap();
+            let text: String = result.lines.iter().map(|l| &l.text).cloned().collect::<Vec<_>>().join("\n");
+            assert!(text.contains("key"));
+            assert!(text.contains("value"));
+            assert_eq!(result.preview_lines, 3);
+        });
+    }
+
+    #[test]
+    fn format_result_plain_text() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let output = ToolOutput::success("line1\nline2\nline3");
+            let result = adapter.format_result(&output).unwrap();
+            assert_eq!(result.lines.len(), 3);
+            assert_eq!(result.lines[0].text, "line1");
+        });
+    }
+
+    #[test]
+    fn format_result_long_output_truncated() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            let long_text = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+            let output = ToolOutput::success(&long_text);
+            let result = adapter.format_result(&output).unwrap();
+            assert_eq!(result.lines.len(), 11); // 10 lines + "... N total lines"
+            assert!(result.lines[10].text.contains("20 total lines"));
+        });
+    }
+
+    #[test]
+    fn display_color_is_highlight() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = mock_client(vec![]).await;
+            let adapter = McpTool::new(
+                "srv".into(),
+                "tool".into(),
+                "desc".into(),
+                serde_json::json!({"type": "object"}),
+                Arc::new(Mutex::new(client)),
+            );
+
+            assert_eq!(adapter.display_color(), ToolDisplayStyle::Highlight);
+        });
     }
 }

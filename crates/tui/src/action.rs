@@ -87,6 +87,7 @@ pub enum Action {
     OverlaySelect,
 
     // ─── Open overlays / panels ───
+    OpenDiffViewer,
     OpenTranscript,
     ToggleTranscript,
     ToggleTodos,
@@ -106,6 +107,9 @@ pub enum Action {
     MessageEdit,
     MessageDelete,
     MessageRewind,
+
+    // ─── Vim ───
+    ToggleVimMode,
 
     // ─── Misc ───
     Stash,

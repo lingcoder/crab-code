@@ -1,5 +1,5 @@
 use crab_common::Result;
-use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
+use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 use std::fmt::Write;
 use std::future::Future;
@@ -242,6 +242,61 @@ impl Tool for EditTool {
         let path = input["file_path"].as_str()?;
         let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
         Some(format!("Update rejected ({filename})"))
+    }
+
+    fn format_rejected(&self, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::ToolDisplayLine;
+        let old = input["old_string"].as_str()?;
+        let new = input["new_string"].as_str().unwrap_or("");
+        let mut lines = Vec::new();
+        for line in old.lines().take(3) {
+            lines.push(ToolDisplayLine::new(format!("- {line}"), ToolDisplayStyle::DiffRemove));
+        }
+        for line in new.lines().take(3) {
+            lines.push(ToolDisplayLine::new(format!("+ {line}"), ToolDisplayStyle::DiffAdd));
+        }
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 5,
+        })
+    }
+
+    fn format_error(&self, output: &ToolOutput, input: &Value) -> Option<ToolDisplayResult> {
+        use crab_core::tool::{ToolDisplayLine, ToolDisplayStyle};
+        let text = output.text();
+        let path = input["file_path"].as_str().unwrap_or("?");
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+
+        let mut lines = vec![ToolDisplayLine::new(
+            format!("Error editing {filename}"),
+            ToolDisplayStyle::Error,
+        )];
+
+        if text.contains("not been read") {
+            lines.push(ToolDisplayLine::new(
+                "Hint: Read the file before editing",
+                ToolDisplayStyle::Muted,
+            ));
+        } else if text.contains("not found") || text.contains("No such file") {
+            lines.push(ToolDisplayLine::new(
+                format!("Hint: {path} does not exist — check the path"),
+                ToolDisplayStyle::Muted,
+            ));
+        } else if text.contains("not unique") {
+            lines.push(ToolDisplayLine::new(
+                "Hint: old_string matches multiple locations — add more context",
+                ToolDisplayStyle::Muted,
+            ));
+        }
+
+        Some(ToolDisplayResult {
+            lines,
+            preview_lines: 2,
+        })
+    }
+
+    fn display_color(&self) -> ToolDisplayStyle {
+        ToolDisplayStyle::DiffAdd
     }
 }
 
