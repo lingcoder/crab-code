@@ -1,20 +1,22 @@
-//! Message list component — renders structured conversation messages
-//! with scroll support.
+//! Message list component — paints the conversation transcript by
+//! dispatching to per-message [`HistoryCell`] implementations.
+//!
+//! `ChatMessage` remains the persistence-facing enum used by `App`;
+//! this renderer converts on the fly via
+//! [`crate::history::cell_from_chat_message`]. When the rest of `App`
+//! migrates to owning `Box<dyn HistoryCell>` directly, this module's
+//! implementation only needs to drop the conversion step.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::app::ChatMessage;
-use crate::components::text_utils::strip_trailing_tool_json;
+use crate::history::cell_from_chat_message;
 use crate::traits::Renderable;
 
-/// Terra cotta color.
-const CRAB_COLOR: Color = Color::Rgb(218, 119, 86);
-
-/// Renders the structured message list with scroll offset.
+/// Renders the structured message list with scroll support.
 pub struct MessageList<'a> {
     pub messages: &'a [ChatMessage],
     pub scroll_offset: usize,
@@ -31,7 +33,8 @@ impl Renderable for MessageList<'_> {
     }
 }
 
-/// Render structured messages list — each `ChatMessage` gets its own visual treatment.
+/// Flatten `messages` into Lines via the `HistoryCell` adapter and
+/// paint the viewport.
 #[allow(clippy::cast_possible_truncation)]
 pub fn render_messages(
     messages: &[ChatMessage],
@@ -39,107 +42,16 @@ pub fn render_messages(
     area: Rect,
     buf: &mut Buffer,
 ) {
-    if area.height == 0 {
+    if area.height == 0 || area.width == 0 {
         return;
     }
 
-    let theme = crate::theme::Theme::dark();
-    let highlighter = crate::components::syntax::SyntaxHighlighter::new();
-    let md_renderer = crate::components::markdown::MarkdownRenderer::new(&theme, &highlighter);
-
     let mut rendered_lines: Vec<Line<'static>> = Vec::new();
-
     for msg in messages {
-        match msg {
-            ChatMessage::User { text } => {
-                rendered_lines.push(Line::from(vec![
-                    Span::styled(
-                        "❯ ",
-                        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text.clone(), Style::default().fg(Color::White)),
-                ]));
-                rendered_lines.push(Line::default());
-            }
-            ChatMessage::Assistant { text } => {
-                if text.is_empty() {
-                    continue;
-                }
-                let clean_text = strip_trailing_tool_json(text);
-                if clean_text.is_empty() {
-                    continue;
-                }
-                let md_lines = md_renderer.render(&clean_text);
-                if let Some(first) = md_lines.first() {
-                    let mut spans = vec![Span::styled("● ", Style::default().fg(CRAB_COLOR))];
-                    spans.extend(first.spans.iter().cloned());
-                    rendered_lines.push(Line::from(spans));
-                    rendered_lines.extend(md_lines.into_iter().skip(1));
-                }
-                rendered_lines.push(Line::default());
-            }
-            ChatMessage::ToolUse { name, summary } => {
-                let label = summary.as_deref().unwrap_or(name);
-                rendered_lines.push(Line::from(Span::styled(
-                    format!("● {label}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            ChatMessage::ToolResult {
-                output,
-                is_error,
-                display,
-                ..
-            } => {
-                if let Some(display) = display {
-                    // Use tool-customized rendering
-                    use crab_core::tool::ToolDisplayStyle as DS;
-                    for dl in &display.lines {
-                        let style = match dl.style {
-                            Some(DS::Error | DS::DiffRemove) => Style::default().fg(Color::Red),
-                            Some(DS::DiffAdd) => Style::default().fg(Color::Green),
-                            Some(DS::DiffContext | DS::Muted) => {
-                                Style::default().fg(Color::DarkGray)
-                            }
-                            Some(DS::Highlight) => Style::default().fg(Color::Cyan),
-                            _ => Style::default().fg(Color::Gray),
-                        };
-                        rendered_lines
-                            .push(Line::from(Span::styled(format!("  {}", dl.text), style)));
-                    }
-                } else {
-                    // Default rendering: plain text, 10-line truncation
-                    let style = if *is_error {
-                        Style::default().fg(Color::Red)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    };
-                    let lines: Vec<&str> = output.lines().collect();
-                    let show = lines.len().min(10);
-                    for line in &lines[..show] {
-                        rendered_lines.push(Line::from(Span::styled(format!("  {line}"), style)));
-                    }
-                    if lines.len() > 10 {
-                        rendered_lines.push(Line::from(Span::styled(
-                            format!("  ... ({} more lines)", lines.len() - 10),
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
-                }
-                rendered_lines.push(Line::default());
-            }
-            ChatMessage::System { text } => {
-                rendered_lines.push(Line::from(Span::styled(
-                    text.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                )));
-            }
-        }
+        let cell = cell_from_chat_message(msg);
+        rendered_lines.extend(cell.display_lines(area.width));
     }
 
-    // Scroll and render visible lines (auto-follow bottom)
     let visible = area.height as usize;
     let end = rendered_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible);
@@ -190,6 +102,32 @@ mod tests {
             text: "hello".into(),
         }];
         let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        render_messages(&msgs, 0, area, &mut buf);
+    }
+
+    #[test]
+    fn render_all_variants_without_panic() {
+        let msgs = vec![
+            ChatMessage::User { text: "hi".into() },
+            ChatMessage::Assistant {
+                text: "**bold**".into(),
+            },
+            ChatMessage::ToolUse {
+                name: "read".into(),
+                summary: Some("src/lib.rs".into()),
+            },
+            ChatMessage::ToolResult {
+                tool_name: "read".into(),
+                output: "line1\nline2\nline3".into(),
+                is_error: false,
+                display: None,
+            },
+            ChatMessage::System {
+                text: "note".into(),
+            },
+        ];
+        let area = Rect::new(0, 0, 80, 40);
         let mut buf = Buffer::empty(area);
         render_messages(&msgs, 0, area, &mut buf);
     }

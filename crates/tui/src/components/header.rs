@@ -6,10 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::theme::accents::CLAUDE_DARK as CRAB_COLOR;
 use crate::traits::Renderable;
-
-/// Terra cotta color (`#DA7756`, same as CC's `clawd_body`).
-const CRAB_COLOR: Color = Color::Rgb(218, 119, 86);
 
 /// Background color for the crab art body.
 const CRAB_BG: Color = Color::Black;

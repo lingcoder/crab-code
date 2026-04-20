@@ -194,6 +194,19 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
 
     // Set up terminal
     enable_raw_mode()?;
+
+    // Probe the terminal background color via OSC 11 while we still own
+    // stdout exclusively and before switching to the alternate screen.
+    // On any failure / timeout the probe returns `Unknown` and we fall
+    // back to the default dark theme.
+    let detection = crate::theme::detect_background(std::time::Duration::from_millis(80));
+    let selected_theme = match detection {
+        crate::theme::Detection::Light => crate::theme::Theme::light(),
+        _ => crate::theme::Theme::dark(),
+    };
+    tracing::debug!(?detection, "terminal background detection");
+    crate::theme::init_current(selected_theme);
+
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let term_backend = CrosstermBackend::new(stdout);

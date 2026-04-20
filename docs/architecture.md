@@ -477,48 +477,9 @@ crab-code/
 │   │       ├── auto_dream.rs           # Memory consolidation (cargo feature `auto-dream`)
 │   │       └── proactive/              # CCB feature('PROACTIVE') placeholder (cargo feature `proactive`)
 │   │
-│   ├── tui/                           # crab-tui: terminal UI (21 components)
+│   ├── tui/                           # crab-tui: terminal UI
 │   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── app.rs                 # App state machine, main loop
-│   │       ├── event.rs               # crossterm Event -> AppEvent mapping/dispatch
-│   │       ├── layout.rs              # Layout calculation
-│   │       ├── runner.rs              # TUI runner (startup/shutdown)
-│   │       ├── keybindings.rs         # Keybinding configuration
-│   │       ├── ansi.rs                # ANSI escape -> ratatui Span conversion
-│   │       ├── components/
-│   │       │   ├── mod.rs
-│   │       │   ├── input.rs           # Multi-line input box + Vim motion
-│   │       │   ├── markdown.rs        # Markdown rendering
-│   │       │   ├── syntax.rs          # Code highlighting (syntect)
-│   │       │   ├── spinner.rs         # Loading indicator
-│   │       │   ├── diff.rs            # Diff visualization (unified)
-│   │       │   ├── select.rs          # Selection list
-│   │       │   ├── dialog.rs          # Confirmation/permission dialog
-│   │       │   ├── cost_bar.rs        # Token/cost status bar
-│   │       │   ├── task_list.rs       # Task progress panel
-│   │       │   ├── autocomplete.rs    # Autocomplete popup
-│   │       │   ├── code_block.rs      # Code block + copy button
-│   │       │   ├── command_palette.rs # Command palette (Ctrl+P)
-│   │       │   ├── input_history.rs   # Input history (up/down arrows)
-│   │       │   ├── loading.rs         # Loading animation component
-│   │       │   ├── notification.rs    # Toast notification system
-│   │       │   ├── progress_indicator.rs # Progress indicator
-│   │       │   ├── search.rs          # Global search panel
-│   │       │   ├── shortcut_hint.rs   # Shortcut hint bar
-│   │       │   ├── status_bar.rs      # Enhanced status bar
-│   │       │   ├── tool_output.rs     # Collapsible tool output display
-│   │       │   ├── output_styles.rs   # Output formatting style configuration
-│   │       │   ├── permission_dialog.rs # Dedicated permission prompt dialog
-│   │       │   ├── session_sidebar.rs # Session sidebar
-│   │       │   └── context_collapse.rs # Context collapse/expand
-│   │       ├── vim/
-│   │       │   ├── mod.rs
-│   │       │   ├── motion.rs
-│   │       │   ├── operator.rs
-│   │       │   └── mode.rs
-│   │       └── theme.rs               # Color theme (customizable)
+│   │   └── src/                       # Detailed breakdown in §6.12
 │   │
 │   ├── skill/                         # crab-skill: skill system
 │   │   ├── Cargo.toml
@@ -3019,7 +2980,12 @@ impl StreamingToolExecutor {
 CC uses React/Ink to render the terminal UI; Crab uses ratatui + crossterm to achieve equivalent experience. Control flow between tui and other Layer 3 crates (agent / session / remote / engine) follows Rule 6 (§5.3): state is consumed via `core::Event` broadcasts. Read-only access to `session::Conversation` and cost accumulators is allowed.
 
 **Layout notes**:
-- `vim/` sits at the top level (not under `components/`) — it's a key-handling state machine with 6 files (mode / motion / operator / register / text_object / transition), naturally grouped with `keybindings`/`overlay`/`theme`/`traits` rather than with visual widgets. Aligns with CCB's `src/vim/` top-level layout.
+- `vim/` sits at the top level (not under `components/`) — it's a key-handling state machine with 6 files (mode / motion / operator / register / text_object / transition), naturally grouped with `keybindings`/`theme`/`animation`/`markdown`/`design_system` rather than with visual widgets.
+- `keybindings/` is a module directory with 18 `KeyContext` variants, a chord-aware `Resolver`, and JSON user overrides at `~/.crab/keybindings.json`.
+- `theme/` is a module directory covering ~120 semantic fields, shimmer derivation, an 8-slot agent palette, reserved brand accents, and OSC 10/11 background detection.
+- `animation/` hosts the `FrameScheduler`, frame-driven `Spinner`, and the shimmer animation adapter.
+- `markdown/` adds a 500-entry LRU cache and a dedicated background thread for `syntect` highlighting in front of the base `components::markdown` renderer.
+- `design_system/` exposes Dialog / Tabs / Pane / Button / ScrollBox primitives that higher-level views compose.
 - `components/buddy/` — 7 files (companion / prompt / render plus cache / mini-agent siblings)
 - `components/bridge_status.rs` — subscribes to `core::Event::BridgeStatusChanged`
 - `components/sandbox_*.rs` — tabs mirroring CCB SandboxSettings / ConfigTab / DoctorSection
@@ -3030,46 +2996,101 @@ CC uses React/Ink to render the terminal UI; Crab uses ratatui + crossterm to ac
 ```
 src/
 ├── lib.rs
-├── app.rs                  // App state machine, main loop
-├── event.rs                // crossterm Event -> AppEvent mapping (KeyEvent/MouseEvent/Resize)
-├── layout.rs               // Layout calculation (panel allocation, responsive)
-├── runner.rs               // TUI runner (initialize/start/stop terminal)
-├── keybindings.rs          // Keybinding configuration (user-customizable)
-├── ansi.rs                 // ANSI escape -> ratatui Span conversion
+├── app.rs                     // App state machine, main loop
+├── app_event.rs               // App-level event enum
+├── event.rs                   // crossterm Event -> AppEvent mapping
+├── event_broker.rs            // Internal event bus
+├── frame_requester.rs         // Redraw coalescing
+├── layout.rs                  // Layout calculation (panel allocation, responsive)
+├── overlay.rs                 // Overlay focus / context stack
+├── runner.rs                  // TUI runner (initialize/start/stop terminal)
+├── traits.rs                  // Renderable / Focus traits
 │
-├── components/             // UI components (21)
+├── keybindings/               // Chord-aware keybinding system
+│   ├── mod.rs                 // Keybindings façade + re-exports
+│   ├── types.rs               // Action / KeyContext (18) / KeyChord / Sequence
+│   ├── parser.rs              // "ctrl+k ctrl+s" text → Sequence
+│   ├── resolver.rs            // Feed-per-key resolver with chord + timeout
+│   ├── defaults.rs            // Built-in bindings per context
+│   └── config.rs              // ~/.crab/keybindings.json user overrides
+│
+├── theme/                     // Color + brand semantics
+│   ├── mod.rs                 // Theme struct + palette switcher + OSC adapter
+│   ├── accents.rs             // Claude/permission/fast-mode/brief-label colors
+│   ├── agents.rs              // 8-slot agent accent palette (dark + light)
+│   ├── osc.rs                 // OSC 10/11 system-color probe + classifier
+│   └── shimmer.rs             // Shimmer lift derivation from any base color
+│
+├── animation/                 // Frame-scheduled animations
+│   ├── mod.rs                 // FrameScheduler + subscribe/ticket
+│   ├── shimmer.rs             // ShimmerState + per-column color lookup
+│   └── spinner.rs             // Spinner (braille / dots / line / custom)
+│
+├── markdown/                  // Cached markdown renderer
+│   ├── mod.rs                 // CachedMarkdownRenderer façade
+│   ├── cache.rs               // LRU keyed by (content, theme, width)
+│   ├── highlight.rs           // Background syntect worker + HighlightJob
+│   └── table.rs               // GFM table with column-aligned cells
+│
+├── design_system/             // Reusable visual primitives
 │   ├── mod.rs
-│   ├── input.rs            // Multi-line input box + Vim motion
-│   ├── markdown.rs         // Markdown rendering (pulldown-cmark -> ratatui)
-│   ├── syntax.rs           // Code highlighting (syntect -> ratatui Style)
-│   ├── spinner.rs          // Loading indicator (thinking/executing)
-│   ├── diff.rs             // Diff visualization (unified red/green comparison)
-│   ├── select.rs           // Selection list (tool confirmation/slash commands)
-│   ├── dialog.rs           // Confirmation/permission dialog
-│   ├── cost_bar.rs         // Token/cost status bar
-│   ├── task_list.rs        // Task progress panel
-│   ├── autocomplete.rs     // Autocomplete popup (triggered on input)
-│   ├── code_block.rs       // Code block + one-click copy button
-│   ├── command_palette.rs  // Command palette (Ctrl+P, fuzzy search all commands)
-│   ├── input_history.rs    // Input history (up/down arrow key browsing)
-│   ├── loading.rs          // Loading animation component (multiple animation styles)
-│   ├── notification.rs     // Toast notification system (top popup/auto-dismiss)
-│   ├── progress_indicator.rs // Progress indicator (percentage + progress bar)
-│   ├── search.rs           // Global search panel (content/filename search)
-│   ├── shortcut_hint.rs    // Shortcut hint bar (always visible at bottom)
-│   ├── status_bar.rs       // Enhanced status bar (mode/provider/token/latency)
-│   └── tool_output.rs      // Collapsible tool output display (expandable/collapsible)
+│   ├── dialog.rs              // Modal shell with accent, title, action footer
+│   ├── tabs.rs                // Horizontal tab strip
+│   ├── pane.rs                // Titled bordered content block
+│   ├── button.rs              // 3-state button (default/focused/disabled)
+│   └── scrollbox.rs           // Viewport + thumb-style scroll indicator
 │
-├── vim/                    // Vim mode — top-level, sibling of keybindings/theme/overlay
-│   ├── mod.rs              // VimHandler wrapping InputBox key events
-│   ├── mode.rs             // Normal/Insert/Visual/Command
-│   ├── motion.rs           // hjkl, w/b/e, 0/$, gg/G, f/t
-│   ├── operator.rs         // d/c/y + motion composition
-│   ├── register.rs         // Unnamed/named/system-clipboard registers
-│   ├── text_object.rs      // iw/aw/i"/a(/ip
-│   └── transition.rs       // State transition table
+├── components/                // Higher-level views
+│   ├── mod.rs
+│   ├── ansi.rs                // ANSI escape -> ratatui Span conversion
+│   ├── approval_queue.rs      // Pending permission queue
+│   ├── autocomplete.rs        // Autocomplete popup
+│   ├── bottom_bar.rs          // Bottom status bar
+│   ├── call_card.rs           // Foldable tool-call card
+│   ├── code_block.rs          // Code block + copy affordance
+│   ├── command_palette.rs     // Command palette (fuzzy)
+│   ├── context_collapse.rs    // Long-context fold view
+│   ├── cost_bar.rs            // Token/cost status line
+│   ├── diff.rs                // Diff visualization
+│   ├── fuzzy.rs               // Fuzzy match primitive
+│   ├── global_search.rs       // Global search dialog
+│   ├── header.rs              // Top header bar
+│   ├── history_search.rs      // Ctrl+R history search overlay
+│   ├── input.rs               // Text input (single/multi-line)
+│   ├── input_area.rs          // Input area shell
+│   ├── input_history.rs       // Input history navigation
+│   ├── loading.rs             // Simple loading placeholder
+│   ├── markdown.rs            // Base pulldown-cmark → ratatui renderer
+│   ├── message_list.rs        // Chronological message list
+│   ├── model_picker.rs        // Model switcher overlay
+│   ├── notification.rs        // Toast notification system
+│   ├── output_styles.rs       // Shared styling helpers
+│   ├── permission.rs          // Permission dialog
+│   ├── progress_indicator.rs  // Progress bar
+│   ├── search.rs              // In-conversation search
+│   ├── select.rs              // Selection list
+│   ├── session_sidebar.rs     // Session sidebar
+│   ├── shortcut_hint.rs       // Key hint strip
+│   ├── spinner.rs             // Spinner data adapter
+│   ├── status_bar.rs          // Status bar
+│   ├── status_line.rs         // One-line status slot
+│   ├── syntax.rs              // syntect-backed code highlight
+│   ├── task_list.rs           // Task panel
+│   ├── text_utils.rs          // Text helpers
+│   ├── tool_output.rs         // Collapsible tool output
+│   ├── transcript.rs          // Transcript view
+│   ├── transcript_overlay.rs  // Transcript overlay host
+│   ├── virtual_list.rs        // Viewport-sliced, width-keyed LRU message list
+│   └── buddy/                 // Companion / mini-agent cluster
 │
-└── theme.rs                // Color theme (dark/light/solarized/customizable)
+└── vim/                       // Vim mode — top-level, sibling of keybindings/theme
+    ├── mod.rs
+    ├── mode.rs                // Normal/Insert/Visual/Command
+    ├── motion.rs              // hjkl, w/b/e, 0/$, gg/G, f/t
+    ├── operator.rs            // d/c/y + motion composition
+    ├── register.rs            // Unnamed/named/system-clipboard registers
+    ├── text_object.rs         // iw/aw/i"/a(/ip
+    └── transition.rs          // State transition table
 ```
 
 **App Main Loop**

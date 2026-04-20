@@ -1,7 +1,9 @@
-//! Full-screen transcript overlay — browse conversation with j/k navigation.
+//! Full-screen transcript overlay — browse conversation with vim keys.
 //!
-//! Activated by Ctrl+O or Ctrl+T. Renders the full transcript in the
-//! alternate screen with vim-style navigation.
+//! Activated by Ctrl+O. Renders the full transcript in the alternate
+//! screen with j/k/g/G navigation. Line content is produced by asking
+//! each [`crate::history::HistoryCell`] for its `transcript_lines`, so
+//! the overlay never duplicates chat rendering logic.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -11,16 +13,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::app::ChatMessage;
+use crate::history::cell_from_chat_message;
 use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
-/// Terra cotta color matching the crab logo.
-const CRAB_COLOR: Color = Color::Rgb(218, 119, 86);
-
 /// Full-screen transcript overlay for browsing conversation history.
 pub struct TranscriptOverlay {
-    /// Pre-rendered lines (computed once at construction time).
+    /// Pre-rendered lines at construction width. Recomputed on creation
+    /// whenever the overlay opens; width is assumed ≈ 80 which is good
+    /// enough for the transcript view (overlays re-open per invocation).
     lines: Vec<Line<'static>>,
     /// Scroll offset from top (in lines).
     scroll_top: usize,
@@ -32,7 +34,13 @@ impl TranscriptOverlay {
     /// Create a new transcript overlay from the current messages.
     #[must_use]
     pub fn new(messages: &[ChatMessage]) -> Self {
-        let lines = render_messages_to_lines(messages);
+        // 120 cols is wide enough that most cells won't pre-wrap; the
+        // overlay renderer does its own horizontal truncation below.
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        for msg in messages {
+            let cell = cell_from_chat_message(msg);
+            lines.extend(cell.transcript_lines(120));
+        }
         Self {
             lines,
             scroll_top: 0,
@@ -53,81 +61,6 @@ impl TranscriptOverlay {
             self.scroll_top = max_scroll;
         }
     }
-}
-
-/// Convert a message list into styled `Line`s for display.
-fn render_messages_to_lines(messages: &[ChatMessage]) -> Vec<Line<'static>> {
-    let mut all_lines: Vec<Line<'static>> = Vec::new();
-    for msg in messages {
-        match msg {
-            ChatMessage::User { text } => {
-                all_lines.push(Line::from(vec![
-                    Span::styled(
-                        "❯ ",
-                        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text.clone(), Style::default().fg(Color::White)),
-                ]));
-                all_lines.push(Line::default());
-            }
-            ChatMessage::Assistant { text } => {
-                if text.is_empty() {
-                    continue;
-                }
-                for (i, line) in text.lines().enumerate() {
-                    if i == 0 {
-                        all_lines.push(Line::from(vec![
-                            Span::styled("● ", Style::default().fg(CRAB_COLOR)),
-                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                        ]));
-                    } else {
-                        all_lines.push(Line::from(Span::styled(
-                            line.to_string(),
-                            Style::default().fg(Color::White),
-                        )));
-                    }
-                }
-                all_lines.push(Line::default());
-            }
-            ChatMessage::ToolUse { name, summary } => {
-                let label = summary.as_deref().unwrap_or(name);
-                all_lines.push(Line::from(Span::styled(
-                    format!("● {label}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            ChatMessage::ToolResult {
-                output, is_error, ..
-            } => {
-                let style = if *is_error {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                let lines: Vec<&str> = output.lines().collect();
-                let show = lines.len().min(10);
-                for line in &lines[..show] {
-                    all_lines.push(Line::from(Span::styled(format!("  {line}"), style)));
-                }
-                if lines.len() > 10 {
-                    all_lines.push(Line::from(Span::styled(
-                        format!("  ... ({} more lines)", lines.len() - 10),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                all_lines.push(Line::default());
-            }
-            ChatMessage::System { text } => {
-                all_lines.push(Line::from(Span::styled(
-                    text.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                )));
-            }
-        }
-    }
-    all_lines
 }
 
 impl Renderable for TranscriptOverlay {
@@ -315,7 +248,8 @@ mod tests {
 
         let g_cap = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE);
         overlay.handle_key(g_cap);
-        // total lines = 50 * 2 (user msg + blank) = 100, minus viewport 10 = 90
+        // UserCell emits text + blank = 2 lines per msg. 50 * 2 = 100.
+        // With visible = 10, max scroll = 90.
         assert_eq!(overlay.scroll_top, 90);
 
         // `g` goes back to top
@@ -334,5 +268,24 @@ mod tests {
         }
         // total = 2 lines, visible = 10 → max_scroll = 0
         assert_eq!(overlay.scroll_top, 0);
+    }
+
+    #[test]
+    fn transcript_lines_preserve_full_tool_output() {
+        // ToolResultCell truncates display_lines to 10; transcript_lines
+        // should show the full output instead. This is the headline
+        // reason the transcript overlay exists.
+        let body = (0..20)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let overlay = TranscriptOverlay::new(&[ChatMessage::ToolResult {
+            tool_name: "bash".into(),
+            output: body,
+            is_error: false,
+            display: None,
+        }]);
+        // ToolResultCell::transcript_lines emits 20 body lines + 1 blank.
+        assert_eq!(overlay.total_lines(), 21);
     }
 }

@@ -11,6 +11,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
+use crate::theme::{self, Accents};
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 /// Permission card variant — determines title, content display, and available options.
@@ -64,11 +66,38 @@ impl PermissionKind {
             Self::Generic { .. } => "Tool use",
         }
     }
+}
 
-    /// Border color — CC uses 'permission' theme color (yellow-ish).
-    const fn border_color() -> Color {
-        Color::Yellow
-    }
+/// Resolve the accent triple for the permission card from the current
+/// theme. `border` is the top-border color, `selected` tints the active
+/// option, `label` styles the primary title.
+fn accents() -> Accents {
+    theme::current().accents()
+}
+
+/// Permission-specific border / selection color.
+fn permission_color() -> Color {
+    accents().permission
+}
+
+/// Selected-option color (uses the theme's main accent).
+fn selected_color() -> Color {
+    theme::current().accent
+}
+
+/// Label (title text, content emphasis) color.
+fn label_color() -> Color {
+    theme::current().text_bright
+}
+
+/// Body text color for non-emphasized content.
+fn body_color() -> Color {
+    theme::current().fg
+}
+
+/// Muted color for descriptions / hints.
+fn muted_color() -> Color {
+    theme::current().muted
 }
 
 /// User response to a permission card.
@@ -180,9 +209,9 @@ impl PermissionCard {
         let w = width as usize;
         let mut lines = Vec::new();
 
-        // ─── Top border with title (CC: borderStyle="round", borderTop only) ───
+        // ─── Top border with title (rounded, top-border only) ───
         let title = self.kind.title();
-        let border_color = PermissionKind::border_color();
+        let border_color = permission_color();
 
         // Build: ╭─ Title ─────────────────────╮
         let title_segment = format!(" {title} ");
@@ -194,7 +223,7 @@ impl PermissionCard {
             Span::styled(
                 title_segment,
                 Style::default()
-                    .fg(Color::White)
+                    .fg(label_color())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(right_border, Style::default().fg(border_color)),
@@ -213,10 +242,10 @@ impl PermissionCard {
             let prefix = if is_selected { "  ▸ " } else { "    " };
             let label_style = if is_selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(selected_color())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(label_color())
             };
 
             let mut spans = vec![
@@ -227,7 +256,7 @@ impl PermissionCard {
             if let Some(hint) = opt.hint {
                 spans.push(Span::styled(
                     format!("  ({hint})"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(muted_color()),
                 ));
             }
 
@@ -238,7 +267,7 @@ impl PermissionCard {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "  Esc to deny",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted_color()),
         )));
 
         lines
@@ -246,8 +275,11 @@ impl PermissionCard {
 
     /// Render the per-tool-type content section.
     fn render_content(&self, _width: usize) -> Vec<Line<'static>> {
-        let dim = Style::default().fg(Color::DarkGray);
-        let normal = Style::default().fg(Color::Gray);
+        let dim = Style::default().fg(muted_color());
+        let normal = Style::default().fg(body_color());
+        let emphasis = Style::default()
+            .fg(label_color())
+            .add_modifier(Modifier::BOLD);
 
         match &self.kind {
             PermissionKind::Bash {
@@ -256,7 +288,7 @@ impl PermissionCard {
             } => {
                 let mut lines = vec![Line::from(vec![
                     Span::styled("  ", dim),
-                    Span::styled(command.clone(), Style::default().fg(Color::White)),
+                    Span::styled(command.clone(), Style::default().fg(label_color())),
                 ])];
                 if let Some(desc) = description
                     && !desc.is_empty()
@@ -281,12 +313,7 @@ impl PermissionCard {
                 let verb = if *file_exists { "overwrite" } else { "create" };
                 vec![Line::from(vec![
                     Span::styled(format!("  Do you want to {verb} "), dim),
-                    Span::styled(
-                        path.clone(),
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(path.clone(), emphasis),
                     Span::styled("?", dim),
                 ])]
             }
@@ -296,12 +323,7 @@ impl PermissionCard {
             } => {
                 let mut lines = vec![Line::from(vec![
                     Span::styled("  ", dim),
-                    Span::styled(
-                        tool_name.clone(),
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(tool_name.clone(), emphasis),
                 ])];
                 // Truncate summary to 3 lines (CC: truncateToLines(text, 3))
                 let summary_lines: Vec<&str> = input_summary.lines().collect();
@@ -329,14 +351,15 @@ impl Widget for &PermissionCard {
             return;
         }
 
-        let border_color = PermissionKind::border_color();
+        let border_color = permission_color();
 
-        // Top-border-only block (CC: borderTop only, borderStyle="round")
+        // Top-border-only block — rounded corners, only the top edge is drawn
+        // so the card reads as "attached to what's below".
         let block = Block::default()
             .title(format!(" {} ", self.kind.title()))
             .title_style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(label_color())
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::TOP)
@@ -388,10 +411,10 @@ impl Widget for &PermissionCard {
             let prefix = if is_selected { " ▸ " } else { "   " };
             let label_style = if is_selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(selected_color())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(label_color())
             };
 
             let mut spans = vec![
@@ -401,7 +424,7 @@ impl Widget for &PermissionCard {
             if let Some(hint) = opt.hint {
                 spans.push(Span::styled(
                     format!("  ({hint})"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(muted_color()),
                 ));
             }
 
@@ -419,7 +442,7 @@ impl Widget for &PermissionCard {
 
         // Footer hint
         let hint = Paragraph::new("Esc to deny")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(muted_color()))
             .wrap(Wrap { trim: true });
         Widget::render(
             hint,

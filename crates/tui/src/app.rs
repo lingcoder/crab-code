@@ -26,7 +26,7 @@ use crate::components::session_sidebar::SessionSidebar;
 use crate::components::spinner::Spinner;
 use crate::components::tool_output::{ToolOutputEntry, ToolOutputList};
 use crate::event::TuiEvent;
-use crate::keybindings::{Action, Keybindings};
+use crate::keybindings::{Action, KeyContext, Keybindings, ResolveOutcome};
 use crate::layout::AppLayout;
 use crate::traits::Renderable;
 
@@ -386,8 +386,35 @@ impl App {
             return self.handle_search_key(key);
         }
 
-        // Check keybinding actions first (global shortcuts)
-        if let Some(action) = self.keybindings.resolve(key.code, key.modifiers) {
+        // Check keybinding actions first (global shortcuts + chord bindings).
+        //
+        // Build the focus chain innermost-first: overlay contexts, then the
+        // state-dependent primary context, then `Chat` as the outer fallback
+        // (Resolver implicitly appends Global underneath).
+        let mut focus_chain = self.overlay_stack.active_contexts();
+        let state_ctx = match self.state {
+            AppState::Confirming => KeyContext::Permission,
+            AppState::Processing => KeyContext::Chat,
+            AppState::Idle | AppState::WaitingForInput => KeyContext::Input,
+        };
+        if !focus_chain.contains(&state_ctx) {
+            focus_chain.push(state_ctx);
+        }
+        if !focus_chain.contains(&KeyContext::Chat) {
+            focus_chain.push(KeyContext::Chat);
+        }
+
+        let outcome = self.keybindings.feed(key, &focus_chain);
+        let resolved_action: Option<Action> = match outcome {
+            ResolveOutcome::Action(action) => Some(action),
+            ResolveOutcome::PendingChord { .. } => {
+                // A chord prefix is in flight; absorb the key and wait for
+                // the continuation (or timeout) to come through.
+                return AppAction::None;
+            }
+            ResolveOutcome::Timeout | ResolveOutcome::Unhandled(_) => None,
+        };
+        if let Some(action) = resolved_action {
             match action {
                 Action::Quit => {
                     // CC-aligned double-press: first Ctrl+C interrupts, second exits.
@@ -1249,11 +1276,14 @@ impl App {
             search::render_search_bar(&self.search, &theme, search_area, buf);
         }
 
-        // Bottom bar — delegated to BottomBar Renderable
+        // Bottom bar — delegated to BottomBar Renderable.
+        // Surface any in-flight chord prefix so the user sees "Ctrl+K …"
+        // after the first key of a chord binding.
         let bottom_bar = BottomBar {
             state: self.state,
             search_active: self.search.is_active(),
             permission_mode: self.permission_mode,
+            chord_prefix: self.keybindings.pending_chord(),
         };
         bottom_bar.render(layout.bottom_bar, buf);
 

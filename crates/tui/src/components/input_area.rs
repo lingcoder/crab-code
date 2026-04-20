@@ -2,16 +2,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::app::PromptInputMode;
 use crate::components::input::InputBox;
+use crate::theme::accents::CLAUDE_DARK as CRAB_COLOR;
 use crate::traits::Renderable;
-
-/// Terra cotta color.
-const CRAB_COLOR: Color = Color::Rgb(218, 119, 86);
 
 /// Input area: `❯` prompt + input box, with optional mode indicator.
 pub struct InputArea<'a> {

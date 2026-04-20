@@ -4,6 +4,18 @@ use std::path::Path;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
+pub mod accents;
+pub mod agents;
+pub mod current;
+pub mod osc;
+pub mod shimmer;
+
+pub use accents::Accents;
+pub use agents::{AGENTS_PALETTE_DARK, AGENTS_PALETTE_LIGHT, agent_color};
+pub use current::{current, init as init_current};
+pub use osc::{Detection, detect_background};
+pub use shimmer::{SHIMMER_INTERVAL, SHIMMER_INTERVAL_MS, shimmer_at, shimmer_segments};
+
 /// Named built-in themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -318,6 +330,47 @@ impl Theme {
     #[must_use]
     pub fn style_fg(&self, fg: Color) -> Style {
         Style::default().fg(fg)
+    }
+
+    /// The 8-slot agent accent palette for this theme's brightness.
+    #[must_use]
+    pub fn agents_palette(&self) -> [Color; 8] {
+        match self.name {
+            ThemeName::Light => agents::AGENTS_PALETTE_LIGHT,
+            _ => agents::AGENTS_PALETTE_DARK,
+        }
+    }
+
+    /// Pick an agent color by slot index.
+    #[must_use]
+    pub fn agent_color(&self, index: usize) -> Color {
+        agents::agent_color(&self.agents_palette(), index)
+    }
+
+    /// The reserved brand / status accents for this theme.
+    #[must_use]
+    pub fn accents(&self) -> Accents {
+        match self.name {
+            ThemeName::Light => Accents::light(),
+            ThemeName::Monokai => Accents::monokai(),
+            ThemeName::Solarized => Accents::solarized(),
+            ThemeName::Dark | ThemeName::Custom => Accents::dark(),
+        }
+    }
+
+    /// Shimmer color for a column within a span painted with `base`.
+    #[must_use]
+    pub fn shimmer_at(&self, base: Color, column: u16, width: u16, phase: f32) -> Color {
+        shimmer::shimmer_at(base, column, width, phase)
+    }
+
+    /// Select a dark vs. light base theme from an OSC background probe.
+    #[must_use]
+    pub fn from_detection(detection: Detection) -> Self {
+        match detection {
+            Detection::Light => Self::light(),
+            _ => Self::dark(),
+        }
     }
 }
 

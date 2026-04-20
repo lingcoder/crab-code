@@ -1,23 +1,36 @@
 //! Bottom bar component — contextual shortcut hints.
+//!
+//! When a chord prefix is in flight (e.g. `Ctrl+K` pressed, waiting for
+//! the second key), the chord hint takes precedence over the normal
+//! state-specific hint so the user sees what the resolver is waiting
+//! for.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::app::AppState;
+use crate::keybindings::KeyChord;
 use crate::traits::Renderable;
 
 /// Bottom bar showing contextual key hints.
-pub struct BottomBar {
+pub struct BottomBar<'a> {
     pub state: AppState,
     pub search_active: bool,
     pub permission_mode: crab_core::permission::PermissionMode,
+    /// In-flight chord prefix. When present, rendered as
+    /// `"Ctrl+K …"` to tell the user another key is expected.
+    pub chord_prefix: Option<&'a [KeyChord]>,
 }
 
-impl Renderable for BottomBar {
+impl Renderable for BottomBar<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(prefix) = self.chord_prefix {
+            render_chord_hint(prefix, area, buf);
+            return;
+        }
         render_bottom_bar(
             self.state,
             self.search_active,
@@ -30,6 +43,70 @@ impl Renderable for BottomBar {
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+}
+
+fn render_chord_hint(prefix: &[KeyChord], area: Rect, buf: &mut Buffer) {
+    let prefix_text = format_chord_prefix(prefix);
+    let line = Line::from(vec![
+        Span::styled(
+            format!("  {prefix_text} "),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "… (waiting for next key)",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    Widget::render(line, area, buf);
+}
+
+/// Render a chord sequence like `[Ctrl+K]` as the hint string `Ctrl+K`.
+/// Multiple chords are separated by spaces: `Ctrl+K Ctrl+S`.
+fn format_chord_prefix(prefix: &[KeyChord]) -> String {
+    prefix
+        .iter()
+        .map(format_chord)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_chord(chord: &KeyChord) -> String {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let mut parts: Vec<&str> = Vec::new();
+    if chord.modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if chord.modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt");
+    }
+    if chord.modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("Shift");
+    }
+    let key = match chord.code {
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(c) => c.to_ascii_uppercase().to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "BackTab".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Backspace => "BS".to_string(),
+        KeyCode::Delete => "Del".to_string(),
+        KeyCode::Up => "↑".to_string(),
+        KeyCode::Down => "↓".to_string(),
+        KeyCode::Left => "←".to_string(),
+        KeyCode::Right => "→".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PgUp".to_string(),
+        KeyCode::PageDown => "PgDn".to_string(),
+        KeyCode::F(n) => format!("F{n}"),
+        other => format!("{other:?}"),
+    };
+    parts.push(key.as_str());
+    parts.join("+")
 }
 
 fn render_bottom_bar(
@@ -83,6 +160,7 @@ fn render_bottom_bar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn bottom_bar_desired_height() {
@@ -90,6 +168,7 @@ mod tests {
             state: AppState::Idle,
             search_active: false,
             permission_mode: crab_core::permission::PermissionMode::Default,
+            chord_prefix: None,
         };
         assert_eq!(bb.desired_height(80), 1);
     }
@@ -100,9 +179,58 @@ mod tests {
             state: AppState::Idle,
             search_active: false,
             permission_mode: crab_core::permission::PermissionMode::Default,
+            chord_prefix: None,
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         bb.render(area, &mut buf);
+    }
+
+    #[test]
+    fn format_single_ctrl_chord() {
+        let chord = KeyChord::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(format_chord(&chord), "Ctrl+K");
+    }
+
+    #[test]
+    fn format_multi_chord_prefix() {
+        let prefix = [
+            KeyChord::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            KeyChord::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        ];
+        assert_eq!(format_chord_prefix(&prefix), "Ctrl+K Ctrl+S");
+    }
+
+    #[test]
+    fn format_alt_shift_chord() {
+        let chord = KeyChord::new(KeyCode::Char('p'), KeyModifiers::ALT | KeyModifiers::SHIFT);
+        assert_eq!(format_chord(&chord), "Alt+Shift+P");
+    }
+
+    #[test]
+    fn format_named_key() {
+        let chord = KeyChord::new(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(format_chord(&chord), "PgUp");
+    }
+
+    #[test]
+    fn chord_hint_takes_precedence_over_state_hint() {
+        let prefix = [KeyChord::new(KeyCode::Char('k'), KeyModifiers::CONTROL)];
+        let bb = BottomBar {
+            state: AppState::Processing, // would normally show the processing hint
+            search_active: false,
+            permission_mode: crab_core::permission::PermissionMode::Default,
+            chord_prefix: Some(&prefix),
+        };
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        bb.render(area, &mut buf);
+
+        // Confirm the chord prefix text was written into the buffer.
+        let rendered: String = (0..area.width)
+            .map(|x| buf[(x, 0)].symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(rendered.contains("Ctrl+K"));
     }
 }
