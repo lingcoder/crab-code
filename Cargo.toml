@@ -92,7 +92,7 @@ tokio-tungstenite = "0.29"
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM 插件 ───
-wasmtime = "43"
+wasmtime = "44"
 
 # ─── 进程 ───
 portable-pty = "0.9"
