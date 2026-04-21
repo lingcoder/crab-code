@@ -30,10 +30,7 @@ pub enum PermissionKind {
     },
     /// File edit operation.
     /// CC: `FileEditPermissionRequest` — title "Edit file", shows path + optional diff preview.
-    FileEdit {
-        path: String,
-        diff: Option<String>,
-    },
+    FileEdit { path: String, diff: Option<String> },
     /// File creation or overwrite.
     /// CC: `FileWritePermissionRequest` — title "Create file" / "Overwrite file".
     FileWrite { path: String, file_exists: bool },
@@ -180,14 +177,18 @@ impl PermissionCard {
             }
             PermissionKind::NotebookEdit { path } => {
                 let f = path.rsplit(['/', '\\']).next().unwrap_or(path);
-                ("notebook_edit".into(), format!("Notebook edit rejected ({f})"))
+                (
+                    "notebook_edit".into(),
+                    format!("Notebook edit rejected ({f})"),
+                )
             }
             PermissionKind::Generic {
                 tool_name,
                 input_summary,
-            } => {
-                (tool_name.clone(), format!("{tool_name} rejected ({input_summary})"))
-            }
+            } => (
+                tool_name.clone(),
+                format!("{tool_name} rejected ({input_summary})"),
+            ),
         }
     }
 
@@ -365,10 +366,7 @@ impl PermissionCard {
                         } else {
                             dim
                         };
-                        lines.push(Line::from(Span::styled(
-                            format!("  {line}"),
-                            style,
-                        )));
+                        lines.push(Line::from(Span::styled(format!("  {line}"), style)));
                     }
                     if diff_lines.len() > 5 {
                         lines.push(Line::from(Span::styled(
@@ -385,9 +383,7 @@ impl PermissionCard {
                     Span::styled(path.clone(), normal),
                 ])]
             }
-            PermissionKind::WebFetch { url } => {
-                render_parsed_url(url, width)
-            }
+            PermissionKind::WebFetch { url } => render_parsed_url(url, width),
             PermissionKind::FileWrite { path, file_exists } => {
                 let verb = if *file_exists { "overwrite" } else { "create" };
                 vec![Line::from(vec![
@@ -679,9 +675,7 @@ fn render_parsed_url(url: &str, _width: usize) -> Vec<Line<'static>> {
         ])];
     };
 
-    let (domain, path) = rest
-        .find('/')
-        .map_or((rest, ""), |i| rest.split_at(i));
+    let (domain, path) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
 
     vec![Line::from(vec![
         Span::styled("  ", dim),
@@ -947,17 +941,26 @@ mod tests {
             "req_ml".into(),
         );
         let lines = card.render_lines(80);
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(all_text.contains("$ "));
         assert!(all_text.contains("echo hello"));
     }
 
     #[test]
     fn bash_long_command_truncated() {
-        let cmd = (0..10).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+        let cmd = (0..10)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let card = PermissionCard::from_event("bash", &cmd, "req_trunc".into());
         let lines = card.render_lines(80);
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(all_text.contains("5 more lines"));
     }
 
@@ -969,7 +972,10 @@ mod tests {
             "req_url".into(),
         );
         let lines = card.render_lines(80);
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(all_text.contains("api.example.com"));
         assert!(all_text.contains("https://"));
     }
@@ -987,13 +993,13 @@ mod tests {
 
     #[test]
     fn mcp_generic_card_renders_server_tool_format() {
-        let card = PermissionCard::from_event(
-            "mcp__myserver__do_thing",
-            "some input",
-            "req_mcp".into(),
-        );
+        let card =
+            PermissionCard::from_event("mcp__myserver__do_thing", "some input", "req_mcp".into());
         let lines = card.render_lines(80);
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(all_text.contains("myserver"));
         assert!(all_text.contains("do_thing"));
     }
@@ -1012,7 +1018,10 @@ mod tests {
             selected: 0,
         };
         let lines = card.render_lines(80);
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(all_text.contains("-old line"));
         assert!(all_text.contains("+new line"));
     }
@@ -1020,7 +1029,10 @@ mod tests {
     #[test]
     fn render_parsed_url_no_scheme_fallback() {
         let lines = render_parsed_url("just-a-hostname", 80);
-        let text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
         assert!(text.contains("just-a-hostname"));
     }
 }

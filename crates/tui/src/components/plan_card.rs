@@ -69,9 +69,7 @@ pub fn render_progress_bar(done: usize, total: usize, width: usize) -> Line<'sta
         Span::styled("] ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{done}/{total}"),
-            Style::default()
-                .fg(pct_color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(pct_color).add_modifier(Modifier::BOLD),
         ),
     ])
 }
@@ -133,9 +131,17 @@ pub fn render_plan_checklist(
         lines.push(Line::default());
         lines.push(Line::from(vec![
             Span::styled("  (", Style::default().fg(Color::DarkGray)),
-            Span::styled("y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(") Approve  (", Style::default().fg(Color::DarkGray)),
-            Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(") Reject", Style::default().fg(Color::DarkGray)),
         ]));
     }
@@ -161,8 +167,14 @@ mod tests {
 
     #[test]
     fn status_colors_distinct() {
-        assert_ne!(PlanStepStatus::Pending.color(), PlanStepStatus::InProgress.color());
-        assert_ne!(PlanStepStatus::InProgress.color(), PlanStepStatus::Done.color());
+        assert_ne!(
+            PlanStepStatus::Pending.color(),
+            PlanStepStatus::InProgress.color()
+        );
+        assert_ne!(
+            PlanStepStatus::InProgress.color(),
+            PlanStepStatus::Done.color()
+        );
     }
 
     #[test]
@@ -216,9 +228,7 @@ mod tests {
 
     #[test]
     fn checklist_with_approval() {
-        let steps = vec![
-            ("Step 1".into(), PlanStepStatus::Pending),
-        ];
+        let steps = vec![("Step 1".into(), PlanStepStatus::Pending)];
         let lines = render_plan_checklist("Plan", &steps, 60, true);
         let all_text: String = lines
             .iter()
@@ -230,9 +240,7 @@ mod tests {
 
     #[test]
     fn checklist_without_approval() {
-        let steps = vec![
-            ("Step 1".into(), PlanStepStatus::Done),
-        ];
+        let steps = vec![("Step 1".into(), PlanStepStatus::Done)];
         let lines = render_plan_checklist("Plan", &steps, 60, false);
         let all_text: String = lines
             .iter()

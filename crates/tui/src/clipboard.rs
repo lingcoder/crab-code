@@ -15,9 +15,7 @@ impl Clipboard {
     pub fn copy(&self, text: &str) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| e.to_string())?;
         match guard.as_mut() {
-            Some(cb) => cb
-                .set_text(text.to_string())
-                .map_err(|e| e.to_string()),
+            Some(cb) => cb.set_text(text.to_string()).map_err(|e| e.to_string()),
             None => Err("clipboard unavailable".into()),
         }
     }

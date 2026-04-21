@@ -229,7 +229,10 @@ mod tests {
     #[test]
     fn i_enters_insert() {
         let (mut vh, mut input) = make();
-        assert_eq!(vh.handle_key(key(KeyCode::Char('i')), &mut input), VimAction::Consumed);
+        assert_eq!(
+            vh.handle_key(key(KeyCode::Char('i')), &mut input),
+            VimAction::Consumed
+        );
         assert_eq!(vh.mode(), VimMode::Insert);
     }
 
@@ -273,7 +276,10 @@ mod tests {
     fn enter_in_normal_submits() {
         let (mut vh, mut input) = make();
         input.set_text("hello");
-        assert_eq!(vh.handle_key(key(KeyCode::Enter), &mut input), VimAction::Submit);
+        assert_eq!(
+            vh.handle_key(key(KeyCode::Enter), &mut input),
+            VimAction::Submit
+        );
     }
 
     #[test]

@@ -10,19 +10,18 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::clipboard::Clipboard;
 use crate::components::approval_queue::ApprovalQueue;
 use crate::components::autocomplete::{AutoComplete, CommandInfo};
 use crate::components::bottom_bar::BottomBar;
-use crate::components::notification::NotificationManager;
-use crate::clipboard::Clipboard;
 use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
 use crate::components::context_collapse::{CollapsibleSection, ContextCollapse};
 use crate::components::cost_bar::CostBar;
 use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
 use crate::components::input_area::InputArea;
-use crate::vim::{VimAction, VimHandler};
 use crate::components::message_list::MessageList;
+use crate::components::notification::NotificationManager;
 use crate::components::output_styles::OutputStyles;
 use crate::components::permission::{PermissionCard, PermissionResponse};
 use crate::components::search::{self, SearchState};
@@ -33,6 +32,7 @@ use crate::event::TuiEvent;
 use crate::keybindings::{Action, KeyContext, Keybindings, ResolveOutcome};
 use crate::layout::AppLayout;
 use crate::traits::Renderable;
+use crate::vim::{VimAction, VimHandler};
 
 /// Application state phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -570,10 +570,7 @@ impl App {
                                 );
                             }
                             Err(e) => {
-                                let _ = write!(
-                                    self.content_buffer,
-                                    "\n[copy failed: {e}]"
-                                );
+                                let _ = write!(self.content_buffer, "\n[copy failed: {e}]");
                             }
                         }
                     }
@@ -758,9 +755,7 @@ impl App {
 
         match self.state {
             AppState::Confirming => self.handle_confirming_key(key),
-            AppState::Initializing | AppState::Processing => {
-                AppAction::None
-            }
+            AppState::Initializing | AppState::Processing => AppAction::None,
             AppState::Idle | AppState::WaitingForInput => {
                 // Switch to WaitingForInput on first keystroke
                 if self.state == AppState::Idle {
@@ -839,8 +834,7 @@ impl App {
                             if !self.input.is_empty() {
                                 let text = self.input.submit();
                                 self.input_history_list.push(text.clone());
-                                self.messages
-                                    .push(ChatMessage::User { text: text.clone() });
+                                self.messages.push(ChatMessage::User { text: text.clone() });
                                 self.state = AppState::Processing;
                                 self.spinner.start_with_random_verb();
                                 return AppAction::Submit(text);
@@ -924,9 +918,7 @@ impl App {
                 response,
                 PermissionResponse::Allow | PermissionResponse::AllowAlways
             );
-            if !allowed
-                && let Some((tool_name, summary)) = rejection_info
-            {
+            if !allowed && let Some((tool_name, summary)) = rejection_info {
                 let tool_input = self.current_tool_input.as_ref();
                 let display = self
                     .tool_registry

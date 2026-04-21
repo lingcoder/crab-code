@@ -38,14 +38,9 @@ impl HistoryCell for ToolRejectedCell {
         let mut out = vec![Line::from(vec![
             Span::styled(
                 "  \u{2298} ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                self.summary.clone(),
-                Style::default().fg(Color::Red),
-            ),
+            Span::styled(self.summary.clone(), Style::default().fg(Color::Red)),
         ])];
 
         if let Some(display) = &self.display {

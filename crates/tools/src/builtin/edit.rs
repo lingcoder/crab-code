@@ -250,10 +250,16 @@ impl Tool for EditTool {
         let new = input["new_string"].as_str().unwrap_or("");
         let mut lines = Vec::new();
         for line in old.lines().take(3) {
-            lines.push(ToolDisplayLine::new(format!("- {line}"), ToolDisplayStyle::DiffRemove));
+            lines.push(ToolDisplayLine::new(
+                format!("- {line}"),
+                ToolDisplayStyle::DiffRemove,
+            ));
         }
         for line in new.lines().take(3) {
-            lines.push(ToolDisplayLine::new(format!("+ {line}"), ToolDisplayStyle::DiffAdd));
+            lines.push(ToolDisplayLine::new(
+                format!("+ {line}"),
+                ToolDisplayStyle::DiffAdd,
+            ));
         }
         Some(ToolDisplayResult {
             lines,

@@ -118,20 +118,13 @@ impl Renderable for McpBrowserOverlay {
         Widget::render(Clear, area, buf);
 
         let title = match self.view {
-            View::ServerList => format!(
-                " MCP Servers ({}) ",
-                self.servers.len()
-            ),
+            View::ServerList => format!(" MCP Servers ({}) ", self.servers.len()),
             View::ToolList => {
-                let name = self
-                    .current_server()
-                    .map_or("???", |s| s.name.as_str());
+                let name = self.current_server().map_or("???", |s| s.name.as_str());
                 format!(" {name} — Tools ")
             }
             View::ToolDetail => {
-                let name = self
-                    .current_tool()
-                    .map_or("???", |t| t.name.as_str());
+                let name = self.current_tool().map_or("???", |t| t.name.as_str());
                 format!(" {name} ")
             }
         };
@@ -170,7 +163,12 @@ impl McpBrowserOverlay {
             ));
             Widget::render(
                 msg,
-                Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
             return;
@@ -183,7 +181,9 @@ impl McpBrowserOverlay {
             let is_selected = i == self.selected_server;
             let prefix = if is_selected { "▸ " } else { "  " };
             let name_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -198,7 +198,12 @@ impl McpBrowserOverlay {
             ]);
             Widget::render(
                 line,
-                Rect { x: area.x, y: area.y + i as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + i as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
@@ -219,7 +224,12 @@ impl McpBrowserOverlay {
             ));
             Widget::render(
                 msg,
-                Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
             return;
@@ -234,19 +244,16 @@ impl McpBrowserOverlay {
             let is_selected = i == self.selected_tool;
             let prefix = if is_selected { "▸ " } else { "  " };
             let name_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
 
             let padded_name = format!("{:<width$}", tool.name, width = max_name_len);
-            let desc_width = (area.width as usize)
-                .saturating_sub(prefix.len() + max_name_len + 5);
-            let desc: String = tool
-                .description
-                .chars()
-                .take(desc_width)
-                .collect();
+            let desc_width = (area.width as usize).saturating_sub(prefix.len() + max_name_len + 5);
+            let desc: String = tool.description.chars().take(desc_width).collect();
 
             let line = Line::from(vec![
                 Span::styled(prefix, name_style),
@@ -256,12 +263,21 @@ impl McpBrowserOverlay {
             ]);
             Widget::render(
                 line,
-                Rect { x: area.x, y: area.y + i as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + i as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
 
-        render_footer(area, buf, " ↑↓/jk navigate  Enter detail  Backspace/Esc back");
+        render_footer(
+            area,
+            buf,
+            " ↑↓/jk navigate  Enter detail  Backspace/Esc back",
+        );
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -276,7 +292,9 @@ impl McpBrowserOverlay {
             Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 tool.name.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
 
@@ -318,7 +336,12 @@ impl McpBrowserOverlay {
             }
             Widget::render(
                 line.clone(),
-                Rect { x: area.x, y: area.y + row as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + row as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
@@ -330,10 +353,7 @@ impl McpBrowserOverlay {
 #[allow(clippy::cast_possible_truncation)]
 fn render_footer(area: Rect, buf: &mut Buffer, text: &str) {
     if area.height > 1 {
-        let hint = Line::from(Span::styled(
-            text,
-            Style::default().fg(Color::DarkGray),
-        ));
+        let hint = Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)));
         Widget::render(
             hint,
             Rect {
@@ -379,8 +399,7 @@ impl McpBrowserOverlay {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if !self.servers.is_empty() {
-                    self.selected_server =
-                        (self.selected_server + 1).min(self.servers.len() - 1);
+                    self.selected_server = (self.selected_server + 1).min(self.servers.len() - 1);
                 }
                 OverlayAction::Consumed
             }

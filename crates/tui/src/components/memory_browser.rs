@@ -157,7 +157,12 @@ impl MemoryBrowserOverlay {
             ));
             Widget::render(
                 msg,
-                Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
             return;
@@ -172,7 +177,9 @@ impl MemoryBrowserOverlay {
             let is_selected = i == self.selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let name_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -197,7 +204,12 @@ impl MemoryBrowserOverlay {
             ]);
             Widget::render(
                 line,
-                Rect { x: area.x, y: area.y + i as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + i as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
@@ -225,7 +237,9 @@ impl MemoryBrowserOverlay {
             Span::raw(" "),
             Span::styled(
                 entry.name.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
 
@@ -253,7 +267,12 @@ impl MemoryBrowserOverlay {
             }
             Widget::render(
                 line.clone(),
-                Rect { x: area.x, y: area.y + row as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + row as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }

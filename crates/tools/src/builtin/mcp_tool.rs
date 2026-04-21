@@ -629,7 +629,13 @@ mod tests {
 
             let output = ToolOutput::success(r#"{"key": "value", "num": 42}"#);
             let result = adapter.format_result(&output).unwrap();
-            let text: String = result.lines.iter().map(|l| &l.text).cloned().collect::<Vec<_>>().join("\n");
+            let text: String = result
+                .lines
+                .iter()
+                .map(|l| &l.text)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             assert!(text.contains("key"));
             assert!(text.contains("value"));
             assert_eq!(result.preview_lines, 3);
@@ -677,7 +683,10 @@ mod tests {
                 Arc::new(Mutex::new(client)),
             );
 
-            let long_text = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+            let long_text = (1..=20)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n");
             let output = ToolOutput::success(&long_text);
             let result = adapter.format_result(&output).unwrap();
             assert_eq!(result.lines.len(), 11); // 10 lines + "... N total lines"

@@ -169,14 +169,24 @@ impl Renderable for TeamBrowserOverlay {
         ]);
         Widget::render(
             tab_line,
-            Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            },
             buf,
         );
 
         let sep = "\u{2500}".repeat(inner.width as usize);
         Widget::render(
             Line::from(Span::styled(&*sep, Style::default().fg(Color::DarkGray))),
-            Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: 1,
+            },
             buf,
         );
 
@@ -226,7 +236,12 @@ impl TeamBrowserOverlay {
             ));
             Widget::render(
                 msg,
-                Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
             return;
@@ -239,7 +254,9 @@ impl TeamBrowserOverlay {
             let is_selected = i == self.selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let name_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -265,7 +282,12 @@ impl TeamBrowserOverlay {
 
             Widget::render(
                 Line::from(spans),
-                Rect { x: area.x, y: area.y + i as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + i as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
@@ -280,7 +302,12 @@ impl TeamBrowserOverlay {
             ));
             Widget::render(
                 msg,
-                Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
             return;
@@ -293,7 +320,9 @@ impl TeamBrowserOverlay {
             let is_selected = i == self.selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let name_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -323,7 +352,12 @@ impl TeamBrowserOverlay {
 
             Widget::render(
                 Line::from(spans),
-                Rect { x: area.x, y: area.y + i as u16, width: area.width, height: 1 },
+                Rect {
+                    x: area.x,
+                    y: area.y + i as u16,
+                    width: area.width,
+                    height: 1,
+                },
                 buf,
             );
         }
@@ -507,7 +541,10 @@ mod tests {
     #[test]
     fn task_status_colors_distinct() {
         assert_ne!(TaskStatus::Pending.color(), TaskStatus::InProgress.color());
-        assert_ne!(TaskStatus::InProgress.color(), TaskStatus::Completed.color());
+        assert_ne!(
+            TaskStatus::InProgress.color(),
+            TaskStatus::Completed.color()
+        );
     }
 
     // --- Empty ---

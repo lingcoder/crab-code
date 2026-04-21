@@ -1,8 +1,8 @@
 pub mod action;
 pub mod animation;
 pub mod app;
-pub mod clipboard;
 pub mod app_event;
+pub mod clipboard;
 pub mod components;
 pub mod event;
 pub mod event_broker;

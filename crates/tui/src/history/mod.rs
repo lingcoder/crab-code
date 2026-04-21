@@ -151,7 +151,10 @@ mod tests {
             },
             ChatMessage::PlanStep {
                 title: "Plan".into(),
-                steps: vec![("Step 1".into(), crate::components::plan_card::PlanStepStatus::Done)],
+                steps: vec![(
+                    "Step 1".into(),
+                    crate::components::plan_card::PlanStepStatus::Done,
+                )],
                 awaiting_approval: false,
             },
             ChatMessage::ToolRejected {

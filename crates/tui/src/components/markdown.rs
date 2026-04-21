@@ -4,7 +4,9 @@ use ratatui::text::{Line, Span};
 
 use super::syntax::SyntaxHighlighter;
 use crate::hyperlink;
-use crate::markdown::table::{TableRow, compute_min_table_width, render_gfm_table, render_vertical_table};
+use crate::markdown::table::{
+    TableRow, compute_min_table_width, render_gfm_table, render_vertical_table,
+};
 use crate::theme::Theme;
 
 /// Renders Markdown text to ratatui `Line`s.
@@ -91,7 +93,9 @@ impl<'t> MarkdownRenderer<'t> {
                         style_stack.push(style);
                         link_url = Some(dest_url.to_string());
                     }
-                    Tag::Image { dest_url, title, .. } => {
+                    Tag::Image {
+                        dest_url, title, ..
+                    } => {
                         let alt = if title.is_empty() {
                             "Image".to_string()
                         } else {
@@ -477,7 +481,10 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(text.contains("│"), "horizontal table should have box-drawing borders");
+        assert!(
+            text.contains("│"),
+            "horizontal table should have box-drawing borders"
+        );
         assert!(text.contains("A"));
         assert!(text.contains("1"));
     }
@@ -493,7 +500,10 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(text.contains("Name:"), "vertical table should show 'header: value' format");
+        assert!(
+            text.contains("Name:"),
+            "vertical table should show 'header: value' format"
+        );
         assert!(text.contains("hello"));
     }
 }

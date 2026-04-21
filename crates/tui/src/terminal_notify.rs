@@ -71,9 +71,7 @@ pub fn format_notification(kind: TerminalKind, title: &str, body: &str) -> Strin
         TerminalKind::Ghostty => {
             format!("\x1b]777;notify;{title};{body}\x1b\\")
         }
-        TerminalKind::VsCode | TerminalKind::Unknown => {
-            "\x07".to_string()
-        }
+        TerminalKind::VsCode | TerminalKind::Unknown => "\x07".to_string(),
     }
 }
 

@@ -138,10 +138,7 @@ pub fn render_vertical_table(
             lines.push(Line::from(Span::styled("───", sep_style)));
         }
         for (col_idx, cell) in row.cells.iter().enumerate() {
-            let label = header
-                .cells
-                .get(col_idx)
-                .map_or("?", |s| s.as_str());
+            let label = header.cells.get(col_idx).map_or("?", |s| s.as_str());
             lines.push(Line::from(vec![
                 Span::styled(format!("{label}: "), label_style),
                 Span::styled(cell.clone(), value_style),

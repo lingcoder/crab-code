@@ -30,7 +30,12 @@ impl PlanStepCell {
 impl HistoryCell for PlanStepCell {
     #[allow(clippy::cast_possible_truncation)]
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        render_plan_checklist(&self.title, &self.steps, width as usize, self.awaiting_approval)
+        render_plan_checklist(
+            &self.title,
+            &self.steps,
+            width as usize,
+            self.awaiting_approval,
+        )
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

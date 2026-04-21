@@ -139,15 +139,10 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<()> {
     }
 
     let (watch_tx, watch_rx) = mpsc::unbounded_channel();
-    let _file_watcher = crate::watcher::FileWatcher::new(
-        &settings_watch_paths,
-        &config.skill_dirs,
-        watch_tx,
-    );
-    let mut watch_rx = crate::watcher::debounced_watch(
-        watch_rx,
-        std::time::Duration::from_millis(500),
-    );
+    let _file_watcher =
+        crate::watcher::FileWatcher::new(&settings_watch_paths, &config.skill_dirs, watch_tx);
+    let mut watch_rx =
+        crate::watcher::debounced_watch(watch_rx, std::time::Duration::from_millis(500));
 
     // ── Phase 5: Enter event loop immediately ────────────────────────────
 

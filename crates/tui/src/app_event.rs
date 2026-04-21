@@ -45,7 +45,9 @@ pub enum AppEvent {
     /// Open model picker overlay.
     OpenModelPicker,
     /// Open interactive diff viewer overlay.
-    OpenDiffViewer { diff_text: String },
+    OpenDiffViewer {
+        diff_text: String,
+    },
     /// Open full-screen transcript.
     OpenTranscript,
     /// Close the topmost overlay.
@@ -85,7 +87,9 @@ pub enum AppEvent {
     ToolProgress {
         progress: crab_core::tool::ToolProgress,
     },
-    ToolFinished { output: crab_core::tool::ToolOutput },
+    ToolFinished {
+        output: crab_core::tool::ToolOutput,
+    },
     /// The agent message is complete.
     MessageComplete {
         input_tokens: u64,
@@ -140,10 +144,11 @@ pub enum AppEvent {
     /// Paste image from clipboard.
     ImagePaste,
 
-
     // ── System events (compact, token warning, session save/resume) ──
     /// Compaction started.
-    CompactStart { strategy: String },
+    CompactStart {
+        strategy: String,
+    },
     /// Compaction ended.
     CompactEnd {
         after_tokens: u64,
@@ -156,7 +161,9 @@ pub enum AppEvent {
         limit: u64,
     },
     /// Session saved.
-    SessionSaved { session_id: String },
+    SessionSaved {
+        session_id: String,
+    },
     /// Session resumed.
     SessionResumed {
         session_id: String,
@@ -165,7 +172,9 @@ pub enum AppEvent {
 
     // ── Thinking ──
     /// Thinking state changed.
-    ThinkingChanged { active: bool },
+    ThinkingChanged {
+        active: bool,
+    },
 }
 
 #[cfg(test)]

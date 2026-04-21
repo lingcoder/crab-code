@@ -389,18 +389,9 @@ impl DiffViewerOverlay {
 
             for dl in &hunk.lines {
                 let (prefix, style) = match dl.kind {
-                    DiffLineKind::Add => (
-                        "+",
-                        Style::default().fg(Color::Green),
-                    ),
-                    DiffLineKind::Remove => (
-                        "-",
-                        Style::default().fg(Color::Red),
-                    ),
-                    DiffLineKind::Context => (
-                        " ",
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    DiffLineKind::Add => ("+", Style::default().fg(Color::Green)),
+                    DiffLineKind::Remove => ("-", Style::default().fg(Color::Red)),
+                    DiffLineKind::Context => (" ", Style::default().fg(Color::DarkGray)),
                 };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{}", dl.content),

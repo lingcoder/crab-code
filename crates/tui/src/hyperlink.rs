@@ -50,7 +50,10 @@ mod tests {
     #[test]
     fn wrap_hyperlink_format() {
         let result = wrap_hyperlink("https://example.com", "click");
-        assert_eq!(result, "\x1b]8;;https://example.com\x1b\\click\x1b]8;;\x1b\\");
+        assert_eq!(
+            result,
+            "\x1b]8;;https://example.com\x1b\\click\x1b]8;;\x1b\\"
+        );
     }
 
     #[test]

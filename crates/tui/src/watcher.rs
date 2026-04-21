@@ -38,22 +38,22 @@ impl FileWatcher {
         let skill_dirs_set: Arc<Vec<PathBuf>> = Arc::new(skill_dirs.to_vec());
         let skill_dirs_for_handler = Arc::clone(&skill_dirs_set);
 
-        let mut watcher = notify::recommended_watcher(
-            move |res: Result<notify::Event, notify::Error>| {
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 let Ok(event) = res else { return };
                 if !matches!(
                     event.kind,
-                    notify::EventKind::Modify(
-                        ModifyKind::Data(_) | ModifyKind::Name(_)
-                    ) | notify::EventKind::Create(_)
+                    notify::EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_))
+                        | notify::EventKind::Create(_)
                         | notify::EventKind::Remove(_)
                 ) {
                     return;
                 }
 
-                let is_skill = event.paths.iter().any(|p| {
-                    skill_dirs_for_handler.iter().any(|d| p.starts_with(d))
-                });
+                let is_skill = event
+                    .paths
+                    .iter()
+                    .any(|p| skill_dirs_for_handler.iter().any(|d| p.starts_with(d)));
 
                 let watch_event = if is_skill {
                     WatchEvent::SkillsChanged
@@ -61,9 +61,8 @@ impl FileWatcher {
                     WatchEvent::SettingsChanged
                 };
                 let _ = tx.send(watch_event);
-            },
-        )
-        .ok()?;
+            })
+            .ok()?;
 
         for path in settings_paths {
             if path.exists() {
@@ -143,13 +142,11 @@ mod tests {
         raw_tx.send(WatchEvent::SettingsChanged).unwrap();
 
         // Should get exactly one event after debounce
-        let event =
-            tokio::time::timeout(Duration::from_millis(200), debounced_rx.recv()).await;
+        let event = tokio::time::timeout(Duration::from_millis(200), debounced_rx.recv()).await;
         assert!(event.is_ok());
 
         // No more events pending
-        let no_event =
-            tokio::time::timeout(Duration::from_millis(100), debounced_rx.recv()).await;
+        let no_event = tokio::time::timeout(Duration::from_millis(100), debounced_rx.recv()).await;
         assert!(no_event.is_err());
     }
 }
