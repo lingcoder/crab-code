@@ -505,23 +505,20 @@ impl App {
         if let Some(action) = resolved_action {
             match action {
                 Action::Quit => {
-                    // CC-aligned double-press: first Ctrl+C interrupts, second exits.
                     let now = Instant::now();
                     if let Some(last) = self.last_interrupt
-                        && now.duration_since(last) < Duration::from_millis(500)
+                        && now.duration_since(last) < Duration::from_millis(800)
                     {
-                        // Double press within 500ms → actually quit
                         self.should_quit = true;
                         return AppAction::Quit;
                     }
-                    // First press → interrupt current operation
                     self.last_interrupt = Some(now);
+                    self.input.clear();
                     if self.state == AppState::Processing {
                         self.spinner.stop();
                         self.state = AppState::Idle;
                         let _ = writeln!(self.content_buffer, "\n[interrupted]");
                     }
-                    // Show hint that double-press exits
                     return AppAction::None;
                 }
                 Action::NewSession if self.state != AppState::Confirming => {
@@ -1459,12 +1456,16 @@ impl App {
         } else {
             None
         };
+        let exit_pending = self
+            .last_interrupt
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(800));
         let bottom_bar = BottomBar {
             state: self.state,
             search_active: self.search.is_active(),
             permission_mode: self.permission_mode,
             chord_prefix: self.keybindings.pending_chord(),
             vim_mode: vim_label,
+            exit_pending,
         };
         bottom_bar.render(layout.bottom_bar, buf);
 
@@ -1748,7 +1749,7 @@ mod tests {
         let mut app = App::new("test");
         // First press: interrupt
         app.handle_event(ctrl_key('c'));
-        // Second press within 500ms: quit
+        // Second press within 800ms: quit
         let action = app.handle_event(ctrl_key('c'));
         assert_eq!(action, AppAction::Quit);
         assert!(app.should_quit);

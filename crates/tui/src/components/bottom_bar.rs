@@ -25,12 +25,24 @@ pub struct BottomBar<'a> {
     pub chord_prefix: Option<&'a [KeyChord]>,
     /// Vim mode label (e.g. "NORMAL", "INSERT") when vim is active.
     pub vim_mode: Option<&'a str>,
+    /// When true, show "Press Ctrl+C again to exit" instead of the
+    /// normal state hint (first-press pending, clears after timeout).
+    pub exit_pending: bool,
 }
 
 impl Renderable for BottomBar<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if let Some(prefix) = self.chord_prefix {
             render_chord_hint(prefix, area, buf);
+            return;
+        }
+
+        if self.exit_pending {
+            let line = Line::from(Span::styled(
+                "  Press Ctrl+C again to exit",
+                Style::default().fg(Color::DarkGray),
+            ));
+            Widget::render(line, area, buf);
             return;
         }
 
@@ -211,6 +223,7 @@ mod tests {
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: None,
             vim_mode: None,
+            exit_pending: false,
         };
         assert_eq!(bb.desired_height(80), 1);
     }
@@ -223,6 +236,7 @@ mod tests {
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: None,
             vim_mode: None,
+            exit_pending: false,
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -265,6 +279,7 @@ mod tests {
             permission_mode: crab_core::permission::PermissionMode::Default,
             chord_prefix: Some(&prefix),
             vim_mode: None,
+            exit_pending: false,
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);

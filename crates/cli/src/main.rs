@@ -1275,40 +1275,15 @@ async fn print_events(
 
 #[cfg(feature = "tui")]
 pub fn print_exit_info(info: &crab_tui::ExitInfo) {
-    const GOODBYES: &[&str] = &["Goodbye!", "See ya!", "Bye!", "Catch you later!"];
-
-    let total = info.total_input_tokens + info.total_output_tokens;
-    if total > 0 {
+    if info.had_conversation && !info.session_id.is_empty() {
         eprintln!(
-            "{}",
+            "\n{}\n",
             format!(
-                "Token usage: total={} input={} output={}",
-                format_tokens(total),
-                format_tokens(info.total_input_tokens),
-                format_tokens(info.total_output_tokens),
+                "Resume this session with:\ncrab --resume {}",
+                info.session_id
             )
             .dimmed()
         );
-    }
-    if !info.session_id.is_empty() {
-        eprintln!(
-            "{}",
-            format!("To resume this session:  crab --resume {}", info.session_id).dimmed()
-        );
-    }
-    let idx = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as usize % GOODBYES.len());
-    eprintln!("{}", GOODBYES[idx]);
-}
-
-fn format_tokens(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 10_000 {
-        format!("{:.1}k", n as f64 / 1000.0)
-    } else {
-        n.to_string()
     }
 }
 

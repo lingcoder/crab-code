@@ -41,8 +41,7 @@ use crate::frame_requester::FrameRequester;
 /// Information returned when the TUI exits.
 pub struct ExitInfo {
     pub session_id: String,
-    pub total_input_tokens: u64,
-    pub total_output_tokens: u64,
+    pub had_conversation: bool,
 }
 
 /// Configuration for launching the TUI REPL.
@@ -171,8 +170,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<ExitInfo> {
 
     let exit_info = ExitInfo {
         session_id: app.session_id.clone(),
-        total_input_tokens: app.total_input_tokens,
-        total_output_tokens: app.total_output_tokens,
+        had_conversation: !app.messages.is_empty(),
     };
 
     // Restore terminal
