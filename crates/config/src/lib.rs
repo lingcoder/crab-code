@@ -23,4 +23,6 @@ pub use migration::migrate_settings;
 pub use permissions::PermissionRuleSet;
 pub use settings::{GitContextConfig, PermissionsConfig, Settings};
 pub use settings_cache::SettingsCache;
-pub use validation::{ValidationError, validate_all_settings_files, validate_raw_file, validate_settings};
+pub use validation::{
+    ValidationError, validate_all_settings_files, validate_raw_file, validate_settings,
+};

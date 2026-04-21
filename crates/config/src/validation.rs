@@ -362,9 +362,7 @@ pub fn validate_raw_file(path: &std::path::Path, source_label: &str) -> Vec<Vali
 /// Validates each raw file independently so that `Option::None` fields
 /// (absent from the file) never appear as false-positive `null` errors.
 /// Returns warnings with source-prefixed field paths.
-pub fn validate_all_settings_files(
-    project_dir: Option<&std::path::Path>,
-) -> Vec<ValidationError> {
+pub fn validate_all_settings_files(project_dir: Option<&std::path::Path>) -> Vec<ValidationError> {
     let mut warnings = Vec::new();
 
     let global_path = crate::settings::global_config_dir().join("settings.json");
@@ -517,7 +515,10 @@ mod tests {
     fn validate_api_key_is_known_field() {
         let settings = serde_json::json!({"apiKey": "sk-test"});
         let errors = validate_settings(&settings);
-        assert!(errors.is_empty(), "apiKey should be a known field: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "apiKey should be a known field: {errors:?}"
+        );
     }
 
     #[test]

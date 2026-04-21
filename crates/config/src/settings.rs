@@ -75,7 +75,7 @@ pub struct Settings {
     pub cleanup_period_days: Option<u32>,
 }
 
-/// Structured permission rules (CCB-compatible).
+/// Structured permission rules: `{allow, deny, defaultMode}`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PermissionsConfig {
@@ -122,15 +122,23 @@ impl Settings {
             small_model: other.small_model.clone().or(self.small_model),
             advisor_model: other.advisor_model.clone().or(self.advisor_model),
             available_models: other.available_models.clone().or(self.available_models),
-            model_overrides: merge_maps(self.model_overrides.as_ref(), other.model_overrides.as_ref()),
+            model_overrides: merge_maps(
+                self.model_overrides.as_ref(),
+                other.model_overrides.as_ref(),
+            ),
             max_tokens: other.max_tokens.or(self.max_tokens),
             // Permissions
             permissions: other.permissions.clone().or(self.permissions),
             permission_mode: other.permission_mode.clone().or(self.permission_mode),
             // Prompts
             system_prompt: other.system_prompt.clone().or(self.system_prompt),
-            include_git_instructions: other.include_git_instructions.or(self.include_git_instructions),
-            custom_instructions: other.custom_instructions.clone().or(self.custom_instructions),
+            include_git_instructions: other
+                .include_git_instructions
+                .or(self.include_git_instructions),
+            custom_instructions: other
+                .custom_instructions
+                .clone()
+                .or(self.custom_instructions),
             // MCP
             mcp_servers: other.mcp_servers.clone().or(self.mcp_servers),
             enable_all_project_mcp_servers: other
