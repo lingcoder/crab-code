@@ -16,7 +16,6 @@ use crate::components::autocomplete::{AutoComplete, CommandInfo};
 use crate::components::bottom_bar::BottomBar;
 use crate::components::code_block::{CodeBlockTracker, ImagePlaceholder};
 use crate::components::context_collapse::{CollapsibleSection, ContextCollapse};
-use crate::components::cost_bar::CostBar;
 use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
 use crate::components::input_area::InputArea;
@@ -232,8 +231,6 @@ pub struct App {
     pub total_input_tokens: u64,
     /// Cumulative output token usage.
     pub total_output_tokens: u64,
-    /// Token/cost status bar.
-    pub cost_bar: CostBar,
     /// Content scroll offset (lines from bottom).
     content_scroll: usize,
     /// Tool output list with fold/unfold state.
@@ -305,7 +302,6 @@ impl App {
             keybindings: Keybindings::defaults(),
             total_input_tokens: 0,
             total_output_tokens: 0,
-            cost_bar: CostBar::new(),
             content_scroll: 0,
             tool_outputs: ToolOutputList::new(),
             code_blocks: CodeBlockTracker::new(),
@@ -353,7 +349,6 @@ impl App {
         self.current_tool_input = None;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
-        self.cost_bar = CostBar::new();
         self.content_scroll = 0;
         self.scroll_anchor = None;
         self.unseen_message_count = 0;
@@ -1196,14 +1191,6 @@ impl App {
                 self.state = AppState::Idle;
                 self.total_input_tokens += input_tokens;
                 self.total_output_tokens += output_tokens;
-                self.cost_bar.update(
-                    self.total_input_tokens,
-                    self.total_output_tokens,
-                    0,
-                    0,
-                    0.0,
-                    0,
-                );
                 if let Some(start) = self.processing_start.take()
                     && start.elapsed() > Duration::from_secs(10)
                 {
@@ -1416,11 +1403,8 @@ impl App {
         };
         message_list.render(layout.content, buf);
 
-        // Status line: spinner when active, cost bar otherwise
         if self.spinner.is_active() {
             Widget::render(&self.spinner, layout.status, buf);
-        } else if self.cost_bar.total_tokens() > 0 {
-            Widget::render(&self.cost_bar, layout.status, buf);
         }
 
         // Separators

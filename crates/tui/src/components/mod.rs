@@ -8,7 +8,6 @@ pub mod code_block;
 pub mod command_palette;
 pub mod context_collapse;
 pub mod context_visualization;
-pub mod cost_bar;
 pub mod diff;
 pub mod diff_viewer;
 pub mod fuzzy;
