@@ -10,8 +10,11 @@ use crab_plugin::hook::{HookAction, HookContext, HookExecutor, HookTrigger};
 use crab_tools::builtin::bash::BASH_TOOL_NAME;
 use crab_tools::builtin::plan_mode::EXIT_PLAN_MODE_TOOL_NAME;
 use crab_tools::executor::{StreamingOutput, ToolExecutor};
+use futures::stream::{self, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+const MAX_CONCURRENT_READS: usize = 10;
 
 /// A reference to a tool call within a message.
 pub struct ToolCallRef<'a> {
@@ -103,7 +106,10 @@ pub async fn execute_tool_calls(
             })
             .collect();
 
-        let read_results = futures::future::join_all(read_futures).await;
+        let read_results: Vec<_> = stream::iter(read_futures)
+            .buffer_unordered(MAX_CONCURRENT_READS)
+            .collect()
+            .await;
         results.extend(read_results);
     }
 

@@ -12,20 +12,7 @@ use serde::{Deserialize, Serialize};
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
-/// When a hook fires relative to tool execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HookTrigger {
-    /// Before a tool is executed.
-    PreToolUse,
-    /// After a tool completes.
-    PostToolUse,
-    /// When the user submits a prompt (before it reaches the LLM).
-    UserPromptSubmit,
-    /// When the query loop is about to exit (model produced no tool calls).
-    /// A hook returning `Retry` continues the loop instead of stopping.
-    Stop,
-}
+pub use crab_config::hooks::HookTrigger;
 
 /// A single hook definition from settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,8 +161,15 @@ impl HookExecutor {
                 if h.trigger != trigger {
                     return false;
                 }
-                // UserPromptSubmit and Stop hooks don't filter by tool name
-                if trigger == HookTrigger::UserPromptSubmit || trigger == HookTrigger::Stop {
+                if matches!(
+                    trigger,
+                    HookTrigger::UserPromptSubmit
+                        | HookTrigger::Stop
+                        | HookTrigger::Notification
+                        | HookTrigger::SessionStart
+                        | HookTrigger::SessionEnd
+                        | HookTrigger::Compact
+                ) {
                     return true;
                 }
                 // match_pattern takes precedence over tool_filter
@@ -233,11 +227,16 @@ impl HookExecutor {
                 (
                     "CRAB_HOOK_TRIGGER".to_string(),
                     match trigger {
-                        HookTrigger::PreToolUse => "pre_tool_use".to_string(),
-                        HookTrigger::PostToolUse => "post_tool_use".to_string(),
-                        HookTrigger::UserPromptSubmit => "user_prompt_submit".to_string(),
-                        HookTrigger::Stop => "stop".to_string(),
-                    },
+                        HookTrigger::PreToolUse => "pre_tool_use",
+                        HookTrigger::PostToolUse => "post_tool_use",
+                        HookTrigger::UserPromptSubmit => "user_prompt_submit",
+                        HookTrigger::Stop => "stop",
+                        HookTrigger::Notification => "notification",
+                        HookTrigger::SessionStart => "session_start",
+                        HookTrigger::SessionEnd => "session_end",
+                        HookTrigger::Compact => "compact",
+                    }
+                    .to_string(),
                 ),
             ];
             if let Some(ref output) = ctx.tool_output {

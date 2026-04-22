@@ -240,6 +240,8 @@ pub struct App {
     last_interrupt: Option<Instant>,
     /// Current permission mode (cycled via Shift+Tab).
     pub permission_mode: crab_core::permission::PermissionMode,
+    /// Session-level "always allow" grants (tool names granted via 'a' key).
+    pub session_grants: std::collections::HashSet<String>,
     /// Structured message list — the source of truth for conversation display.
     pub messages: Vec<ChatMessage>,
     /// Stashed input text (Ctrl+S to save/restore).
@@ -292,6 +294,7 @@ impl App {
             input_mode: PromptInputMode::Prompt,
             last_interrupt: None,
             permission_mode: crab_core::permission::PermissionMode::Default,
+            session_grants: std::collections::HashSet::new(),
             messages: Vec::new(),
             stash: None,
             input_history_list: Vec::new(),
@@ -873,16 +876,24 @@ impl App {
             }
         }
 
-        let rejection_info = self
-            .approval_queue
-            .current()
-            .map(|pa| pa.card.rejection_summary());
+        let current_info = self.approval_queue.current().map(|pa| {
+            (
+                pa.card.kind.tool_name().to_string(),
+                pa.card.rejection_summary(),
+            )
+        });
 
         if let Some((request_id, response)) = self.approval_queue.handle_key(key.code) {
             let allowed = matches!(
                 response,
                 PermissionResponse::Allow | PermissionResponse::AllowAlways
             );
+            if response == PermissionResponse::AllowAlways
+                && let Some((ref grant_name, _)) = current_info
+            {
+                self.session_grants.insert(grant_name.clone());
+            }
+            let rejection_info = current_info.map(|(_, ri)| ri);
             if !allowed && let Some((tool_name, summary)) = rejection_info {
                 let tool_input = self
                     .active_tools
@@ -1202,11 +1213,21 @@ impl App {
                 tool_name,
                 summary,
             } => {
-                self.spinner.stop();
-                self.state = AppState::Confirming;
-                self.approval_queue
-                    .push(PermissionCard::from_event(&tool_name, &summary, request_id));
-                AppAction::None
+                if self.session_grants.contains(&tool_name) {
+                    AppAction::PermissionResponse {
+                        request_id,
+                        allowed: true,
+                    }
+                } else {
+                    self.spinner.stop();
+                    self.state = AppState::Confirming;
+                    self.approval_queue.push(PermissionCard::from_event(
+                        &tool_name,
+                        &summary,
+                        request_id,
+                    ));
+                    AppAction::None
+                }
             }
             AppEvent::ScrollUp(n) => {
                 self.content_scroll = self.content_scroll.saturating_add(n as usize);

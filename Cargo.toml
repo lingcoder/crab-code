@@ -76,6 +76,7 @@ pulldown-cmark = "0.13"
 # ─── 系统 ───
 sysinfo = "0.38"
 directories = "6"
+libc = "0.2"
 
 # ─── 认证 ───
 keyring = "3"

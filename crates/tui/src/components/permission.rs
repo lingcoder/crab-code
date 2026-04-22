@@ -49,6 +49,18 @@ pub enum PermissionKind {
 }
 
 impl PermissionKind {
+    /// Canonical tool name for this kind (used for session-level grants).
+    pub fn tool_name(&self) -> &str {
+        match self {
+            Self::Bash { .. } => "bash",
+            Self::FileEdit { .. } => "edit",
+            Self::FileWrite { .. } => "write",
+            Self::WebFetch { .. } => "web_fetch",
+            Self::NotebookEdit { .. } => "notebook_edit",
+            Self::Generic { tool_name, .. } => tool_name,
+        }
+    }
+
     /// Card title — matches CC's per-component title strings.
     fn title(&self) -> &str {
         match self {

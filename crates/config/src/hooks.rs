@@ -1,17 +1,30 @@
 use serde::{Deserialize, Serialize};
 
-/// When a hook fires.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// When a hook fires relative to tool or lifecycle events.
+///
+/// This is the canonical definition used by both configuration parsing
+/// (`crab_config`) and runtime execution (`crab_plugin`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookTrigger {
     /// Before a tool is invoked.
     PreToolUse,
     /// After a tool completes.
     PostToolUse,
-    /// When user submits a prompt.
-    PromptSubmit,
+    /// When user submits a prompt (before it reaches the LLM).
+    #[serde(alias = "prompt_submit")]
+    UserPromptSubmit,
+    /// When the query loop is about to exit (model produced no tool calls).
+    /// A hook returning `Retry` continues the loop instead of stopping.
+    Stop,
     /// When a notification is sent.
     Notification,
+    /// When a session starts.
+    SessionStart,
+    /// When a session ends.
+    SessionEnd,
+    /// When conversation compaction completes.
+    Compact,
 }
 
 /// A single hook definition.
@@ -67,13 +80,25 @@ mod tests {
         let triggers = [
             (HookTrigger::PreToolUse, "pre_tool_use"),
             (HookTrigger::PostToolUse, "post_tool_use"),
-            (HookTrigger::PromptSubmit, "prompt_submit"),
+            (HookTrigger::UserPromptSubmit, "user_prompt_submit"),
+            (HookTrigger::Stop, "stop"),
             (HookTrigger::Notification, "notification"),
+            (HookTrigger::SessionStart, "session_start"),
+            (HookTrigger::SessionEnd, "session_end"),
+            (HookTrigger::Compact, "compact"),
         ];
         for (trigger, expected) in triggers {
             let json = serde_json::to_string(&trigger).unwrap();
             assert_eq!(json, format!("\"{expected}\""));
         }
+    }
+
+    #[test]
+    fn hook_trigger_prompt_submit_alias() {
+        let parsed: HookTrigger = serde_json::from_str("\"prompt_submit\"").unwrap();
+        assert_eq!(parsed, HookTrigger::UserPromptSubmit);
+        let parsed2: HookTrigger = serde_json::from_str("\"user_prompt_submit\"").unwrap();
+        assert_eq!(parsed2, HookTrigger::UserPromptSubmit);
     }
 
     #[test]
@@ -120,14 +145,27 @@ mod tests {
     fn load_hooks_from_settings_with_hooks() {
         let settings = crate::Settings {
             hooks: Some(serde_json::json!([{
-                "trigger": "prompt_submit",
+                "trigger": "user_prompt_submit",
                 "command": "echo hi"
             }])),
             ..Default::default()
         };
         let hooks = load_hooks(&settings).unwrap();
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0].trigger, HookTrigger::PromptSubmit);
+        assert_eq!(hooks[0].trigger, HookTrigger::UserPromptSubmit);
+    }
+
+    #[test]
+    fn load_hooks_prompt_submit_alias_compat() {
+        let settings = crate::Settings {
+            hooks: Some(serde_json::json!([{
+                "trigger": "prompt_submit",
+                "command": "echo hi"
+            }])),
+            ..Default::default()
+        };
+        let hooks = load_hooks(&settings).unwrap();
+        assert_eq!(hooks[0].trigger, HookTrigger::UserPromptSubmit);
     }
 
     #[test]

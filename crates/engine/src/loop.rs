@@ -62,6 +62,8 @@ pub async fn query_loop(
             config.compaction_client.as_deref(),
             &config.compaction_config,
             &mut compact_state,
+            config.hook_executor.as_ref(),
+            config.session_id.as_deref(),
         )
         .await;
 
@@ -125,6 +127,8 @@ pub async fn query_loop(
                     &event_tx,
                     config.compaction_client.as_deref(),
                     &config.compaction_config,
+                    config.hook_executor.as_ref(),
+                    config.session_id.as_deref(),
                 )
                 .await;
                 continue;
@@ -450,7 +454,7 @@ async fn stream_response(
 /// LLM. Falls back to simple truncation when no client is provided.
 /// Respects the `AutoCompactState` circuit breaker to avoid infinite
 /// compaction loops.
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
 async fn check_and_compact(
     conversation: &mut Conversation,
     context_mgr: &ContextManager,
@@ -458,6 +462,8 @@ async fn check_and_compact(
     client: Option<&dyn CompactionClient>,
     compaction_config: &CompactionConfig,
     compact_state: &mut AutoCompactState,
+    hook_executor: Option<&std::sync::Arc<HookExecutor>>,
+    session_id: Option<&str>,
 ) {
     match context_mgr.check(conversation) {
         ContextAction::NeedsCompaction {
@@ -499,6 +505,7 @@ async fn check_and_compact(
                                 removed_messages: r.messages_removed(),
                             })
                             .await;
+                        fire_compact_hook(hook_executor, session_id);
                     }
                     Err(e) => {
                         compact_state.record_failure();
@@ -511,6 +518,7 @@ async fn check_and_compact(
                                 removed_messages: removed,
                             })
                             .await;
+                        fire_compact_hook(hook_executor, session_id);
                     }
                 }
             } else {
@@ -547,6 +555,8 @@ async fn force_compact(
     event_tx: &mpsc::Sender<Event>,
     client: Option<&dyn CompactionClient>,
     compaction_config: &CompactionConfig,
+    hook_executor: Option<&std::sync::Arc<HookExecutor>>,
+    session_id: Option<&str>,
 ) {
     let before_tokens = conversation.estimated_tokens();
     let _ = event_tx
@@ -577,6 +587,7 @@ async fn force_compact(
                     removed_messages: r.messages_removed(),
                 })
                 .await;
+            fire_compact_hook(hook_executor, session_id);
         }
         Err(e) => {
             tracing::warn!(error = %e, "PTL compaction failed, using raw truncation");
@@ -588,8 +599,32 @@ async fn force_compact(
                     removed_messages: removed,
                 })
                 .await;
+            fire_compact_hook(hook_executor, session_id);
         }
     }
+}
+
+/// Fire Compact lifecycle hook in the background (fire-and-forget).
+fn fire_compact_hook(
+    hook_executor: Option<&std::sync::Arc<HookExecutor>>,
+    session_id: Option<&str>,
+) {
+    let Some(hooks) = hook_executor.cloned() else {
+        return;
+    };
+    let ctx = HookContext {
+        tool_name: String::new(),
+        tool_input: String::new(),
+        working_dir: None,
+        tool_output: None,
+        tool_exit_code: None,
+        session_id: session_id.map(String::from),
+    };
+    tokio::spawn(async move {
+        if let Err(e) = hooks.run(HookTrigger::Compact, &ctx).await {
+            tracing::warn!(error = %e, "compact hook failed");
+        }
+    });
 }
 
 /// Run the compaction pipeline. Uses `compact_with_config` when an LLM client

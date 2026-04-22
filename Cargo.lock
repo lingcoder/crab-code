@@ -1062,6 +1062,7 @@ name = "crab-plugin"
 version = "0.1.0"
 dependencies = [
  "crab-common",
+ "crab-config",
  "crab-core",
  "crab-process",
  "crab-skill",
@@ -1214,6 +1215,7 @@ dependencies = [
  "crab-tools",
  "crossterm 0.29.0",
  "futures",
+ "libc",
  "lru 0.17.0",
  "notify",
  "nucleo-matcher",

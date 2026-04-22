@@ -160,7 +160,6 @@ fn is_file_edit_tool(tool_name: &str) -> bool {
 
 /// Check if the tool input contains a dangerous command pattern.
 pub fn is_dangerous_command(input: &serde_json::Value) -> bool {
-    // Check the "command" field (BashTool) or fall back to full string representation
     let text = input
         .get("command")
         .and_then(|v| v.as_str())
@@ -173,6 +172,53 @@ pub fn is_dangerous_command(input: &serde_json::Value) -> bool {
     DANGEROUS_PATTERNS
         .iter()
         .any(|pattern| text.contains(pattern))
+        || is_suspicious_quoting(text)
+}
+
+/// Detect shell quoting and substitution patterns that can hide dangerous commands.
+///
+/// Returns `true` if the command contains patterns like `$(...)`, unescaped backticks,
+/// process substitution, ANSI-C quoting, IFS manipulation, or `/proc/*/environ` access.
+fn is_suspicious_quoting(cmd: &str) -> bool {
+    has_unescaped_backtick(cmd)
+        || has_command_substitution(cmd)
+        || has_process_substitution(cmd)
+        || has_ansi_c_quoting(cmd)
+        || has_ifs_injection(cmd)
+        || has_proc_environ_access(cmd)
+}
+
+fn has_unescaped_backtick(cmd: &str) -> bool {
+    let bytes = cmd.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'`' {
+            let backslashes = bytes[..i].iter().rev().take_while(|&&c| c == b'\\').count();
+            if backslashes % 2 == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_command_substitution(cmd: &str) -> bool {
+    cmd.contains("$(")
+}
+
+fn has_process_substitution(cmd: &str) -> bool {
+    cmd.contains("<(") || cmd.contains(">(") || cmd.contains("=(")
+}
+
+fn has_ansi_c_quoting(cmd: &str) -> bool {
+    cmd.contains("$'") || cmd.contains("$\"")
+}
+
+fn has_ifs_injection(cmd: &str) -> bool {
+    cmd.contains("$IFS") || cmd.contains("${IFS")
+}
+
+fn has_proc_environ_access(cmd: &str) -> bool {
+    cmd.contains("/proc/") && cmd.contains("/environ")
 }
 
 /// Check if the file path in the tool input is within the project directory.
@@ -489,6 +535,71 @@ mod tests {
     fn empty_input_not_dangerous() {
         assert!(!is_dangerous_command(&json!({})));
         assert!(!is_dangerous_command(&json!({"file_path": "foo.rs"})));
+    }
+
+    // ─── Suspicious quoting detection tests ───
+
+    #[test]
+    fn detects_command_substitution() {
+        assert!(is_dangerous_command(
+            &json!({"command": "echo $(cat /etc/passwd)"})
+        ));
+    }
+
+    #[test]
+    fn detects_unescaped_backticks() {
+        assert!(is_dangerous_command(&json!({"command": "echo `whoami`"})));
+    }
+
+    #[test]
+    fn escaped_backticks_are_safe() {
+        assert!(!is_dangerous_command(
+            &json!({"command": r"echo \`literal\`"})
+        ));
+    }
+
+    #[test]
+    fn detects_process_substitution() {
+        assert!(is_dangerous_command(
+            &json!({"command": "diff <(cat a) >(cat b)"})
+        ));
+    }
+
+    #[test]
+    fn detects_ansi_c_quoting() {
+        assert!(is_dangerous_command(
+            &json!({"command": "grep $'\\x2d-exec' ."})
+        ));
+        assert!(is_dangerous_command(
+            &json!({"command": r#"echo $"hidden""#})
+        ));
+    }
+
+    #[test]
+    fn detects_ifs_injection() {
+        assert!(is_dangerous_command(
+            &json!({"command": "cat$IFS/etc/passwd"})
+        ));
+        assert!(is_dangerous_command(
+            &json!({"command": "cat${IFS}/etc/shadow"})
+        ));
+    }
+
+    #[test]
+    fn detects_proc_environ_access() {
+        assert!(is_dangerous_command(
+            &json!({"command": "cat /proc/self/environ"})
+        ));
+        assert!(is_dangerous_command(
+            &json!({"command": "cat /proc/1/environ"})
+        ));
+    }
+
+    #[test]
+    fn safe_dollar_paren_not_in_substitution() {
+        assert!(!is_dangerous_command(
+            &json!({"command": "git log --format=%H"})
+        ));
     }
 
     // ─── Combined tests ───

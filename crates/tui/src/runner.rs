@@ -301,7 +301,33 @@ fn push_startup_overlays(app: &mut App) {
     }
 }
 
-/// Data needed by the background initialization task.
+/// Fire a lifecycle hook (`session_start`, `session_end`, `compact`) in the background.
+///
+/// Lifecycle hooks are fire-and-forget — they cannot influence control flow.
+fn fire_lifecycle_hook(
+    hook_executor: Option<&Arc<crab_plugin::hook::HookExecutor>>,
+    trigger: crab_plugin::hook::HookTrigger,
+    session_id: Option<&str>,
+    working_dir: Option<&std::path::Path>,
+) {
+    let Some(hooks) = hook_executor.cloned() else {
+        return;
+    };
+    let ctx = crab_plugin::hook::HookContext {
+        tool_name: String::new(),
+        tool_input: String::new(),
+        working_dir: working_dir.map(std::path::PathBuf::from),
+        tool_output: None,
+        tool_exit_code: None,
+        session_id: session_id.map(String::from),
+    };
+    tokio::spawn(async move {
+        if let Err(e) = hooks.run(trigger, &ctx).await {
+            tracing::warn!(?trigger, error = %e, "lifecycle hook failed");
+        }
+    });
+}
+
 /// Reload settings from disk, returning any validation warnings.
 fn reload_settings(app: &mut App, rt: Option<&mut RuntimeState>) -> Vec<String> {
     let project_dir = if app.working_dir.is_empty() {
@@ -639,6 +665,8 @@ async fn run_loop(
 
     let mut frame_rx = frame_requester.subscribe();
 
+    let mut sigcont_stream = SigcontStream::new()?;
+
     loop {
         terminal.draw(|frame| {
             app.render(frame.area(), frame.buffer_mut());
@@ -675,6 +703,7 @@ async fn run_loop(
                     push_startup_overlays(app);
 
                     cancel = init.tool_ctx.cancellation_token.clone();
+                    let working_dir = app.working_dir.clone();
                     state = Some(RuntimeState {
                         conversation: init.conversation,
                         executor: init.executor,
@@ -685,6 +714,18 @@ async fn run_loop(
                         _mcp_manager: init.mcp_manager,
                         cost: crab_session::CostAccumulator::default(),
                     });
+                    if let Some(ref rt) = state {
+                        fire_lifecycle_hook(
+                            rt.loop_config.hook_executor.as_ref(),
+                            crab_plugin::hook::HookTrigger::SessionStart,
+                            Some(session_id),
+                            if working_dir.is_empty() {
+                                None
+                            } else {
+                                Some(std::path::Path::new(&working_dir))
+                            },
+                        );
+                    }
                 } else {
                     app.notifications.warn("Background initialization failed".to_string());
                     app.state = crate::app::AppState::Idle;
@@ -744,6 +785,12 @@ async fn run_loop(
                 }
                 continue;
             }
+            () = sigcont_stream.recv() => {
+                let _ = enable_raw_mode();
+                let _ = execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste);
+                terminal.clear()?;
+                continue;
+            }
         };
 
         let Some(event) = event else { break };
@@ -758,10 +805,21 @@ async fn run_loop(
                 {
                     rt.conversation = agent_result.conversation;
                 }
-                if let Some(ref rt) = state
-                    && let Some(ref history) = rt.session_history
-                {
-                    let _ = history.save(session_id, rt.conversation.messages());
+                if let Some(ref rt) = state {
+                    let working_dir = &app.working_dir;
+                    fire_lifecycle_hook(
+                        rt.loop_config.hook_executor.as_ref(),
+                        crab_plugin::hook::HookTrigger::SessionEnd,
+                        Some(session_id),
+                        if working_dir.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::Path::new(working_dir))
+                        },
+                    );
+                    if let Some(ref history) = rt.session_history {
+                        let _ = history.save(session_id, rt.conversation.messages());
+                    }
                 }
                 break;
             }
@@ -1004,6 +1062,43 @@ fn spawn_event_forwarder(mut rx: mpsc::Receiver<Event>, tx: mpsc::UnboundedSende
             }
         }
     });
+}
+
+/// Cross-platform SIGCONT wrapper.
+///
+/// On Unix, listens for SIGCONT (sent after `fg` resumes a stopped process).
+/// On other platforms, `recv()` is always pending.
+struct SigcontStream {
+    #[cfg(unix)]
+    inner: tokio::signal::unix::Signal,
+}
+
+impl SigcontStream {
+    fn new() -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            let sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+                libc::SIGCONT,
+            ))?;
+            Ok(Self { inner: sig })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)] // &mut required on Unix
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            self.inner.recv().await;
+        }
+        #[cfg(not(unix))]
+        {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 #[cfg(test)]
