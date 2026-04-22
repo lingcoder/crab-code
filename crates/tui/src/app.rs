@@ -20,8 +20,8 @@ use crate::components::context_collapse::{CollapsibleSection, ContextCollapse};
 use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
 use crate::components::input_area::InputArea;
-use crate::components::message_list::MessageList;
 use crate::components::notification::NotificationManager;
+use crate::components::virtual_list::{VirtualMessage, VirtualMessageList, ViewportState};
 use crate::components::output_styles::OutputStyles;
 use crate::components::permission::{PermissionCard, PermissionResponse};
 use crate::components::search::{self, SearchState};
@@ -103,6 +103,9 @@ pub enum AppAction {
     Submit(String),
     /// User confirmed a permission request.
     PermissionResponse { request_id: String, allowed: bool },
+    /// Ctrl+C during `Confirming` — reject all queued permission requests
+    /// and interrupt the engine loop.
+    InterruptPermissions { rejected_ids: Vec<String> },
     /// User requested quit (Ctrl+C / Ctrl+D).
     Quit,
     /// User wants to create a new session.
@@ -164,6 +167,14 @@ pub enum ChatMessage {
         summary: String,
         /// Rich preview of the rejected content (command / diff / file).
         display: Option<crab_core::tool::ToolDisplayResult>,
+    },
+    /// Extended thinking content — collapsible reasoning block.
+    Thinking {
+        text: String,
+        /// Whether the thinking block is collapsed.
+        collapsed: bool,
+        /// Elapsed thinking time (set when thinking completes).
+        duration: Option<Duration>,
     },
 }
 
@@ -256,6 +267,12 @@ pub struct App {
     pub notifications: NotificationManager,
     /// When agent processing started (for terminal notification after timeout).
     processing_start: Option<Instant>,
+    /// Virtualized message list — caches laid-out lines per `(id, width)`.
+    virtual_list: VirtualMessageList,
+    /// Monotonic counter for assigning stable IDs to `VirtualMessage`s.
+    next_msg_id: u64,
+    /// Last render width — used to invalidate the virtual list cache on resize.
+    last_render_width: u16,
 }
 
 impl App {
@@ -302,6 +319,9 @@ impl App {
             vim: VimHandler::new(),
             notifications: NotificationManager::new(),
             processing_start: None,
+            virtual_list: VirtualMessageList::new(),
+            next_msg_id: 0,
+            last_render_width: 0,
         }
     }
 
@@ -328,6 +348,8 @@ impl App {
         self.content_scroll = 0;
         self.scroll_anchor = None;
         self.unseen_message_count = 0;
+        self.virtual_list.invalidate();
+        self.next_msg_id = 0;
     }
 
     /// Toggle `collapsed` on the last `ToolResult` in the message list.
@@ -335,6 +357,7 @@ impl App {
         for msg in self.messages.iter_mut().rev() {
             if let ChatMessage::ToolResult { collapsed, .. } = msg {
                 *collapsed = !*collapsed;
+                self.virtual_list.invalidate();
                 return;
             }
         }
@@ -490,6 +513,13 @@ impl App {
                     }
                     self.last_interrupt = Some(now);
                     self.input.clear();
+                    if self.state == AppState::Confirming {
+                        let rejected_ids = self.approval_queue.reject_all();
+                        self.spinner.stop();
+                        self.state = AppState::Idle;
+                        let _ = writeln!(self.content_buffer, "\n[interrupted]");
+                        return AppAction::InterruptPermissions { rejected_ids };
+                    }
                     if self.state == AppState::Processing {
                         self.spinner.stop();
                         self.state = AppState::Idle;
@@ -507,8 +537,7 @@ impl App {
                 }
                 Action::ScrollUp if self.state != AppState::Confirming => {
                     self.content_scroll = self.content_scroll.saturating_add(10);
-                    // Set scroll anchor so we know user is scrolled up
-                    let total = self.content_buffer.lines().count();
+                    let total = self.virtual_list.last_total_lines();
                     self.scroll_anchor = Some(total.saturating_sub(self.content_scroll));
                     return AppAction::None;
                 }
@@ -1040,10 +1069,12 @@ impl App {
                 Event::Error { message } => {
                     vec![AppEvent::AgentError(message.clone())]
                 }
-                // Events with no TUI representation today — dropped silently
-                // to match the legacy `handle_agent_event` catch-all behavior.
+                Event::ThinkingDelta { delta, .. } => {
+                    vec![AppEvent::ThinkingAppend(delta.clone())]
+                }
+                // Events with no TUI representation today — dropped silently.
                 // Candidates for future AppEvent variants:
-                //   TurnStart, MessageStart, ContentBlockStop, ThinkingDelta,
+                //   TurnStart, MessageStart,
                 //   ToolUseInput, ToolOutputDelta, PermissionResponse,
                 //   MemoryLoaded, MemorySaved,
                 //   AgentWorkerStarted, AgentWorkerCompleted
@@ -1077,6 +1108,22 @@ impl App {
             }
             AppEvent::Resize(..) => AppAction::None,
             AppEvent::ContentAppend(delta) => {
+                if matches!(self.thinking, ThinkingState::Thinking { .. }) {
+                    self.set_thinking(false);
+                    let dur = if let ThinkingState::ThoughtFor { duration, .. } = &self.thinking {
+                        Some(*duration)
+                    } else {
+                        None
+                    };
+                    if let Some(dur) = dur {
+                        for msg in self.messages.iter_mut().rev() {
+                            if let ChatMessage::Thinking { duration: d, .. } = msg {
+                                *d = Some(dur);
+                                break;
+                            }
+                        }
+                    }
+                }
                 if let Some(ChatMessage::Assistant { text }) = self.messages.last_mut() {
                     text.push_str(&delta);
                 } else {
@@ -1219,7 +1266,7 @@ impl App {
                         allowed: true,
                     }
                 } else {
-                    self.spinner.stop();
+                    self.spinner.pause();
                     self.state = AppState::Confirming;
                     self.approval_queue.push(PermissionCard::from_event(
                         &tool_name,
@@ -1231,7 +1278,7 @@ impl App {
             }
             AppEvent::ScrollUp(n) => {
                 self.content_scroll = self.content_scroll.saturating_add(n as usize);
-                let total = self.content_buffer.lines().count();
+                let total = self.virtual_list.last_total_lines();
                 self.scroll_anchor = Some(total.saturating_sub(self.content_scroll));
                 AppAction::None
             }
@@ -1331,6 +1378,36 @@ impl App {
             }
             AppEvent::ThinkingChanged { active } => {
                 self.set_thinking(active);
+                if !active {
+                    let dur = if let ThinkingState::ThoughtFor { duration, .. } = &self.thinking {
+                        Some(*duration)
+                    } else {
+                        None
+                    };
+                    if let Some(dur) = dur {
+                        for msg in self.messages.iter_mut().rev() {
+                            if let ChatMessage::Thinking { duration: d, .. } = msg {
+                                *d = Some(dur);
+                                break;
+                            }
+                        }
+                    }
+                }
+                AppAction::None
+            }
+            AppEvent::ThinkingAppend(delta) => {
+                if !matches!(self.thinking, ThinkingState::Thinking { .. }) {
+                    self.set_thinking(true);
+                }
+                if let Some(ChatMessage::Thinking { text, .. }) = self.messages.last_mut() {
+                    text.push_str(&delta);
+                } else {
+                    self.messages.push(ChatMessage::Thinking {
+                        text: delta,
+                        collapsed: true,
+                        duration: None,
+                    });
+                }
                 AppAction::None
             }
             // Both variants replace the input box contents outright; they
@@ -1421,7 +1498,7 @@ impl App {
     /// Render the full app into a ratatui frame.
     ///
     /// Delegates to `Renderable` components (Phase 1 refactor).
-    pub fn render(&self, area: Rect, buf: &mut Buffer) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         #[allow(clippy::cast_possible_truncation)]
         let layout = AppLayout::compute_with_sidebar(
             area,
@@ -1442,12 +1519,30 @@ impl App {
             Widget::render(&self.session_sidebar, sidebar_area, buf);
         }
 
-        // Content area — delegated to MessageList Renderable
-        let message_list = MessageList {
-            messages: &self.messages,
+        // Content area — virtualized message list with LRU cache
+        if layout.content.width != self.last_render_width {
+            self.virtual_list.invalidate();
+            self.last_render_width = layout.content.width;
+        }
+        let is_streaming = self.state == AppState::Processing;
+        let vm: Vec<VirtualMessage> = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, msg)| {
+                let cell = crate::history::cell_from_chat_message(msg);
+                let lines = cell.display_lines(layout.content.width);
+                let mut vm = VirtualMessage::new(i as u64, lines);
+                if is_streaming && i + 1 == self.messages.len() {
+                    vm = vm.streaming();
+                }
+                vm
+            })
+            .collect();
+        let vp = ViewportState {
             scroll_offset: self.content_scroll,
         };
-        message_list.render(layout.content, buf);
+        self.virtual_list.render(&vm, vp, layout.content, buf);
 
         if self.spinner.is_active() {
             Widget::render(&self.spinner, layout.status, buf);
@@ -1747,6 +1842,7 @@ mod tests {
             ChatMessage::ToolRejected {
                 tool_name, summary, ..
             } => tool_name.contains(needle) || summary.contains(needle),
+            ChatMessage::Thinking { text, .. } => text.contains(needle),
             ChatMessage::CompactBoundary { .. } | ChatMessage::PlanStep { .. } => false,
         })
     }
@@ -1985,6 +2081,32 @@ mod tests {
                 allowed: false,
             }
         );
+    }
+
+    #[test]
+    fn ctrl_c_in_confirming_rejects_all_and_interrupts() {
+        let mut app = App::new("test");
+        app.state = AppState::Confirming;
+        app.approval_queue.push(PermissionCard::from_event(
+            "bash",
+            "rm -rf /tmp",
+            "req_1".into(),
+        ));
+        app.approval_queue.push(PermissionCard::from_event(
+            "edit",
+            "src/main.rs",
+            "req_2".into(),
+        ));
+
+        let action = app.handle_event(ctrl_key('c'));
+        match action {
+            AppAction::InterruptPermissions { rejected_ids } => {
+                assert_eq!(rejected_ids, vec!["req_1", "req_2"]);
+            }
+            other => panic!("expected InterruptPermissions, got {other:?}"),
+        }
+        assert_eq!(app.state, AppState::Idle);
+        assert!(app.approval_queue.is_empty());
     }
 
     #[test]

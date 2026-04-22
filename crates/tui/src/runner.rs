@@ -872,6 +872,12 @@ async fn run_loop(
             } => {
                 let _ = perm_resp_tx.send((request_id, allowed));
             }
+            AppAction::InterruptPermissions { rejected_ids } => {
+                for id in rejected_ids {
+                    let _ = perm_resp_tx.send((id, false));
+                }
+                cancel.cancel();
+            }
             AppAction::NewSession => {
                 if let Some(ref mut rt) = state {
                     if let Some(ref history) = rt.session_history {

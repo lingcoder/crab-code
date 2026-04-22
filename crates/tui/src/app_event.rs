@@ -162,6 +162,8 @@ pub enum AppEvent {
     // ── Thinking ──
     /// Thinking state changed.
     ThinkingChanged { active: bool },
+    /// Append incremental thinking text from a `ThinkingDelta` event.
+    ThinkingAppend(String),
 
     // ── Onboarding / Trust ──
     /// User completed (or skipped) the first-run onboarding wizard.

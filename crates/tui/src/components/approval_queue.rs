@@ -83,6 +83,17 @@ impl ApprovalQueue {
         self.pending.front()
     }
 
+    /// Reject all pending approvals, returning their request IDs.
+    ///
+    /// Used when Ctrl+C is pressed during `Confirming` state — every
+    /// queued permission is denied and the engine loop gets interrupted.
+    pub fn reject_all(&mut self) -> Vec<String> {
+        self.pending
+            .drain(..)
+            .map(|pa| pa.card.request_id)
+            .collect()
+    }
+
     /// Handle a key event on the current approval.
     ///
     /// Returns the request ID and response if the user made a decision.
@@ -235,5 +246,25 @@ mod tests {
         let area = Rect::new(0, 0, 60, 15);
         let mut buf = Buffer::empty(area);
         queue.render(area, &mut buf);
+    }
+
+    #[test]
+    fn reject_all_drains_queue() {
+        let mut queue = ApprovalQueue::new();
+        queue.push(test_card("bash", "ls", "r1"));
+        queue.push(test_card("edit", "file.rs", "r2"));
+        queue.push(test_card("write", "out.txt", "r3"));
+
+        let ids = queue.reject_all();
+        assert_eq!(ids, vec!["r1", "r2", "r3"]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn reject_all_empty_queue() {
+        let mut queue = ApprovalQueue::new();
+        let ids = queue.reject_all();
+        assert!(ids.is_empty());
+        assert!(queue.is_empty());
     }
 }

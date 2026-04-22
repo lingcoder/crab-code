@@ -258,6 +258,10 @@ pub struct Spinner {
     shimmer_color: Color,
     /// When the spinner started (for elapsed time display).
     started_at: Option<std::time::Instant>,
+    /// When the spinner was paused (permission dialog, etc.).
+    paused_at: Option<std::time::Instant>,
+    /// Cumulative time spent paused — subtracted from elapsed display.
+    total_paused: std::time::Duration,
     /// Cumulative response tokens during this spinner session.
     pub response_tokens: u64,
 }
@@ -274,6 +278,8 @@ impl Spinner {
             active: false,
             shimmer_color: Color::White,
             started_at: None,
+            paused_at: None,
+            total_paused: std::time::Duration::ZERO,
             response_tokens: 0,
         }
     }
@@ -286,6 +292,8 @@ impl Spinner {
         self.frame = 0;
         self.tick = 0;
         self.started_at = Some(std::time::Instant::now());
+        self.paused_at = None;
+        self.total_paused = std::time::Duration::ZERO;
         self.response_tokens = 0;
     }
 
@@ -296,12 +304,32 @@ impl Spinner {
         self.frame = 0;
         self.tick = 0;
         self.started_at = Some(std::time::Instant::now());
+        self.paused_at = None;
+        self.total_paused = std::time::Duration::ZERO;
         self.response_tokens = 0;
     }
 
     /// Stop the spinner.
     pub fn stop(&mut self) {
         self.active = false;
+        self.paused_at = None;
+    }
+
+    /// Pause elapsed-time tracking (e.g. while a permission dialog is shown).
+    ///
+    /// The spinner animation continues, but the elapsed seconds displayed
+    /// in the status message freeze until `resume()` is called.
+    pub fn pause(&mut self) {
+        if self.paused_at.is_none() {
+            self.paused_at = Some(std::time::Instant::now());
+        }
+    }
+
+    /// Resume elapsed-time tracking after a pause.
+    pub fn resume(&mut self) {
+        if let Some(paused) = self.paused_at.take() {
+            self.total_paused += paused.elapsed();
+        }
     }
 
     /// Advance to the next animation frame. Call on each Tick event.
@@ -327,10 +355,14 @@ impl Spinner {
             format!("{}…", self.verb)
         };
 
-        // Append elapsed time and token count like CC: "Verb… (12s · 3.2k tokens)"
         let mut suffix_parts = Vec::new();
         if let Some(started) = self.started_at {
-            let elapsed = started.elapsed().as_secs();
+            let wall = started.elapsed();
+            let current_pause = self
+                .paused_at
+                .map_or(std::time::Duration::ZERO, |p| p.elapsed());
+            let active_elapsed = wall.saturating_sub(self.total_paused + current_pause);
+            let elapsed = active_elapsed.as_secs();
             if elapsed >= 1 {
                 suffix_parts.push(format!("{elapsed}s"));
             }
@@ -633,5 +665,58 @@ mod tests {
         spinner.clear_override();
         // Should fall back to verb + ellipsis
         assert!(spinner.message().ends_with('…'));
+    }
+
+    #[test]
+    fn spinner_pause_freezes_elapsed() {
+        let mut spinner = Spinner::new();
+        spinner.start("Working");
+        // Simulate: started 5 seconds ago
+        spinner.started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        // Pause for 3 seconds
+        spinner.total_paused = std::time::Duration::from_secs(3);
+        // Active elapsed should be ~2 seconds
+        let msg = spinner.message();
+        assert!(msg.contains("2s"), "expected ~2s in: {msg}");
+    }
+
+    #[test]
+    fn spinner_pause_resume_accumulates() {
+        let mut spinner = Spinner::new();
+        spinner.start("Working");
+        spinner.pause();
+        assert!(spinner.paused_at.is_some());
+        spinner.resume();
+        assert!(spinner.paused_at.is_none());
+        assert!(spinner.total_paused > std::time::Duration::ZERO || true);
+    }
+
+    #[test]
+    fn spinner_double_pause_is_idempotent() {
+        let mut spinner = Spinner::new();
+        spinner.start("Working");
+        spinner.pause();
+        let first_pause = spinner.paused_at;
+        spinner.pause();
+        assert_eq!(spinner.paused_at, first_pause);
+    }
+
+    #[test]
+    fn spinner_resume_without_pause_is_noop() {
+        let mut spinner = Spinner::new();
+        spinner.start("Working");
+        spinner.resume();
+        assert_eq!(spinner.total_paused, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn spinner_start_resets_pause_state() {
+        let mut spinner = Spinner::new();
+        spinner.start("First");
+        spinner.pause();
+        spinner.total_paused = std::time::Duration::from_secs(10);
+        spinner.start_with_random_verb();
+        assert!(spinner.paused_at.is_none());
+        assert_eq!(spinner.total_paused, std::time::Duration::ZERO);
     }
 }

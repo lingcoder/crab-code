@@ -57,7 +57,8 @@ impl GlobalSearchOverlay {
         match msg {
             ChatMessage::User { text }
             | ChatMessage::Assistant { text }
-            | ChatMessage::System { text } => text.clone(),
+            | ChatMessage::System { text }
+            | ChatMessage::Thinking { text, .. } => text.clone(),
             ChatMessage::ToolUse { name, .. } => name.clone(),
             ChatMessage::ToolResult {
                 tool_name, output, ..
@@ -198,6 +199,7 @@ impl Renderable for GlobalSearchOverlay {
                 Some(ChatMessage::ToolUse { .. }) => "[tool]",
                 Some(ChatMessage::ToolResult { .. }) => "[rslt]",
                 Some(ChatMessage::ToolRejected { .. }) => "[deny]",
+                Some(ChatMessage::Thinking { .. }) => "[thnk]",
                 Some(
                     ChatMessage::System { .. }
                     | ChatMessage::CompactBoundary { .. }

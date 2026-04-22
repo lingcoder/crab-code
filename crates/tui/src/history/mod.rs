@@ -118,6 +118,15 @@ pub fn cell_from_chat_message(msg: &crate::app::ChatMessage) -> Box<dyn HistoryC
             summary.clone(),
             display.clone(),
         )),
+        ChatMessage::Thinking {
+            text,
+            collapsed,
+            duration,
+        } => Box::new(cells::ThinkingCell::new(
+            text.clone(),
+            *collapsed,
+            *duration,
+        )),
     }
 }
 
