@@ -242,6 +242,15 @@ impl CostAccumulator {
         self.api_calls += 1;
     }
 
+    pub fn merge(&mut self, other: &Self) {
+        self.total_input_tokens += other.total_input_tokens;
+        self.total_output_tokens += other.total_output_tokens;
+        self.total_cache_read_tokens += other.total_cache_read_tokens;
+        self.total_cache_creation_tokens += other.total_cache_creation_tokens;
+        self.total_cost_usd += other.total_cost_usd;
+        self.api_calls += other.api_calls;
+    }
+
     pub fn total_tokens(&self) -> u64 {
         self.total_input_tokens + self.total_output_tokens
     }

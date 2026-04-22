@@ -45,9 +45,7 @@ pub enum AppEvent {
     /// Open model picker overlay.
     OpenModelPicker,
     /// Open interactive diff viewer overlay.
-    OpenDiffViewer {
-        diff_text: String,
-    },
+    OpenDiffViewer { diff_text: String },
     /// Open full-screen transcript.
     OpenTranscript,
     /// Close the topmost overlay.
@@ -73,21 +71,16 @@ pub enum AppEvent {
     /// summary inside `apply_event` (not `translate_event`) because the
     /// registry lives on `App`, and this keeps the translator pure.
     ToolStart {
+        id: String,
         name: String,
         input: serde_json::Value,
     },
-    /// A tool execution finished.
-    ///
-    /// Carries the full `ToolOutput` so `apply_event` can call
-    /// `Tool::format_result` via the tool registry to build the display.
-    /// The tool name is NOT in this variant — it is resolved from
-    /// `App.current_tool` (set when the matching `ToolStart` was applied),
-    /// because `crab_core::event::Event::ToolResult` does not carry a name.
-    /// Real-time progress from a running tool.
     ToolProgress {
+        id: String,
         progress: crab_core::tool::ToolProgress,
     },
     ToolFinished {
+        id: String,
         output: crab_core::tool::ToolOutput,
     },
     /// The agent message is complete.
@@ -146,9 +139,7 @@ pub enum AppEvent {
 
     // ── System events (compact, token warning, session save/resume) ──
     /// Compaction started.
-    CompactStart {
-        strategy: String,
-    },
+    CompactStart { strategy: String },
     /// Compaction ended.
     CompactEnd {
         after_tokens: u64,
@@ -161,9 +152,7 @@ pub enum AppEvent {
         limit: u64,
     },
     /// Session saved.
-    SessionSaved {
-        session_id: String,
-    },
+    SessionSaved { session_id: String },
     /// Session resumed.
     SessionResumed {
         session_id: String,
@@ -172,29 +161,21 @@ pub enum AppEvent {
 
     // ── Thinking ──
     /// Thinking state changed.
-    ThinkingChanged {
-        active: bool,
-    },
+    ThinkingChanged { active: bool },
 
     // ── Onboarding / Trust ──
     /// User completed (or skipped) the first-run onboarding wizard.
     OnboardingCompleted,
     /// User accepted the project trust dialog.
-    TrustAccepted {
-        project_path: String,
-    },
+    TrustAccepted { project_path: String },
     /// User denied the project trust dialog (enter bare mode).
     TrustDenied,
 
     // ── Hot-reload ──
     /// Settings file changed on disk and was reloaded.
-    SettingsReloaded {
-        warnings: Vec<String>,
-    },
+    SettingsReloaded { warnings: Vec<String> },
     /// Skills directory changed; skills re-discovered.
-    SkillsReloaded {
-        count: usize,
-    },
+    SkillsReloaded { count: usize },
 }
 
 #[cfg(test)]

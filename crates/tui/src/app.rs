@@ -1,5 +1,6 @@
 //! App state machine and main event loop.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
@@ -166,6 +167,14 @@ pub enum ChatMessage {
     },
 }
 
+/// Info for a tool currently being executed, keyed by `tool_use_id`.
+#[derive(Debug, Clone)]
+pub struct ActiveToolInfo {
+    pub name: String,
+    pub input: serde_json::Value,
+    pub progress: Option<crab_core::tool::ToolProgress>,
+}
+
 /// Main TUI application.
 pub struct App {
     /// Tool registry — used to call rendering hooks (`format_use_summary`, `format_result`).
@@ -184,41 +193,8 @@ pub struct App {
     pub approval_queue: ApprovalQueue,
     /// Whether the app should exit.
     pub should_quit: bool,
-    /// Name of the tool currently executing (for display).
-    ///
-    /// Loaded in `apply_event(ToolStart)` and cleared via `Option::take()` in
-    /// `apply_event(ToolFinished)`, `MessageComplete`, or `AgentError`. The
-    /// `take()` in `ToolFinished` is the only production reader — see the
-    /// `#13` regression test `apply_event_tool_finished_resolves_name_from_current_tool`.
-    ///
-    /// ## Limitation — sequential tool calls only
-    ///
-    /// This is `Option<String>` (single-slot) because today's `agent/query_loop`
-    /// runs tools strictly sequentially: one `Event::ToolUseStart` is always
-    /// followed by its matching `Event::ToolResult` before the next
-    /// `ToolUseStart` is emitted. Under that contract the invariant holds —
-    /// the name set at `ToolStart` is always the name consumed at `ToolFinished`.
-    ///
-    /// If the backend ever emits two `ToolUseStart` events before their matching
-    /// `ToolResult`s (e.g. parallel tool-call streaming from Anthropic's API,
-    /// or concurrent tool execution in the agent loop), the second start will
-    /// silently overwrite the first, and the first tool's `ToolFinished` will
-    /// be misattributed to the second tool's name. The `#9` regression test
-    /// guards the empty-name edge case but not this overwrite scenario.
-    ///
-    /// ## Migration path for parallel tool calls
-    ///
-    /// Change the field to `HashMap<ToolUseId, String>` keyed by the tool-use
-    /// ID carried in `Event::ToolUseStart`, and look up by ID in the matching
-    /// `ToolResult`. This also requires `crab_core::event::Event::ToolResult`
-    /// to carry the `tool_use_id` (it currently does not — see the `#13`
-    /// audit brief, section 2, for the contract gap).
-    current_tool: Option<String>,
-    /// Original input JSON for the currently running tool — saved at `ToolStart`,
-    /// consumed at `ToolFinished` to feed `format_error()` when `is_error`.
-    current_tool_input: Option<serde_json::Value>,
-    /// Live progress for the currently running tool (cleared on `ToolFinished`).
-    pub tool_progress: Option<crab_core::tool::ToolProgress>,
+    /// Active tools keyed by `tool_use_id` — supports parallel tool execution.
+    pub active_tools: HashMap<String, ActiveToolInfo>,
     /// Whether the sidebar is visible.
     pub sidebar_visible: bool,
     /// Session sidebar component (session list + navigation).
@@ -293,9 +269,7 @@ impl App {
             model_name: model_name.into(),
             approval_queue: ApprovalQueue::new(),
             should_quit: false,
-            current_tool: None,
-            current_tool_input: None,
-            tool_progress: None,
+            active_tools: HashMap::new(),
             sidebar_visible: false,
             session_sidebar: SessionSidebar::new(),
             session_id: String::new(),
@@ -345,8 +319,7 @@ impl App {
         self.input.clear();
         self.state = AppState::Idle;
         self.spinner.stop();
-        self.current_tool = None;
-        self.current_tool_input = None;
+        self.active_tools.clear();
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
         self.content_scroll = 0;
@@ -911,7 +884,11 @@ impl App {
                 PermissionResponse::Allow | PermissionResponse::AllowAlways
             );
             if !allowed && let Some((tool_name, summary)) = rejection_info {
-                let tool_input = self.current_tool_input.as_ref();
+                let tool_input = self
+                    .active_tools
+                    .values()
+                    .find(|info| info.name == tool_name)
+                    .map(|info| &info.input);
                 let display = self
                     .tool_registry
                     .as_ref()
@@ -980,19 +957,22 @@ impl App {
                         output_tokens: usage.output_tokens,
                     }]
                 }
-                Event::ToolUseStart { name, input, .. } => {
+                Event::ToolUseStart { id, name, input } => {
                     vec![AppEvent::ToolStart {
+                        id: id.clone(),
                         name: name.clone(),
                         input: input.clone(),
                     }]
                 }
-                Event::ToolProgress { progress, .. } => {
+                Event::ToolProgress { id, progress } => {
                     vec![AppEvent::ToolProgress {
+                        id: id.clone(),
                         progress: progress.clone(),
                     }]
                 }
-                Event::ToolResult { output, .. } => {
+                Event::ToolResult { id, output } => {
                     vec![AppEvent::ToolFinished {
+                        id: id.clone(),
                         output: output.clone(),
                     }]
                 }
@@ -1112,15 +1092,21 @@ impl App {
                 self.spinner.response_tokens += (delta.len() as u64).div_ceil(4);
                 AppAction::None
             }
-            AppEvent::ToolStart { name, input } => {
+            AppEvent::ToolStart { id, name, input } => {
                 let tool_ref = self
                     .tool_registry
                     .as_ref()
                     .and_then(|reg| reg.get(&name));
                 let summary = tool_ref.and_then(|t| t.format_use_summary(&input));
                 let color = tool_ref.map(|t| t.display_color());
-                self.current_tool = Some(name.clone());
-                self.current_tool_input = Some(input);
+                self.active_tools.insert(
+                    id,
+                    ActiveToolInfo {
+                        name: name.clone(),
+                        input,
+                        progress: None,
+                    },
+                );
                 self.messages.push(ChatMessage::ToolUse {
                     name: name.clone(),
                     summary,
@@ -1132,14 +1118,19 @@ impl App {
                 }
                 AppAction::None
             }
-            AppEvent::ToolProgress { progress } => {
-                self.tool_progress = Some(progress);
+            AppEvent::ToolProgress { id, progress } => {
+                if let Some(info) = self.active_tools.get_mut(&id) {
+                    info.progress = Some(progress);
+                }
                 AppAction::None
             }
-            AppEvent::ToolFinished { output } => {
-                self.tool_progress = None;
-                let tool_name = self.current_tool.take().unwrap_or_default();
-                let tool_input = self.current_tool_input.take();
+            AppEvent::ToolFinished { id, output } => {
+                let removed = self.active_tools.remove(&id);
+                let tool_name = removed
+                    .as_ref()
+                    .map(|info| info.name.clone())
+                    .unwrap_or_default();
+                let tool_input = removed.map(|info| info.input);
                 self.spinner.clear_override();
                 let tool_ref = self
                     .tool_registry
@@ -1183,8 +1174,7 @@ impl App {
                 output_tokens,
             } => {
                 self.spinner.stop();
-                self.current_tool = None;
-                self.current_tool_input = None;
+                self.active_tools.clear();
                 self.state = AppState::Idle;
                 self.total_input_tokens += input_tokens;
                 self.total_output_tokens += output_tokens;
@@ -1197,8 +1187,7 @@ impl App {
             }
             AppEvent::AgentError(message) => {
                 self.spinner.stop();
-                self.current_tool = None;
-                self.current_tool_input = None;
+                self.active_tools.clear();
                 self.state = AppState::Idle;
                 self.processing_start = None;
                 self.messages.push(ChatMessage::System {
@@ -2024,7 +2013,14 @@ mod tests {
     fn tool_result_shown_in_content() {
         let mut app = App::new("test");
         app.state = AppState::Processing;
-        app.current_tool = Some("bash".into());
+        app.active_tools.insert(
+            "tu_1".into(),
+            ActiveToolInfo {
+                name: "bash".into(),
+                input: serde_json::Value::Null,
+                progress: None,
+            },
+        );
 
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolResult {
             id: "tu_1".into(),
@@ -2039,7 +2035,14 @@ mod tests {
     fn tool_error_shown_in_content() {
         let mut app = App::new("test");
         app.state = AppState::Processing;
-        app.current_tool = Some("bash".into());
+        app.active_tools.insert(
+            "tu_1".into(),
+            ActiveToolInfo {
+                name: "bash".into(),
+                input: serde_json::Value::Null,
+                progress: None,
+            },
+        );
 
         app.handle_event(TuiEvent::Agent(crab_core::event::Event::ToolResult {
             id: "tu_1".into(),
@@ -2068,7 +2071,11 @@ mod tests {
         }));
 
         assert!(messages_contain(&app.messages, "read"));
-        assert_eq!(app.current_tool.as_deref(), Some("read"));
+        assert!(
+            app.active_tools
+                .get("tu_1")
+                .is_some_and(|t| t.name == "read")
+        );
     }
 
     #[test]
@@ -2639,38 +2646,33 @@ mod tests {
         assert!(!text.contains("[prompt]"));
     }
 
-    /// Regression test for task #9: `translate_event` translates
-    /// `Event::ToolResult` to `AppEvent::ToolFinished { output }`, which
-    /// carries no tool name because `Event::ToolResult` doesn't have one.
-    /// The authoritative name lives in `App.current_tool`, which is set
-    /// when `ToolStart` is applied. `apply_event` must resolve the missing
-    /// name by taking `current_tool`, so the resulting `ChatMessage::ToolResult`
-    /// still has the correct `tool_name`.
+    /// Regression test: `ToolFinished` resolves the tool name from
+    /// `active_tools` by tool_use_id, producing the correct `ChatMessage::ToolResult`.
     #[test]
-    fn apply_event_tool_finished_resolves_name_from_current_tool() {
+    fn apply_event_tool_finished_resolves_name_from_active_tools() {
         use crate::app_event::AppEvent;
         use crab_core::tool::ToolOutput;
 
         let mut app = App::new("test");
 
-        // Simulate Event::ToolUseStart → AppEvent::ToolStart { name: "Read", input: null }
         app.apply_event(AppEvent::ToolStart {
+            id: "tu_1".into(),
             name: "Read".to_string(),
             input: serde_json::Value::Null,
         });
-        assert_eq!(app.current_tool.as_deref(), Some("Read"));
+        assert!(
+            app.active_tools
+                .get("tu_1")
+                .is_some_and(|t| t.name == "Read")
+        );
 
-        // Simulate Event::ToolResult → AppEvent::ToolFinished { output }
-        // (no name — apply_event must resolve from current_tool)
         app.apply_event(AppEvent::ToolFinished {
+            id: "tu_1".into(),
             output: ToolOutput::success("ok"),
         });
 
-        // current_tool must be consumed
-        assert!(app.current_tool.is_none());
+        assert!(app.active_tools.get("tu_1").is_none());
 
-        // The final ChatMessage::ToolResult must have the authoritative name
-        // resolved from current_tool, not the empty fallback.
         let last = app.messages.last().expect("expected a message");
         match last {
             ChatMessage::ToolResult {

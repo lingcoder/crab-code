@@ -303,7 +303,7 @@ fn push_startup_overlays(app: &mut App) {
 
 /// Data needed by the background initialization task.
 /// Reload settings from disk, returning any validation warnings.
-fn reload_settings(app: &mut App) -> Vec<String> {
+fn reload_settings(app: &mut App, rt: Option<&mut RuntimeState>) -> Vec<String> {
     let project_dir = if app.working_dir.is_empty() {
         None
     } else {
@@ -311,10 +311,28 @@ fn reload_settings(app: &mut App) -> Vec<String> {
     };
 
     match crab_config::settings::load_merged_settings_validated(project_dir.as_ref(), None) {
-        Ok((_settings, errors)) => errors
-            .into_iter()
-            .map(|e| format!("{}: {}", e.field, e.message))
-            .collect(),
+        Ok((settings, errors)) => {
+            if let Some(rt) = rt {
+                if let Some(ref model) = settings.model {
+                    let model_id = crab_core::model::ModelId::from(model.as_str());
+                    rt.loop_config.model = model_id;
+                    app.model_name.clone_from(model);
+                }
+                if let Some(max_tokens) = settings.max_tokens {
+                    rt.loop_config.max_tokens = max_tokens;
+                }
+                if let Some(ref mode_str) = settings.permission_mode
+                    && let Ok(mode) = mode_str.parse()
+                {
+                    app.permission_mode = mode;
+                    rt.tool_ctx.permission_mode = mode;
+                }
+            }
+            errors
+                .into_iter()
+                .map(|e| format!("{}: {}", e.field, e.message))
+                .collect()
+        }
         Err(e) => {
             app.notifications
                 .warn(format!("Failed to reload settings: {e}"));
@@ -357,6 +375,7 @@ pub struct InitResult {
     pub session_history: Option<SessionHistory>,
     pub sidebar_entries: Vec<crate::components::session_sidebar::SessionEntry>,
     pub mcp_failures: Vec<String>,
+    pub mcp_manager: Option<crab_mcp::McpManager>,
 }
 
 impl std::fmt::Debug for InitResult {
@@ -373,7 +392,7 @@ async fn background_init(config: BackgroundInitConfig) -> InitResult {
     let mut registry = create_default_registry();
 
     let mut mcp_failures = Vec::new();
-    let mut _mcp_manager = if let Some(ref mcp_value) = config.mcp_servers {
+    let mcp_manager = if let Some(ref mcp_value) = config.mcp_servers {
         let mut mgr = crab_mcp::McpManager::new();
         let failed = mgr.start_all(mcp_value).await.unwrap_or_else(|e| {
             tracing::warn!("failed to parse MCP config: {e}");
@@ -518,6 +537,7 @@ async fn background_init(config: BackgroundInitConfig) -> InitResult {
         session_history,
         sidebar_entries,
         mcp_failures,
+        mcp_manager,
     }
 }
 
@@ -576,6 +596,7 @@ impl PermissionHandler for TuiPermissionHandler {
 struct AgentTaskResult {
     conversation: Conversation,
     result: crab_common::Result<()>,
+    cost: crab_session::CostAccumulator,
 }
 
 /// Resources populated by `background_init` and delivered via oneshot.
@@ -589,6 +610,8 @@ struct RuntimeState {
     loop_config: crab_engine::QueryConfig,
     skill_registry: SkillRegistry,
     session_history: Option<SessionHistory>,
+    _mcp_manager: Option<crab_mcp::McpManager>,
+    cost: crab_session::CostAccumulator,
 }
 
 /// The core render + event loop.
@@ -659,6 +682,8 @@ async fn run_loop(
                         loop_config: init.loop_config,
                         skill_registry: init.skill_registry,
                         session_history: init.session_history,
+                        _mcp_manager: init.mcp_manager,
+                        cost: crab_session::CostAccumulator::default(),
                     });
                 } else {
                     app.notifications.warn("Background initialization failed".to_string());
@@ -678,6 +703,7 @@ async fn run_loop(
                     match result {
                         Ok(agent_result) => {
                             rt.conversation = agent_result.conversation;
+                            rt.cost.merge(&agent_result.cost);
                             if let Err(e) = agent_result.result {
                                 let _ = event_tx.send(Event::Error {
                                     message: e.to_string(),
@@ -705,7 +731,7 @@ async fn run_loop(
                 if let Some(we) = watch_event {
                     match we {
                         crate::watcher::WatchEvent::SettingsChanged => {
-                            let warnings = reload_settings(app);
+                            let warnings = reload_settings(app, state.as_mut());
                             app.apply_event(crate::app_event::AppEvent::SettingsReloaded { warnings });
                         }
                         crate::watcher::WatchEvent::SkillsChanged => {
@@ -754,11 +780,7 @@ async fn run_loop(
                 let task_backend = backend.clone();
                 let task_executor = rt.executor.clone();
                 let task_ctx = rt.tool_ctx.clone();
-                let task_model = rt.loop_config.model.clone();
-                let task_max_tokens = rt.loop_config.max_tokens;
-                let task_temperature = rt.loop_config.temperature;
-                let task_schemas = rt.loop_config.tool_schemas.clone();
-                let task_cache = rt.loop_config.cache_enabled;
+                let task_config = rt.loop_config.clone();
                 let task_event_tx = event_tx.clone();
                 let task_cancel = cancel.clone();
 
@@ -766,32 +788,14 @@ async fn run_loop(
                 conv_return = Some(return_rx);
 
                 tokio::spawn(async move {
-                    let config = crab_engine::QueryConfig {
-                        model: task_model,
-                        max_tokens: task_max_tokens,
-                        temperature: task_temperature,
-                        tool_schemas: task_schemas,
-                        cache_enabled: task_cache,
-                        budget_tokens: None,
-                        retry_policy: None,
-                        hook_executor: None,
-                        session_id: None,
-                        effort: None,
-                        fallback_model: None,
-                        plan_model: None,
-                        source: crab_core::query::QuerySource::Repl,
-                        compaction_client: None,
-                        compaction_config: crab_session::CompactionConfig::default(),
-                    };
-
-                    let mut task_cost_tracker = crab_session::CostAccumulator::default();
+                    let mut task_cost = crab_session::CostAccumulator::default();
                     let result = crab_engine::query_loop(
                         &mut task_conversation,
                         &task_backend,
                         &task_executor,
                         &task_ctx,
-                        &config,
-                        &mut task_cost_tracker,
+                        &task_config,
+                        &mut task_cost,
                         task_event_tx,
                         task_cancel,
                     )
@@ -800,6 +804,7 @@ async fn run_loop(
                     let _ = return_tx.send(AgentTaskResult {
                         conversation: task_conversation,
                         result,
+                        cost: task_cost,
                     });
                 });
             }
@@ -1012,6 +1017,7 @@ mod tests {
         let result = AgentTaskResult {
             conversation: conv,
             result: Ok(()),
+            cost: crab_session::CostAccumulator::default(),
         };
         assert!(result.result.is_ok());
     }
@@ -1022,6 +1028,7 @@ mod tests {
         let result = AgentTaskResult {
             conversation: conv,
             result: Err(crab_common::Error::Other("test error".into())),
+            cost: crab_session::CostAccumulator::default(),
         };
         assert!(result.result.is_err());
     }
