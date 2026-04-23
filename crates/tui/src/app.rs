@@ -190,7 +190,7 @@ pub struct ActiveToolInfo {
 /// Main TUI application.
 pub struct App {
     /// Tool registry — used to call rendering hooks (`format_use_summary`, `format_result`).
-    pub tool_registry: Option<std::sync::Arc<crab_tools::registry::ToolRegistry>>,
+    pub tool_registry: Option<std::sync::Arc<crab_agent::ToolRegistry>>,
     /// Current application state.
     pub state: AppState,
     /// Text input component.
@@ -382,7 +382,7 @@ impl App {
     }
 
     /// Rebuild the message list from a loaded conversation.
-    pub fn load_session_messages(&mut self, conversation: &crab_session::Conversation) {
+    pub fn load_session_messages(&mut self, conversation: &crab_agent::Conversation) {
         self.reset_for_new_session();
         self.session_id.clone_from(&conversation.id);
         for msg in conversation.messages() {

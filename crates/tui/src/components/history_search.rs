@@ -7,8 +7,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use crab_tools::str_utils::truncate_chars;
-
 use crate::components::fuzzy::FuzzyMatcher;
 use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
@@ -227,6 +225,15 @@ impl Overlay for HistorySearchOverlay {
     fn name(&self) -> &'static str {
         "history_search"
     }
+}
+
+fn truncate_chars(s: &str, max_chars: usize, ellipsis: &str) -> String {
+    if s.chars().nth(max_chars).is_none() {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars).collect();
+    out.push_str(ellipsis);
+    out
 }
 
 #[cfg(test)]

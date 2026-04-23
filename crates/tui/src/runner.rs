@@ -11,7 +11,6 @@ use std::io;
 
 use crate::components::autocomplete::CommandInfo;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -23,13 +22,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
-use crab_agent::SessionConfig;
-use crab_api::LlmBackend;
+use crab_agent::runtime::{AgentRuntime, RuntimeInitConfig, RuntimeInitMeta};
+use crab_agent::{LlmBackend, SessionConfig};
 use crab_core::event::Event;
-use crab_session::{Conversation, SessionHistory};
-use crab_skill::SkillRegistry;
-use crab_tools::builtin::create_default_registry;
-use crab_tools::executor::{PermissionHandler, ToolExecutor};
 
 use crate::app::{App, AppAction};
 use crate::app_event::AppEvent;
@@ -124,16 +119,16 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<ExitInfo> {
 
     // ── Phase 4b: Spawn background initialization ────────────────────────
 
-    let init_config = BackgroundInitConfig {
+    let init_config = RuntimeInitConfig {
         session_config: config.session_config.clone(),
         mcp_servers: config.mcp_servers.clone(),
         skill_dirs: config.skill_dirs.clone(),
         perm_event_tx: event_tx.clone(),
         perm_resp_rx,
     };
-    let (init_tx, init_rx) = tokio::sync::oneshot::channel::<InitResult>();
+    let (init_tx, init_rx) = tokio::sync::oneshot::channel::<(AgentRuntime, RuntimeInitMeta)>();
     tokio::spawn(async move {
-        let result = background_init(init_config).await;
+        let result = AgentRuntime::init(init_config).await;
         let _ = init_tx.send(result);
     });
 
@@ -300,35 +295,8 @@ fn push_startup_overlays(app: &mut App) {
     }
 }
 
-/// Fire a lifecycle hook (`session_start`, `session_end`, `compact`) in the background.
-///
-/// Lifecycle hooks are fire-and-forget — they cannot influence control flow.
-fn fire_lifecycle_hook(
-    hook_executor: Option<&Arc<crab_plugin::hook::HookExecutor>>,
-    trigger: crab_plugin::hook::HookTrigger,
-    session_id: Option<&str>,
-    working_dir: Option<&std::path::Path>,
-) {
-    let Some(hooks) = hook_executor.cloned() else {
-        return;
-    };
-    let ctx = crab_plugin::hook::HookContext {
-        tool_name: String::new(),
-        tool_input: String::new(),
-        working_dir: working_dir.map(std::path::PathBuf::from),
-        tool_output: None,
-        tool_exit_code: None,
-        session_id: session_id.map(String::from),
-    };
-    tokio::spawn(async move {
-        if let Err(e) = hooks.run(trigger, &ctx).await {
-            tracing::warn!(?trigger, error = %e, "lifecycle hook failed");
-        }
-    });
-}
-
 /// Reload settings from disk, returning any validation warnings.
-fn reload_settings(app: &mut App, rt: Option<&mut RuntimeState>) -> Vec<String> {
+fn reload_settings(app: &mut App, rt: Option<&mut AgentRuntime>) -> Vec<String> {
     let project_dir = if app.working_dir.is_empty() {
         None
     } else {
@@ -340,17 +308,17 @@ fn reload_settings(app: &mut App, rt: Option<&mut RuntimeState>) -> Vec<String> 
             if let Some(rt) = rt {
                 if let Some(ref model) = settings.model {
                     let model_id = crab_core::model::ModelId::from(model.as_str());
-                    rt.loop_config.model = model_id;
+                    rt.loop_config_mut().model = model_id;
                     app.model_name.clone_from(model);
                 }
                 if let Some(max_tokens) = settings.max_tokens {
-                    rt.loop_config.max_tokens = max_tokens;
+                    rt.loop_config_mut().max_tokens = max_tokens;
                 }
                 if let Some(ref mode_str) = settings.permission_mode
                     && let Ok(mode) = mode_str.parse()
                 {
                     app.permission_mode = mode;
-                    rt.tool_ctx.permission_mode = mode;
+                    rt.tool_ctx_mut().permission_mode = mode;
                 }
             }
             errors
@@ -366,278 +334,22 @@ fn reload_settings(app: &mut App, rt: Option<&mut RuntimeState>) -> Vec<String> 
     }
 }
 
-/// Re-discover skills from disk directories.
-fn reload_skills(skill_registry: &mut SkillRegistry, skill_dirs: &[PathBuf]) -> usize {
-    match SkillRegistry::discover(skill_dirs) {
-        Ok(new_registry) => {
-            let count = new_registry.len();
-            *skill_registry = new_registry;
-            count
-        }
-        Err(e) => {
-            tracing::warn!("failed to reload skills: {e}");
-            skill_registry.len()
-        }
-    }
-}
-
-struct BackgroundInitConfig {
-    session_config: SessionConfig,
-    mcp_servers: Option<serde_json::Value>,
-    skill_dirs: Vec<PathBuf>,
-    perm_event_tx: mpsc::Sender<Event>,
-    perm_resp_rx: mpsc::UnboundedReceiver<(String, bool)>,
-}
-
-/// Result of background initialization ��� delivered via oneshot to the event loop.
-pub struct InitResult {
-    pub registry: Arc<crab_tools::registry::ToolRegistry>,
-    pub executor: Arc<ToolExecutor>,
-    pub conversation: Conversation,
-    pub tool_ctx: crab_core::tool::ToolContext,
-    pub loop_config: crab_engine::QueryConfig,
-    pub skill_registry: SkillRegistry,
-    pub session_history: Option<SessionHistory>,
-    pub sidebar_entries: Vec<crate::components::session_sidebar::SessionEntry>,
-    pub mcp_failures: Vec<String>,
-    pub mcp_manager: Option<crab_mcp::McpManager>,
-}
-
-impl std::fmt::Debug for InitResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InitResult")
-            .field("mcp_failures", &self.mcp_failures)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Perform all heavy initialization in the background.
-async fn background_init(config: BackgroundInitConfig) -> InitResult {
-    // Build tool registry and connect MCP servers
-    let mut registry = create_default_registry();
-
-    let mut mcp_failures = Vec::new();
-    let mcp_manager = if let Some(ref mcp_value) = config.mcp_servers {
-        let mut mgr = crab_mcp::McpManager::new();
-        let failed = mgr.start_all(mcp_value).await.unwrap_or_else(|e| {
-            tracing::warn!("failed to parse MCP config: {e}");
-            Vec::new()
-        });
-        for name in &failed {
-            tracing::warn!("MCP server '{name}' failed to connect");
-        }
-        mcp_failures = failed;
-        let count = crab_tools::builtin::mcp_tool::register_mcp_tools(&mgr, &mut registry).await;
-        if count > 0 {
-            tracing::info!("Registered {count} MCP tool(s)");
-        }
-        Some(mgr)
-    } else {
-        None
-    };
-
-    let registry = Arc::new(registry);
-    let tool_schemas = registry.tool_schemas();
-    let mut executor = ToolExecutor::new(Arc::clone(&registry));
-
-    // Wire up the TUI permission handler
-    executor.set_permission_handler(Arc::new(TuiPermissionHandler {
-        event_tx: config.perm_event_tx,
-        response_rx: Arc::new(tokio::sync::Mutex::new(config.perm_resp_rx)),
-    }));
-    let executor = Arc::new(executor);
-
-    // Load memories and build system prompt
-    let memory_store = config
-        .session_config
-        .memory_dir
-        .as_ref()
-        .map(|d| crab_session::MemoryStore::new(d.clone()));
-    let session_history = config
-        .session_config
-        .sessions_dir
-        .as_ref()
-        .map(|d| SessionHistory::new(d.clone()));
-
-    let mut system_prompt = config.session_config.system_prompt.clone();
-
-    if let Some(ref store) = memory_store
-        && let Ok(memories) = store.scan()
-        && !memories.is_empty()
-    {
-        system_prompt.push_str("\n\n# Loaded Memories\n\n");
-        for mem in &memories {
-            use std::fmt::Write as _;
-            let _ = writeln!(
-                system_prompt,
-                "## {} (type: {})",
-                mem.metadata.name, mem.metadata.memory_type
-            );
-            if !mem.metadata.description.is_empty() {
-                let _ = writeln!(system_prompt, "> {}", mem.metadata.description);
-                system_prompt.push('\n');
-            }
-            let _ = writeln!(system_prompt, "{}", mem.body);
-            system_prompt.push('\n');
-        }
-    }
-
-    let session_id = config.session_config.session_id.clone();
-    let mut conversation = Conversation::new(
-        session_id.clone(),
-        system_prompt,
-        config.session_config.context_window,
-    );
-
-    // Resume from previous session if requested
-    if let Some(ref resume_id) = config.session_config.resume_session_id
-        && let Some(ref history) = session_history
-        && let Ok(Some(messages)) = history.load(resume_id)
-    {
-        for msg in messages {
-            conversation.push(msg);
-        }
-    }
-
-    let tool_ctx = crab_core::tool::ToolContext {
-        working_dir: config.session_config.working_dir,
-        permission_mode: config.session_config.permission_policy.mode,
-        session_id: session_id.clone(),
-        cancellation_token: tokio_util::sync::CancellationToken::new(),
-        permission_policy: config.session_config.permission_policy,
-        ext: crab_core::tool::ToolContextExt::default(),
-    };
-
-    let loop_config = crab_engine::QueryConfig {
-        model: config.session_config.model.clone(),
-        max_tokens: config.session_config.max_tokens,
-        temperature: config.session_config.temperature,
-        tool_schemas,
-        cache_enabled: false,
-        budget_tokens: None,
-        retry_policy: None,
-        hook_executor: None,
-        session_id: Some(session_id),
-        effort: None,
-        fallback_model: config
-            .session_config
-            .fallback_model
-            .map(crab_core::model::ModelId::from),
-        plan_model: None,
-        source: crab_core::query::QuerySource::Repl,
-        compaction_client: None,
-        compaction_config: crab_session::CompactionConfig::default(),
-        session_persister: None,
-    };
-
-    // Discover skills for /command support
-    let skill_registry = SkillRegistry::discover(&config.skill_dirs).unwrap_or_default();
-
-    // Populate session sidebar entries
-    let sidebar_entries = session_history
-        .as_ref()
-        .and_then(|h| h.list_sessions_with_metadata().ok())
-        .map(|metas| {
-            metas
-                .iter()
-                .map(|m| crate::components::session_sidebar::SessionEntry {
-                    id: m.session_id.clone(),
-                    name: m.name.clone().unwrap_or_else(|| m.session_id.clone()),
-                    last_active: m
-                        .modified
-                        .and_then(|t| t.elapsed().ok())
-                        .map_or_else(|| "unknown".into(), |d| format!("{}s ago", d.as_secs())),
-                    message_count: m.message_count,
-                })
-                .collect()
+/// Convert session metadata into sidebar entries for the TUI.
+fn to_sidebar_entries(
+    metas: &[crab_agent::SessionMetadata],
+) -> Vec<crate::components::session_sidebar::SessionEntry> {
+    metas
+        .iter()
+        .map(|m| crate::components::session_sidebar::SessionEntry {
+            id: m.session_id.clone(),
+            name: m.name.clone().unwrap_or_else(|| m.session_id.clone()),
+            last_active: m
+                .modified
+                .and_then(|t| t.elapsed().ok())
+                .map_or_else(|| "unknown".into(), |d| format!("{}s ago", d.as_secs())),
+            message_count: m.message_count,
         })
-        .unwrap_or_default();
-
-    InitResult {
-        registry,
-        executor,
-        conversation,
-        tool_ctx,
-        loop_config,
-        skill_registry,
-        session_history,
-        sidebar_entries,
-        mcp_failures,
-        mcp_manager,
-    }
-}
-
-/// TUI-based permission handler.
-///
-/// When the executor encounters a tool that needs user confirmation, this handler:
-/// 1. Sends a `PermissionRequest` event through the event channel to the TUI
-/// 2. Waits for the TUI to send back a `PermissionResponse` via a oneshot channel
-///
-/// The TUI event loop listens for `AppAction::PermissionResponse` and sends
-/// the response back through the event channel, which the forwarder picks up
-/// and delivers to the waiting oneshot receiver.
-struct TuiPermissionHandler {
-    event_tx: mpsc::Sender<Event>,
-    /// Receiver for permission responses from the TUI.
-    /// Each request creates a fresh oneshot; we use an unbounded channel
-    /// indexed by `request_id`.
-    response_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(String, bool)>>>,
-}
-
-impl PermissionHandler for TuiPermissionHandler {
-    fn ask_permission(
-        &self,
-        tool_name: &str,
-        prompt: &str,
-    ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
-        let tool_name = tool_name.to_string();
-        let prompt = prompt.to_string();
-        let request_id = crab_core::common::utils::id::new_ulid();
-        let event_tx = self.event_tx.clone();
-        let response_rx = self.response_rx.clone();
-
-        Box::pin(async move {
-            // Send permission request to TUI
-            let _ = event_tx
-                .send(Event::PermissionRequest {
-                    tool_name,
-                    input_summary: prompt,
-                    request_id: request_id.clone(),
-                })
-                .await;
-
-            // Wait for response from TUI
-            let mut rx = response_rx.lock().await;
-            while let Some((id, allowed)) = rx.recv().await {
-                if id == request_id {
-                    return allowed;
-                }
-            }
-            false // channel closed — deny by default
-        })
-    }
-}
-
-/// Wrapper to shuttle conversation back from a spawned agent task.
-struct AgentTaskResult {
-    conversation: Conversation,
-    result: crab_core::Result<()>,
-    cost: crab_session::CostAccumulator,
-}
-
-/// Resources populated by `background_init` and delivered via oneshot.
-///
-/// Before receiving these, the event loop renders the app in
-/// `Initializing` state and rejects user submissions.
-struct RuntimeState {
-    conversation: Conversation,
-    executor: Arc<ToolExecutor>,
-    tool_ctx: crab_core::tool::ToolContext,
-    loop_config: crab_engine::QueryConfig,
-    skill_registry: SkillRegistry,
-    session_history: Option<SessionHistory>,
-    _mcp_manager: Option<crab_mcp::McpManager>,
-    cost: crab_session::CostAccumulator,
+        .collect()
 }
 
 /// The core render + event loop.
@@ -646,7 +358,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     tui_rx: &mut mpsc::UnboundedReceiver<crate::event::TuiEvent>,
-    init_rx: tokio::sync::oneshot::Receiver<InitResult>,
+    init_rx: tokio::sync::oneshot::Receiver<(AgentRuntime, RuntimeInitMeta)>,
     watch_rx: &mut mpsc::UnboundedReceiver<crate::watcher::WatchEvent>,
     backend: Arc<LlmBackend>,
     event_tx: mpsc::Sender<Event>,
@@ -657,10 +369,10 @@ async fn run_loop(
     skill_dirs: &[PathBuf],
 ) -> anyhow::Result<()> {
     // `state` starts as None (Initializing) and is populated by InitComplete.
-    let mut state: Option<RuntimeState> = None;
+    let mut state: Option<AgentRuntime> = None;
     let mut init_rx = Some(init_rx);
 
-    let mut conv_return: Option<tokio::sync::oneshot::Receiver<AgentTaskResult>> = None;
+    let mut conv_return: Option<tokio::sync::oneshot::Receiver<crab_agent::QueryTaskResult>> = None;
     let mut cancel = tokio_util::sync::CancellationToken::new();
 
     let mut frame_rx = frame_requester.subscribe();
@@ -690,34 +402,22 @@ async fn run_loop(
                 }
             } => {
                 init_rx = None;
-                if let Ok(init) = result {
-                    app.tool_registry = Some(init.registry);
-                    app.session_sidebar.set_sessions(init.sidebar_entries);
-                    for name in &init.mcp_failures {
+                if let Ok((runtime, meta)) = result {
+                    app.tool_registry = Some(meta.tool_registry);
+                    app.session_sidebar.set_sessions(to_sidebar_entries(&meta.sidebar_entries));
+                    for name in &meta.mcp_failures {
                         app.notifications.warn(format!("MCP server '{name}' failed to connect"));
                     }
                     app.state = crate::app::AppState::Idle;
 
-                    // Push onboarding / trust overlays (trust first so
-                    // onboarding renders on top and is dismissed first).
                     push_startup_overlays(app);
 
-                    cancel = init.tool_ctx.cancellation_token.clone();
+                    cancel = runtime.cancellation_token().clone();
                     let working_dir = app.working_dir.clone();
-                    state = Some(RuntimeState {
-                        conversation: init.conversation,
-                        executor: init.executor,
-                        tool_ctx: init.tool_ctx,
-                        loop_config: init.loop_config,
-                        skill_registry: init.skill_registry,
-                        session_history: init.session_history,
-                        _mcp_manager: init.mcp_manager,
-                        cost: crab_session::CostAccumulator::default(),
-                    });
+                    state = Some(runtime);
                     if let Some(ref rt) = state {
-                        fire_lifecycle_hook(
-                            rt.loop_config.hook_executor.as_ref(),
-                            crab_plugin::hook::HookTrigger::SessionStart,
+                        rt.fire_lifecycle_hook(
+                            crab_agent::HookTrigger::SessionStart,
                             Some(session_id),
                             if working_dir.is_empty() {
                                 None
@@ -743,20 +443,14 @@ async fn run_loop(
                 if let Some(ref mut rt) = state {
                     match result {
                         Ok(agent_result) => {
-                            rt.conversation = agent_result.conversation;
-                            rt.cost.merge(&agent_result.cost);
+                            rt.restore_conversation(agent_result.conversation);
+                            rt.merge_cost(&agent_result.cost);
                             if let Err(e) = agent_result.result {
                                 let _ = event_tx.send(Event::Error {
                                     message: e.to_string(),
                                 }).await;
                             }
-                            if let Some(ref history) = rt.session_history
-                                && let Err(e) = history.save(session_id, rt.conversation.messages())
-                            {
-                                let _ = event_tx.send(Event::Error {
-                                    message: format!("Session save failed: {e}"),
-                                }).await;
-                            }
+                            rt.save_session(session_id);
                         }
                         Err(_) => {
                             let _ = event_tx.send(Event::Error {
@@ -766,48 +460,19 @@ async fn run_loop(
                     }
 
                     if let Some(queued_text) = app.dequeue_command() {
-                        let effective_text =
-                            resolve_slash_command(&queued_text, &rt.skill_registry);
+                        let effective_text = rt.resolve_slash(&queued_text);
 
                         cancel = tokio_util::sync::CancellationToken::new();
-                        rt.tool_ctx.cancellation_token = cancel.clone();
+                        rt.tool_ctx_mut().cancellation_token = cancel.clone();
 
-                        let user_msg = crab_session::expand_at_mentions(
-                            &effective_text,
-                            &rt.tool_ctx.working_dir,
-                        );
-                        rt.conversation.push(user_msg);
-                        let mut task_conversation = std::mem::take(&mut rt.conversation);
-                        let task_backend = backend.clone();
-                        let task_executor = rt.executor.clone();
-                        let task_ctx = rt.tool_ctx.clone();
-                        let task_config = rt.loop_config.clone();
-                        let task_event_tx = event_tx.clone();
-                        let task_cancel = cancel.clone();
+                        let user_msg = rt.expand_input(&effective_text);
+                        rt.conversation_mut().push(user_msg);
 
-                        let (return_tx, return_rx) = tokio::sync::oneshot::channel();
-                        conv_return = Some(return_rx);
-
-                        tokio::spawn(async move {
-                            let mut task_cost = crab_session::CostAccumulator::default();
-                            let result = crab_engine::query_loop(
-                                &mut task_conversation,
-                                &task_backend,
-                                &task_executor,
-                                &task_ctx,
-                                &task_config,
-                                &mut task_cost,
-                                task_event_tx,
-                                task_cancel,
-                            )
-                            .await;
-
-                            let _ = return_tx.send(AgentTaskResult {
-                                conversation: task_conversation,
-                                result,
-                                cost: task_cost,
-                            });
-                        });
+                        conv_return = Some(rt.spawn_query(
+                            &backend,
+                            event_tx.clone(),
+                            cancel.clone(),
+                        ));
                     }
                 }
                 continue;
@@ -822,7 +487,7 @@ async fn run_loop(
                         }
                         crate::watcher::WatchEvent::SkillsChanged => {
                             if let Some(ref mut rt) = state {
-                                let count = reload_skills(&mut rt.skill_registry, skill_dirs);
+                                let count = rt.reload_skills(skill_dirs);
                                 app.apply_event(crate::app_event::AppEvent::SkillsReloaded { count });
                             }
                         }
@@ -848,13 +513,12 @@ async fn run_loop(
                     && let Ok(agent_result) = rx.await
                     && let Some(ref mut rt) = state
                 {
-                    rt.conversation = agent_result.conversation;
+                    rt.restore_conversation(agent_result.conversation);
                 }
                 if let Some(ref rt) = state {
                     let working_dir = &app.working_dir;
-                    fire_lifecycle_hook(
-                        rt.loop_config.hook_executor.as_ref(),
-                        crab_plugin::hook::HookTrigger::SessionEnd,
+                    rt.fire_lifecycle_hook(
+                        crab_agent::HookTrigger::SessionEnd,
                         Some(session_id),
                         if working_dir.is_empty() {
                             None
@@ -862,9 +526,7 @@ async fn run_loop(
                             Some(std::path::Path::new(working_dir))
                         },
                     );
-                    if let Some(ref history) = rt.session_history {
-                        let _ = history.save(session_id, rt.conversation.messages());
-                    }
+                    rt.save_session(session_id);
                 }
                 break;
             }
@@ -873,45 +535,15 @@ async fn run_loop(
                     continue;
                 };
 
-                let effective_text = resolve_slash_command(&text, &rt.skill_registry);
+                let effective_text = rt.resolve_slash(&text);
 
                 cancel = tokio_util::sync::CancellationToken::new();
-                rt.tool_ctx.cancellation_token = cancel.clone();
+                rt.tool_ctx_mut().cancellation_token = cancel.clone();
 
-                let user_msg =
-                    crab_session::expand_at_mentions(&effective_text, &rt.tool_ctx.working_dir);
-                rt.conversation.push(user_msg);
-                let mut task_conversation = std::mem::take(&mut rt.conversation);
-                let task_backend = backend.clone();
-                let task_executor = rt.executor.clone();
-                let task_ctx = rt.tool_ctx.clone();
-                let task_config = rt.loop_config.clone();
-                let task_event_tx = event_tx.clone();
-                let task_cancel = cancel.clone();
+                let user_msg = rt.expand_input(&effective_text);
+                rt.conversation_mut().push(user_msg);
 
-                let (return_tx, return_rx) = tokio::sync::oneshot::channel();
-                conv_return = Some(return_rx);
-
-                tokio::spawn(async move {
-                    let mut task_cost = crab_session::CostAccumulator::default();
-                    let result = crab_engine::query_loop(
-                        &mut task_conversation,
-                        &task_backend,
-                        &task_executor,
-                        &task_ctx,
-                        &task_config,
-                        &mut task_cost,
-                        task_event_tx,
-                        task_cancel,
-                    )
-                    .await;
-
-                    let _ = return_tx.send(AgentTaskResult {
-                        conversation: task_conversation,
-                        result,
-                        cost: task_cost,
-                    });
-                });
+                conv_return = Some(rt.spawn_query(&backend, event_tx.clone(), cancel.clone()));
             }
             AppAction::PermissionResponse {
                 request_id,
@@ -927,33 +559,16 @@ async fn run_loop(
             }
             AppAction::NewSession => {
                 if let Some(ref mut rt) = state {
-                    if let Some(ref history) = rt.session_history {
-                        let _ = history.save(session_id, rt.conversation.messages());
-                    }
-                    rt.conversation = Conversation::new(
-                        session_id.to_string(),
-                        rt.conversation.system_prompt.clone(),
-                        rt.conversation.context_window,
-                    );
+                    rt.save_session(session_id);
+                    rt.new_session(session_id);
                 }
                 app.reset_for_new_session();
             }
             AppAction::SwitchSession(target_id) => {
                 if let Some(ref mut rt) = state
-                    && let Some(ref history) = rt.session_history
+                    && rt.switch_session(session_id, &target_id)
                 {
-                    let _ = history.save(session_id, rt.conversation.messages());
-                    if let Ok(Some(messages)) = history.load(&target_id) {
-                        rt.conversation = Conversation::new(
-                            target_id.clone(),
-                            rt.conversation.system_prompt.clone(),
-                            rt.conversation.context_window,
-                        );
-                        for msg in messages {
-                            rt.conversation.push(msg);
-                        }
-                        app.load_session_messages(&rt.conversation);
-                    }
+                    app.load_session_messages(rt.conversation());
                 }
             }
             AppAction::ExternalEditor(initial_text) => {
@@ -1066,45 +681,6 @@ async fn run_external_editor(
     result
 }
 
-/// Resolve `/command` input to skill content if a matching skill exists.
-///
-/// If the input starts with `/` and matches a registered skill command,
-/// returns the skill's prompt content (with any arguments appended).
-/// Otherwise returns the original input unchanged.
-fn resolve_slash_command(input: &str, skill_registry: &SkillRegistry) -> String {
-    let trimmed = input.trim();
-    if !trimmed.starts_with('/') {
-        return input.to_string();
-    }
-
-    let command = trimmed
-        .trim_start_matches('/')
-        .split_whitespace()
-        .next()
-        .unwrap_or("");
-
-    // Built-in commands pass through
-    if matches!(command, "exit" | "quit" | "help") {
-        return input.to_string();
-    }
-
-    if let Some(skill) = skill_registry.find_command(command) {
-        let args = trimmed
-            .trim_start_matches('/')
-            .trim_start_matches(command)
-            .trim();
-
-        let mut prompt = skill.content.clone();
-        if !args.is_empty() {
-            prompt.push_str("\n\nUser arguments: ");
-            prompt.push_str(args);
-        }
-        return prompt;
-    }
-
-    input.to_string()
-}
-
 /// Spawn a task that forwards agent events from a bounded `mpsc::Receiver`
 /// to the TUI's unbounded channel.
 fn spawn_event_forwarder(mut rx: mpsc::Receiver<Event>, tx: mpsc::UnboundedSender<Event>) {
@@ -1157,78 +733,6 @@ impl SigcontStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crab_skill::{Skill, SkillTrigger};
-
-    #[test]
-    fn agent_task_result_struct() {
-        let conv = Conversation::new("test".into(), "prompt".into(), 200_000);
-        let result = AgentTaskResult {
-            conversation: conv,
-            result: Ok(()),
-            cost: crab_session::CostAccumulator::default(),
-        };
-        assert!(result.result.is_ok());
-    }
-
-    #[test]
-    fn agent_task_result_with_error() {
-        let conv = Conversation::new("test".into(), "prompt".into(), 200_000);
-        let result = AgentTaskResult {
-            conversation: conv,
-            result: Err(crab_core::Error::Other("test error".into())),
-            cost: crab_session::CostAccumulator::default(),
-        };
-        assert!(result.result.is_err());
-    }
-
-    #[test]
-    fn resolve_slash_command_passthrough() {
-        let reg = SkillRegistry::new();
-        assert_eq!(resolve_slash_command("hello world", &reg), "hello world");
-    }
-
-    #[test]
-    fn resolve_slash_command_builtin() {
-        let reg = SkillRegistry::new();
-        assert_eq!(resolve_slash_command("/exit", &reg), "/exit");
-        assert_eq!(resolve_slash_command("/quit", &reg), "/quit");
-        assert_eq!(resolve_slash_command("/help", &reg), "/help");
-    }
-
-    #[test]
-    fn resolve_slash_command_no_match() {
-        let reg = SkillRegistry::new();
-        assert_eq!(resolve_slash_command("/unknown", &reg), "/unknown");
-    }
-
-    #[test]
-    fn resolve_slash_command_matches_skill() {
-        let mut reg = SkillRegistry::new();
-        reg.register(Skill {
-            trigger: SkillTrigger::Command {
-                name: "commit".into(),
-            },
-            ..Skill::new("commit", "You are a commit helper.")
-        });
-
-        let result = resolve_slash_command("/commit", &reg);
-        assert_eq!(result, "You are a commit helper.");
-    }
-
-    #[test]
-    fn resolve_slash_command_with_args() {
-        let mut reg = SkillRegistry::new();
-        reg.register(Skill {
-            trigger: SkillTrigger::Command {
-                name: "review".into(),
-            },
-            ..Skill::new("review", "Review the code.")
-        });
-
-        let result = resolve_slash_command("/review src/main.rs", &reg);
-        assert!(result.contains("Review the code."));
-        assert!(result.contains("src/main.rs"));
-    }
 
     #[tokio::test]
     async fn run_external_editor_roundtrip_with_noop_editor() {
@@ -1303,9 +807,10 @@ mod tests {
                 ide_connect: false,
                 coordinator_mode: false,
             },
-            backend: Arc::new(crab_api::LlmBackend::OpenAi(
-                crab_api::openai::OpenAiClient::new("http://localhost:0/v1", None),
-            )),
+            backend: Arc::new(LlmBackend::OpenAi(crab_agent::openai::OpenAiClient::new(
+                "http://localhost:0/v1",
+                None,
+            ))),
             skill_dirs: vec![],
             mcp_servers: None,
             settings_warnings: vec![],
