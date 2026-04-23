@@ -21,16 +21,21 @@ use crate::app::ChatMessage;
 use crate::history::HistoryCell;
 use crate::history::cell_from_chat_message;
 
-/// Read-only tool names that participate in the collapsed run.
-pub const READ_ONLY_TOOLS: &[&str] = &["Read", "Grep", "Glob", "NotebookRead"];
-
 /// Aggregate counts for a collapsed run.
+///
+/// Grouping is decided upstream from `ChatMessage::is_read_only`; this cell
+/// only decides how to *display* the counts. Known tool names get dedicated
+/// verbs ("Read 3 files", "searched for 2 patterns"); anything else
+/// contributes to a generic "N other read-only calls" bucket so the summary
+/// still reflects the true workload.
 #[derive(Debug, Clone, Default)]
 pub struct CollapsedReadSearchCell {
     read_count: usize,
     grep_count: usize,
     glob_count: usize,
     notebook_read_count: usize,
+    /// Read-only tools with no dedicated verb in this cell.
+    other_count: usize,
     /// Tool uses whose matching result has not arrived yet.
     pending_count: usize,
     /// Any tool in the run reported an error.
@@ -59,7 +64,7 @@ impl CollapsedReadSearchCell {
                         "Grep" => this.grep_count += 1,
                         "Glob" => this.glob_count += 1,
                         "NotebookRead" => this.notebook_read_count += 1,
-                        _ => {}
+                        _ => this.other_count += 1,
                     }
                 }
                 ChatMessage::ToolResult { is_error, .. } => {
@@ -143,6 +148,17 @@ impl CollapsedReadSearchCell {
             };
             parts.push(format!("{verb} {} {noun}", self.notebook_read_count));
         }
+        if self.other_count > 0 {
+            let verb = if parts.is_empty() {
+                if active { "Running" } else { "Ran" }
+            } else if active {
+                "running"
+            } else {
+                "ran"
+            };
+            let noun = if self.other_count == 1 { "call" } else { "calls" };
+            parts.push(format!("{verb} {} other {noun}", self.other_count));
+        }
 
         parts.join(", ")
     }
@@ -195,6 +211,7 @@ mod tests {
             name: "Read".into(),
             summary: Some(format!("Read ({path})")),
             color: None,
+            is_read_only: true,
         }
     }
 
@@ -205,6 +222,7 @@ mod tests {
             is_error: false,
             display: None,
             collapsed: false,
+            is_read_only: true,
         }
     }
 
@@ -255,6 +273,7 @@ mod tests {
                 name: "Grep".into(),
                 summary: None,
                 color: None,
+                is_read_only: true,
             },
             read_result(""),
             ChatMessage::ToolResult {
@@ -263,6 +282,7 @@ mod tests {
                 is_error: false,
                 display: None,
                 collapsed: false,
+                is_read_only: true,
             },
         ];
         let cell = CollapsedReadSearchCell::from_messages(&msgs);
@@ -279,6 +299,7 @@ mod tests {
                 is_error: true,
                 display: None,
                 collapsed: false,
+                is_read_only: true,
             },
         ];
         let cell = CollapsedReadSearchCell::from_messages(&msgs);

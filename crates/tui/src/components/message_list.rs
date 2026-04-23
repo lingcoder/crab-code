@@ -116,6 +116,7 @@ mod tests {
                 name: "read".into(),
                 summary: Some("src/lib.rs".into()),
                 color: None,
+                is_read_only: true,
             },
             ChatMessage::ToolResult {
                 tool_name: "read".into(),
@@ -123,6 +124,7 @@ mod tests {
                 is_error: false,
                 display: None,
                 collapsed: false,
+                is_read_only: true,
             },
             ChatMessage::System {
                 text: "note".into(),

@@ -137,6 +137,9 @@ pub enum ChatMessage {
         summary: Option<String>,
         /// Color hint from `Tool::display_color()`.
         color: Option<crab_core::tool::ToolDisplayStyle>,
+        /// Cached at push time from `Tool::is_read_only()`. Read-only calls
+        /// participate in the collapsed-run grouping in `history::grouping`.
+        is_read_only: bool,
     },
     /// Tool execution result — collapsible, rendered as output text.
     ToolResult {
@@ -147,6 +150,9 @@ pub enum ChatMessage {
         display: Option<crab_core::tool::ToolDisplayResult>,
         /// Whether the result is currently collapsed (only `preview_lines` shown).
         collapsed: bool,
+        /// Cached at push time from `Tool::is_read_only()`. Mirrors the
+        /// matching `ToolUse` so grouping can work from either side.
+        is_read_only: bool,
     },
     /// System/informational message — rendered in dim gray.
     System { text: String },
@@ -1204,10 +1210,12 @@ impl App {
                         progress: None,
                     },
                 );
+                let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
                 self.messages.push(ChatMessage::ToolUse {
                     name: name.clone(),
                     summary,
                     color,
+                    is_read_only,
                 });
                 self.spinner.set_message(format!("Running {name}…"));
                 if self.processing_start.is_none() {
@@ -1244,12 +1252,14 @@ impl App {
                 let text = output.text();
                 let is_error = output.is_error;
                 let collapsed = tool_ref.is_some_and(|t| t.is_result_collapsible(&output));
+                let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
                 self.messages.push(ChatMessage::ToolResult {
                     tool_name: tool_name.clone(),
                     output: text.clone(),
                     is_error,
                     display,
                     collapsed,
+                    is_read_only,
                 });
                 self.tool_outputs
                     .push(ToolOutputEntry::new(&tool_name, text.clone(), is_error));

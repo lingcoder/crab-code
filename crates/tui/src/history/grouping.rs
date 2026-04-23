@@ -14,7 +14,6 @@ use crate::app::ChatMessage;
 use crate::history::HistoryCell;
 use crate::history::cell_from_chat_message;
 use crate::history::cells::CollapsedReadSearchCell;
-use crate::history::cells::collapsed_read_search::READ_ONLY_TOOLS;
 
 /// Minimum number of tool calls in a run before we collapse it.
 const COLLAPSE_THRESHOLD: usize = 2;
@@ -42,17 +41,18 @@ pub fn group_messages(messages: &[ChatMessage]) -> Vec<Box<dyn HistoryCell>> {
 }
 
 /// Return the index of the first message after `start` that is NOT a
-/// read-only `ToolUse` / `ToolResult`. Stops at any non-tool message or
-/// a tool whose name is not in [`READ_ONLY_TOOLS`].
+/// read-only `ToolUse` / `ToolResult`. Each tool carries its own
+/// `is_read_only` flag cached at push time from `Tool::is_read_only()`,
+/// so this layer never needs a hardcoded tool-name list.
 fn scan_read_only_run(messages: &[ChatMessage], start: usize) -> usize {
     let mut end = start;
     while end < messages.len() {
-        let name = match &messages[end] {
-            ChatMessage::ToolUse { name, .. } => name,
-            ChatMessage::ToolResult { tool_name, .. } => tool_name,
+        let read_only = match &messages[end] {
+            ChatMessage::ToolUse { is_read_only, .. }
+            | ChatMessage::ToolResult { is_read_only, .. } => *is_read_only,
             _ => break,
         };
-        if !READ_ONLY_TOOLS.contains(&name.as_str()) {
+        if !read_only {
             break;
         }
         end += 1;
@@ -78,6 +78,7 @@ mod tests {
             name: "Read".into(),
             summary: Some("Read (a.rs)".into()),
             color: None,
+            is_read_only: true,
         }
     }
 
@@ -88,6 +89,7 @@ mod tests {
             is_error: false,
             display: None,
             collapsed: false,
+            is_read_only: true,
         }
     }
 
@@ -96,6 +98,7 @@ mod tests {
             name: "Bash".into(),
             summary: Some("Run (ls)".into()),
             color: None,
+            is_read_only: false,
         }
     }
 
@@ -106,6 +109,7 @@ mod tests {
             is_error: false,
             display: None,
             collapsed: false,
+            is_read_only: false,
         }
     }
 

@@ -81,6 +81,7 @@ pub fn cell_from_chat_message(msg: &crate::app::ChatMessage) -> Box<dyn HistoryC
             name,
             summary,
             color,
+            is_read_only: _,
         } => Box::new(ToolCallCell::new(name.clone(), summary.clone(), *color)),
         ChatMessage::ToolResult {
             tool_name,
@@ -88,6 +89,7 @@ pub fn cell_from_chat_message(msg: &crate::app::ChatMessage) -> Box<dyn HistoryC
             is_error,
             display,
             collapsed,
+            is_read_only: _,
         } => Box::new(ToolResultCell::new(
             tool_name.clone(),
             output.clone(),
@@ -146,6 +148,7 @@ mod tests {
                 name: "read".into(),
                 summary: None,
                 color: None,
+                is_read_only: true,
             },
             ChatMessage::ToolResult {
                 tool_name: "read".into(),
@@ -153,6 +156,7 @@ mod tests {
                 is_error: false,
                 display: None,
                 collapsed: false,
+                is_read_only: true,
             },
             ChatMessage::System { text: "s".into() },
             ChatMessage::CompactBoundary {
