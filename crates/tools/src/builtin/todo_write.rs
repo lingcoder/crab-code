@@ -7,7 +7,7 @@ use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -120,19 +120,19 @@ impl Tool for TodoWriteTool {
 async fn write_todos(todos: &[TodoItem]) -> Result<ToolOutput> {
     // Serialize the TODO list to JSON.
     let json = serde_json::to_string_pretty(todos)
-        .map_err(|e| crab_common::Error::Tool(format!("failed to serialize TODO list: {e}")))?;
+        .map_err(|e| crab_core::Error::Tool(format!("failed to serialize TODO list: {e}")))?;
 
     // Write to .crab/todos.json in the current working directory.
     let crab_dir = std::path::Path::new(".crab");
     if !crab_dir.exists() {
         tokio::fs::create_dir_all(crab_dir).await.map_err(|e| {
-            crab_common::Error::Tool(format!("failed to create .crab directory: {e}"))
+            crab_core::Error::Tool(format!("failed to create .crab directory: {e}"))
         })?;
     }
     let path = crab_dir.join("todos.json");
-    tokio::fs::write(&path, &json).await.map_err(|e| {
-        crab_common::Error::Tool(format!("failed to write {}: {e}", path.display()))
-    })?;
+    tokio::fs::write(&path, &json)
+        .await
+        .map_err(|e| crab_core::Error::Tool(format!("failed to write {}: {e}", path.display())))?;
 
     // Build a summary of statuses.
     let pending = todos.iter().filter(|t| t.status == "pending").count();

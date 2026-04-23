@@ -3,7 +3,7 @@
 //! These tools allow the LLM to discover and read resources exposed by
 //! connected MCP servers, providing access to external data sources.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::future::Future;

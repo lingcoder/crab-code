@@ -40,7 +40,7 @@ pub fn create_sandbox() -> Box<dyn Sandbox> {
 pub fn apply_policy(
     policy: &SandboxPolicy,
     cmd: &mut tokio::process::Command,
-) -> crab_common::Result<SandboxResult> {
+) -> crab_core::Result<SandboxResult> {
     let sandbox = create_sandbox();
     sandbox.apply(policy, cmd)
 }

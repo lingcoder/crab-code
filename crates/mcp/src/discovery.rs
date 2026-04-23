@@ -60,10 +60,10 @@ pub enum McpTransportConfig {
 /// ```
 pub fn parse_mcp_servers(
     mcp_servers_value: &serde_json::Value,
-) -> crab_common::Result<Vec<McpServerConfig>> {
+) -> crab_core::Result<Vec<McpServerConfig>> {
     let obj = mcp_servers_value
         .as_object()
-        .ok_or_else(|| crab_common::Error::Other("mcpServers must be a JSON object".into()))?;
+        .ok_or_else(|| crab_core::Error::Other("mcpServers must be a JSON object".into()))?;
 
     let mut configs = Vec::new();
 
@@ -90,7 +90,7 @@ pub fn parse_mcp_servers(
 ///
 /// Spawns the appropriate transport based on the config and performs the
 /// MCP initialize handshake.
-pub async fn connect_server(config: &McpServerConfig) -> crab_common::Result<crate::McpClient> {
+pub async fn connect_server(config: &McpServerConfig) -> crab_core::Result<crate::McpClient> {
     match &config.transport {
         McpTransportConfig::Stdio { command, args } => {
             crate::McpClient::connect_stdio(command, args, config.env.as_ref(), &config.name).await

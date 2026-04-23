@@ -496,7 +496,7 @@ fn tool_results_message_format() {
         ("tu_2".into(), Ok(ToolOutput::error("file not found"))),
         (
             "tu_3".into(),
-            Err(crab_common::Error::Other("timeout".into())),
+            Err(crab_core::Error::Other("timeout".into())),
         ),
     ];
 

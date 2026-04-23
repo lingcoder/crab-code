@@ -3,7 +3,7 @@
 //! Pauses execution for the requested number of milliseconds. Respects
 //! the cancellation token so the sleep can be interrupted.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::future::Future;

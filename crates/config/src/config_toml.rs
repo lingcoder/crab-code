@@ -49,7 +49,7 @@ pub struct ProviderProfile {
 /// `~/.config/crab-code/config.toml` (XDG-style).
 #[must_use]
 pub fn config_toml_path() -> PathBuf {
-    crab_common::utils::path::home_dir()
+    crab_core::common::utils::path::home_dir()
         .join(".config")
         .join("crab-code")
         .join("config.toml")
@@ -57,12 +57,12 @@ pub fn config_toml_path() -> PathBuf {
 
 /// Load `ConfigToml` from a file path.
 /// Returns `Ok(ConfigToml::default())` if the file does not exist.
-fn load_config_toml_from(path: &Path) -> crab_common::Result<ConfigToml> {
+fn load_config_toml_from(path: &Path) -> crab_core::Result<ConfigToml> {
     match std::fs::read_to_string(path) {
         Ok(content) => toml::from_str(&content)
-            .map_err(|e| crab_common::Error::Config(format!("config.toml parse error: {e}"))),
+            .map_err(|e| crab_core::Error::Config(format!("config.toml parse error: {e}"))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConfigToml::default()),
-        Err(e) => Err(crab_common::Error::Config(format!(
+        Err(e) => Err(crab_core::Error::Config(format!(
             "failed to read {}: {e}",
             path.display()
         ))),
@@ -70,7 +70,7 @@ fn load_config_toml_from(path: &Path) -> crab_common::Result<ConfigToml> {
 }
 
 /// Load the global `config.toml` from `~/.config/crab-code/config.toml`.
-pub fn load_config_toml() -> crab_common::Result<ConfigToml> {
+pub fn load_config_toml() -> crab_core::Result<ConfigToml> {
     load_config_toml_from(&config_toml_path())
 }
 

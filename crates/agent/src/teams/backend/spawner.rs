@@ -25,20 +25,20 @@ pub trait SwarmBackend: Send {
     fn spawn_teammate(
         &mut self,
         config: TeammateConfig,
-    ) -> impl std::future::Future<Output = crab_common::Result<String>> + Send;
+    ) -> impl std::future::Future<Output = crab_core::Result<String>> + Send;
 
     /// Kill a teammate by ID.
     fn kill_teammate(
         &mut self,
         id: &str,
-    ) -> impl std::future::Future<Output = crab_common::Result<()>> + Send;
+    ) -> impl std::future::Future<Output = crab_core::Result<()>> + Send;
 
     /// Send a text message to a teammate.
     fn send_message(
         &self,
         id: &str,
         message: &str,
-    ) -> impl std::future::Future<Output = crab_common::Result<()>> + Send;
+    ) -> impl std::future::Future<Output = crab_core::Result<()>> + Send;
 
     /// List all tracked teammates.
     fn list_teammates(&self) -> Vec<&Teammate>;
@@ -77,7 +77,7 @@ impl InProcessBackend {
 }
 
 impl SwarmBackend for InProcessBackend {
-    async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_common::Result<String> {
+    async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_core::Result<String> {
         let id = format!("ip-{}", self.next_id);
         self.next_id += 1;
 
@@ -122,11 +122,11 @@ impl SwarmBackend for InProcessBackend {
         Ok(id)
     }
 
-    async fn kill_teammate(&mut self, id: &str) -> crab_common::Result<()> {
+    async fn kill_teammate(&mut self, id: &str) -> crab_core::Result<()> {
         let entry = self
             .entries
             .remove(id)
-            .ok_or_else(|| crab_common::Error::Other(format!("teammate not found: {id}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
 
         entry.cancel.cancel();
         // Best-effort await — if the task panicked we still succeed.
@@ -135,17 +135,17 @@ impl SwarmBackend for InProcessBackend {
         Ok(())
     }
 
-    async fn send_message(&self, id: &str, message: &str) -> crab_common::Result<()> {
+    async fn send_message(&self, id: &str, message: &str) -> crab_core::Result<()> {
         let entry = self
             .entries
             .get(id)
-            .ok_or_else(|| crab_common::Error::Other(format!("teammate not found: {id}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
 
         entry
             .tx
             .send(message.to_owned())
             .await
-            .map_err(|e| crab_common::Error::Other(format!("send failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("send failed: {e}")))?;
 
         Ok(())
     }
@@ -189,7 +189,7 @@ impl TmuxBackend {
 }
 
 impl SwarmBackend for TmuxBackend {
-    async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_common::Result<String> {
+    async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_core::Result<String> {
         let id = format!("tmux-{}", self.next_id);
         self.next_id += 1;
 
@@ -209,11 +209,11 @@ impl SwarmBackend for TmuxBackend {
         Ok(id)
     }
 
-    async fn kill_teammate(&mut self, id: &str) -> crab_common::Result<()> {
+    async fn kill_teammate(&mut self, id: &str) -> crab_core::Result<()> {
         let teammate = self
             .teammates
             .remove(id)
-            .ok_or_else(|| crab_common::Error::Other(format!("teammate not found: {id}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
 
         if let Some(ref pane_id) = teammate.pane_id {
             self.pane_manager.kill_pane(pane_id).await?;
@@ -222,16 +222,16 @@ impl SwarmBackend for TmuxBackend {
         Ok(())
     }
 
-    async fn send_message(&self, id: &str, message: &str) -> crab_common::Result<()> {
+    async fn send_message(&self, id: &str, message: &str) -> crab_core::Result<()> {
         let teammate = self
             .teammates
             .get(id)
-            .ok_or_else(|| crab_common::Error::Other(format!("teammate not found: {id}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
 
         let pane_id = teammate
             .pane_id
             .as_deref()
-            .ok_or_else(|| crab_common::Error::Other(format!("teammate {id} has no tmux pane")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("teammate {id} has no tmux pane")))?;
 
         self.pane_manager.send_keys(pane_id, message).await
     }

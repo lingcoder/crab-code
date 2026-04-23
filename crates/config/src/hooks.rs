@@ -48,14 +48,14 @@ fn default_timeout() -> u64 {
 }
 
 /// Parse hooks from the `hooks` field of settings (a JSON value).
-pub fn parse_hooks(value: &serde_json::Value) -> crab_common::Result<Vec<Hook>> {
+pub fn parse_hooks(value: &serde_json::Value) -> crab_core::Result<Vec<Hook>> {
     let hooks: Vec<Hook> = serde_json::from_value(value.clone())
-        .map_err(|e| crab_common::Error::Config(format!("hooks parse error: {e}")))?;
+        .map_err(|e| crab_core::Error::Config(format!("hooks parse error: {e}")))?;
     Ok(hooks)
 }
 
 /// Load hooks from a `Settings` struct.
-pub fn load_hooks(settings: &crate::Settings) -> crab_common::Result<Vec<Hook>> {
+pub fn load_hooks(settings: &crate::Settings) -> crab_core::Result<Vec<Hook>> {
     settings
         .hooks
         .as_ref()

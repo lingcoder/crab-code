@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Built-in tool implementations for Crab Code"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
 crab-fs.workspace = true

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
@@ -275,7 +275,7 @@ impl BashTool {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| crab_common::Error::Other(format!("failed to spawn: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to spawn: {e}")))?;
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -412,7 +412,7 @@ mod pty_support {
                 run_in_pty(&command, &working_dir, timeout, strip_ansi)
             })
             .await
-            .map_err(|e| crab_common::Error::Other(format!("PTY task failed: {e}")))??;
+            .map_err(|e| crab_core::Error::Other(format!("PTY task failed: {e}")))??;
 
             Ok(result)
         }
@@ -434,7 +434,7 @@ mod pty_support {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| crab_common::Error::Other(format!("failed to open PTY: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to open PTY: {e}")))?;
 
         let (shell, flag) = if cfg!(windows) {
             ("cmd", "/C")
@@ -450,7 +450,7 @@ mod pty_support {
         let mut child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| crab_common::Error::Other(format!("failed to spawn in PTY: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to spawn in PTY: {e}")))?;
 
         // Drop the slave — we read from master
         drop(pair.slave);
@@ -458,7 +458,7 @@ mod pty_support {
         let mut reader = pair
             .master
             .try_clone_reader()
-            .map_err(|e| crab_common::Error::Other(format!("failed to clone PTY reader: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to clone PTY reader: {e}")))?;
 
         // Read output with timeout
         let mut output = Vec::new();
@@ -484,7 +484,7 @@ mod pty_support {
 
         let status = child
             .wait()
-            .map_err(|e| crab_common::Error::Other(format!("failed to wait for PTY child: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to wait for PTY child: {e}")))?;
 
         let mut text = String::from_utf8_lossy(&output).to_string();
 

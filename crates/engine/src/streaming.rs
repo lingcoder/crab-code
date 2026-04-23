@@ -7,7 +7,7 @@ use crab_core::tool::{ToolContext, ToolOutput};
 
 /// Streaming tool executor — spawns tool tasks eagerly as inputs complete.
 pub struct StreamingToolExecutor {
-    pub pending: Vec<tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>>,
+    pub pending: Vec<tokio::task::JoinHandle<(String, crab_core::Result<ToolOutput>)>>,
 }
 
 impl StreamingToolExecutor {
@@ -29,14 +29,14 @@ impl StreamingToolExecutor {
             serde_json::Value,
             ToolContext,
         )
-            -> tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>,
+            -> tokio::task::JoinHandle<(String, crab_core::Result<ToolOutput>)>,
     ) {
         let handle = tool_fn(name, input, ctx);
         self.pending.push(handle);
     }
 
     /// Collect all pending tool results after `message_stop`.
-    pub async fn collect_all(&mut self) -> Vec<(String, crab_common::Result<ToolOutput>)> {
+    pub async fn collect_all(&mut self) -> Vec<(String, crab_core::Result<ToolOutput>)> {
         let mut results = Vec::new();
         for handle in self.pending.drain(..) {
             results.push(handle.await.expect("tool task panicked"));

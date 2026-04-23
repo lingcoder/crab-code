@@ -19,7 +19,6 @@ auto-dream = []
 proactive = []
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
 crab-engine.workspace = true

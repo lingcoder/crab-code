@@ -129,14 +129,14 @@ pub fn install_panic_hook() {
 
 /// Initialize the tracing/logging system.
 ///
-/// This delegates to `crab_common::utils::debug::init_debug` which supports:
+/// This delegates to `crab_core::common::utils::debug::init_debug` which supports:
 /// - Console output to stderr (with level filtering)
 /// - Optional file output to `~/.crab/logs/`
 ///
 /// When `verbose` is true, enables `crab=debug` level logging.
 /// Otherwise, tracing stays at its default (warn+error only).
 pub fn init_logging(verbose: bool) {
-    let config = crab_common::utils::debug::DebugConfig {
+    let config = crab_core::common::utils::debug::DebugConfig {
         enabled: verbose,
         filter: if verbose {
             Some("crab=debug".to_string())
@@ -145,7 +145,7 @@ pub fn init_logging(verbose: bool) {
         },
         file: if verbose { Some(log_file_path()) } else { None },
     };
-    crab_common::utils::debug::init_debug(&config);
+    crab_core::common::utils::debug::init_debug(&config);
 }
 
 /// Run all initialization steps.
@@ -161,7 +161,7 @@ pub fn initialize(verbose: bool) {
 
 /// Return the crash log path: `~/.crab/logs/crash.log`.
 fn crash_log_path() -> PathBuf {
-    crab_common::utils::path::home_dir()
+    crab_core::common::utils::path::home_dir()
         .join(".crab")
         .join("logs")
         .join("crash.log")
@@ -169,7 +169,7 @@ fn crash_log_path() -> PathBuf {
 
 /// Return the debug log file path: `~/.crab/logs/debug.log`.
 fn log_file_path() -> PathBuf {
-    crab_common::utils::path::home_dir()
+    crab_core::common::utils::path::home_dir()
         .join(".crab")
         .join("logs")
         .join("debug.log")

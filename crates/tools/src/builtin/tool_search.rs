@@ -7,7 +7,7 @@
 use std::fmt::Write;
 use std::future::Future;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::pin::Pin;

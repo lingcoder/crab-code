@@ -6,7 +6,7 @@
 //!
 //! Examples: "lint-and-fix", "test-and-commit", "review-pr".
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,7 +80,7 @@ impl Tool for WorkflowTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         Box::pin(async move {
             let parsed: WorkflowInput = serde_json::from_value(input)
-                .map_err(|e| crab_common::Error::Tool(format!("Invalid input: {e}")))?;
+                .map_err(|e| crab_core::Error::Tool(format!("Invalid input: {e}")))?;
 
             Ok(ToolOutput::error(format!(
                 "Workflow '{}' execution is not yet implemented. \

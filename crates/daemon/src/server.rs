@@ -39,7 +39,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         let data_dir = directories::ProjectDirs::from("", "", "crab-code").map_or_else(
             || {
-                crab_common::utils::path::home_dir()
+                crab_core::common::utils::path::home_dir()
                     .join(".local")
                     .join("share")
                     .join("crab-code")
@@ -108,13 +108,13 @@ impl DaemonServer {
     }
 
     /// Write the PID file for single-instance checking.
-    fn write_pid_file(&self) -> crab_common::Result<()> {
+    fn write_pid_file(&self) -> crab_core::Result<()> {
         if let Some(parent) = self.config.pid_file.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| crab_common::Error::Other(format!("failed to create PID dir: {e}")))?;
+                .map_err(|e| crab_core::Error::Other(format!("failed to create PID dir: {e}")))?;
         }
         std::fs::write(&self.config.pid_file, std::process::id().to_string())
-            .map_err(|e| crab_common::Error::Other(format!("failed to write PID file: {e}")))
+            .map_err(|e| crab_core::Error::Other(format!("failed to write PID file: {e}")))
     }
 
     /// Remove the PID file on shutdown.
@@ -129,9 +129,9 @@ impl DaemonServer {
     }
 
     /// Start the daemon server — listens for IPC connections and processes requests.
-    pub async fn run(&self) -> crab_common::Result<()> {
+    pub async fn run(&self) -> crab_core::Result<()> {
         if self.is_already_running() {
-            return Err(crab_common::Error::Other(
+            return Err(crab_core::Error::Other(
                 "another daemon instance is already running".into(),
             ));
         }
@@ -140,7 +140,7 @@ impl DaemonServer {
 
         let addr = format!("127.0.0.1:{}", self.config.port);
         let listener = TcpListener::bind(&addr).await.map_err(|e| {
-            crab_common::Error::Other(format!("failed to bind IPC listener on {addr}: {e}"))
+            crab_core::Error::Other(format!("failed to bind IPC listener on {addr}: {e}"))
         })?;
 
         info!("daemon listening on {addr}");
@@ -197,7 +197,7 @@ async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     pool: Arc<Mutex<SessionPool>>,
     status: Arc<Mutex<DaemonStatus>>,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let mut buf = vec![0u8; 65536];
     let mut read_buf = Vec::new();
 
@@ -205,7 +205,7 @@ async fn handle_connection(
         let n = stream
             .read(&mut buf)
             .await
-            .map_err(|e| crab_common::Error::Other(format!("IPC read error: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("IPC read error: {e}")))?;
 
         if n == 0 {
             // Connection closed
@@ -224,7 +224,7 @@ async fn handle_connection(
             stream
                 .write_all(&encoded)
                 .await
-                .map_err(|e| crab_common::Error::Other(format!("IPC write error: {e}")))?;
+                .map_err(|e| crab_core::Error::Other(format!("IPC write error: {e}")))?;
 
             // If shutdown was requested, break the inner loop
             if matches!(response, DaemonResponse::ShuttingDown) {

@@ -220,7 +220,7 @@ impl AgentSession {
     /// If the conversation is above the 80% context-window watermark when
     /// this is called, [`compact_conversation`](Self::compact_conversation)
     /// runs first so the new turn starts with headroom.
-    pub async fn handle_user_input(&mut self, input: &str) -> crab_common::Result<()> {
+    pub async fn handle_user_input(&mut self, input: &str) -> crab_core::Result<()> {
         if self.conversation.needs_compaction() {
             self.compact_conversation().await;
         }
@@ -302,7 +302,7 @@ impl AgentSession {
     }
 
     /// Save a memory file through the memory store.
-    pub fn save_memory(&self, filename: &str, content: &str) -> crab_common::Result<()> {
+    pub fn save_memory(&self, filename: &str, content: &str) -> crab_core::Result<()> {
         if let Some(store) = &self.memory_store {
             store.save(filename, content)?;
         }

@@ -43,7 +43,7 @@ impl Sandbox for WindowsJobSandbox {
         &self,
         policy: &SandboxPolicy,
         _cmd: &mut tokio::process::Command,
-    ) -> crab_common::Result<SandboxResult> {
+    ) -> crab_core::Result<SandboxResult> {
         // Real implementation would:
         //   1. CreateJobObjectW — fresh Job Object
         //   2. SetInformationJobObject with JOBOBJECT_EXTENDED_LIMIT_

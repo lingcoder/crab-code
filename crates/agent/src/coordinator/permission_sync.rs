@@ -79,10 +79,10 @@ impl PermissionSyncManager {
     ///
     /// Returns an error if there are no active subscribers (the event is
     /// still lost in that case).
-    pub fn broadcast(&self, event: PermissionDecisionEvent) -> crab_common::Result<()> {
+    pub fn broadcast(&self, event: PermissionDecisionEvent) -> crab_core::Result<()> {
         self.tx
             .send(event)
-            .map_err(|e| crab_common::Error::Other(format!("permission broadcast failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("permission broadcast failed: {e}")))?;
         Ok(())
     }
 

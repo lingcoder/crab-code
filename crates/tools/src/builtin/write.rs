@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 use std::future::Future;
@@ -63,14 +63,14 @@ impl Tool for WriteTool {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: file_path".into())
+                    crab_core::Error::Other("missing required parameter: file_path".into())
                 })?;
 
             let content = input
                 .get("content")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: content".into())
+                    crab_core::Error::Other("missing required parameter: content".into())
                 })?;
 
             let path = Path::new(file_path);
@@ -92,7 +92,7 @@ impl Tool for WriteTool {
                 && !parent.exists()
             {
                 tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    crab_common::Error::Other(format!(
+                    crab_core::Error::Other(format!(
                         "failed to create directory {}: {e}",
                         parent.display()
                     ))
@@ -101,7 +101,7 @@ impl Tool for WriteTool {
 
             // Write the file
             tokio::fs::write(path, content).await.map_err(|e| {
-                crab_common::Error::Other(format!("failed to write {file_path}: {e}"))
+                crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
 
             let bytes = content.len();

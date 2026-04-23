@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent, ToolSource};
 use serde_json::Value;
 use std::future::Future;
@@ -61,7 +61,7 @@ impl Tool for AgentTool {
 
         Box::pin(async move {
             let task = input.get("task").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: task".into())
+                crab_core::Error::Other("missing required parameter: task".into())
             })?;
 
             if task.trim().is_empty() {

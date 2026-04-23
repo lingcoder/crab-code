@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Agent Client Protocol (ACP) — crab as an external agent for Zed / Neovim / other ACP-speaking editors"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 # Upstream ACP SDK (Zed / agentclientprotocol.com official Rust crate).
 # Re-exported as `crab_acp::sdk` so composition roots can implement the

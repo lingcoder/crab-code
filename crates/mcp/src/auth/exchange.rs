@@ -66,7 +66,7 @@ pub async fn exchange_code(
     config: &OAuthConfig,
     code: &str,
     verifier: &str,
-) -> crab_common::Result<AuthToken> {
+) -> crab_core::Result<AuthToken> {
     let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "authorization_code"),
         ("code", code),
@@ -84,18 +84,18 @@ pub async fn exchange_code(
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("token endpoint POST failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("token endpoint POST failed: {e}")))?;
 
     let (status, body) = quirks::normalise_response(resp).await?;
 
     if !status.is_success() {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "token exchange HTTP {status}: {body}"
         )));
     }
 
     let parsed: TokenResponse = serde_json::from_str(&body).map_err(|e| {
-        crab_common::Error::Other(format!(
+        crab_core::Error::Other(format!(
             "token exchange returned unparseable body: {e}; body was: {body}"
         ))
     })?;

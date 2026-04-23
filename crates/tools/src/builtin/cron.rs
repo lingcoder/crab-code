@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -145,14 +145,14 @@ impl Tool for CronCreateTool {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
             let cron_expr = input.get("cron").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: cron".into())
+                crab_core::Error::Other("missing required parameter: cron".into())
             })?;
 
             let prompt = input
                 .get("prompt")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: prompt".into())
+                    crab_core::Error::Other("missing required parameter: prompt".into())
                 })?;
 
             if cron_expr.trim().is_empty() {
@@ -256,9 +256,10 @@ impl Tool for CronDeleteTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let id = input.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: id".into())
-            })?;
+            let id = input
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crab_core::Error::Other("missing required parameter: id".into()))?;
 
             let deleted = {
                 let mut store = store.lock().unwrap();

@@ -4,7 +4,7 @@
 //! via `ToolOutputContent::Image`.
 
 use base64::Engine as _;
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{
     Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
     ToolOutputContent,
@@ -114,7 +114,7 @@ impl Tool for ImageReadTool {
 
             // Check file size
             let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
-                crab_common::Error::Other(format!("failed to read file metadata: {e}"))
+                crab_core::Error::Other(format!("failed to read file metadata: {e}"))
             })?;
 
             if metadata.len() > MAX_IMAGE_SIZE {
@@ -126,9 +126,9 @@ impl Tool for ImageReadTool {
             }
 
             // Read and encode
-            let bytes = tokio::fs::read(&path).await.map_err(|e| {
-                crab_common::Error::Other(format!("failed to read image file: {e}"))
-            })?;
+            let bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|e| crab_core::Error::Other(format!("failed to read image file: {e}")))?;
 
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
 

@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Model Context Protocol implementation for Crab Code"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

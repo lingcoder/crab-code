@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ impl StructuredOutputTool {
     /// Returns an error if the schema itself is invalid.
     pub fn new(json_schema: Value) -> Result<Self> {
         let validator = jsonschema::validator_for(&json_schema)
-            .map_err(|e| crab_common::Error::Other(format!("invalid JSON Schema: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("invalid JSON Schema: {e}")))?;
         Ok(Self {
             schema: json_schema,
             validator,
@@ -36,16 +36,15 @@ impl StructuredOutputTool {
     pub fn from_arg(arg: &str) -> Result<Self> {
         let value = if arg.trim_start().starts_with('{') {
             // Inline JSON
-            serde_json::from_str(arg).map_err(|e| {
-                crab_common::Error::Other(format!("invalid inline JSON Schema: {e}"))
-            })?
+            serde_json::from_str(arg)
+                .map_err(|e| crab_core::Error::Other(format!("invalid inline JSON Schema: {e}")))?
         } else {
             // File path
             let content = std::fs::read_to_string(arg).map_err(|e| {
-                crab_common::Error::Other(format!("failed to read JSON Schema file '{arg}': {e}"))
+                crab_core::Error::Other(format!("failed to read JSON Schema file '{arg}': {e}"))
             })?;
             serde_json::from_str(&content).map_err(|e| {
-                crab_common::Error::Other(format!("invalid JSON in schema file '{arg}': {e}"))
+                crab_core::Error::Other(format!("invalid JSON in schema file '{arg}': {e}"))
             })?
         };
         Self::new(value)

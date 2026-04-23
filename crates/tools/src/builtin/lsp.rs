@@ -5,7 +5,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 

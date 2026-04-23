@@ -5,7 +5,7 @@
 //! for deduplication. Real API integration (e.g., Brave Search, `SearXNG`,
 //! Google Custom Search) is deferred to Phase 2.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::collections::HashMap;

@@ -8,7 +8,6 @@ repository.workspace = true
 description = "IDE integration via MCP notifications for Crab Code"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-mcp.workspace = true
 tokio.workspace = true

@@ -8,7 +8,6 @@ repository.workspace = true
 description = "LLM API clients for Crab Code (Anthropic + OpenAI-compatible)"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
 crab-auth.workspace = true

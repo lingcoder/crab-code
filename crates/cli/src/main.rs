@@ -567,13 +567,13 @@ fn resolve_system_prompt(
 #[allow(clippy::too_many_lines)]
 async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()> {
     // Initialise debug/tracing if requested
-    let debug_filter = crab_common::utils::debug::resolve_debug_filter(cli.debug.as_deref());
-    let debug_config = crab_common::utils::debug::DebugConfig {
+    let debug_filter = crab_core::common::utils::debug::resolve_debug_filter(cli.debug.as_deref());
+    let debug_config = crab_core::common::utils::debug::DebugConfig {
         enabled: debug_filter.is_some() || cli.verbose,
         filter: debug_filter,
         file: cli.debug_file.clone(),
     };
-    crab_common::utils::debug::init_debug(&debug_config);
+    crab_core::common::utils::debug::init_debug(&debug_config);
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
@@ -735,9 +735,9 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
     let session_id = if let Some(ref id) = cli.session_id {
         id.clone()
     } else if cli.fork_session && effective_resume_id.is_some() {
-        crab_common::utils::id::new_ulid()
+        crab_core::common::utils::id::new_ulid()
     } else {
-        crab_common::utils::id::new_ulid()
+        crab_core::common::utils::id::new_ulid()
     };
 
     // Build allowed/denied tool lists from CLI flags

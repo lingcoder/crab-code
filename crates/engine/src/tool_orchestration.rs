@@ -60,7 +60,7 @@ pub async fn execute_tool_calls(
     hook_executor: Option<&HookExecutor>,
     session_id: Option<&str>,
     plan_mode: bool,
-) -> crab_common::Result<Vec<(String, Result<ToolOutput, crab_common::Error>)>> {
+) -> crab_core::Result<Vec<(String, Result<ToolOutput, crab_core::Error>)>> {
     let registry = executor.registry();
     let mut results = Vec::new();
 
@@ -89,7 +89,7 @@ pub async fn execute_tool_calls(
                     let result = tokio::select! {
                         r = executor.execute(&name, input, ctx) => r,
                         () = token.cancelled() => {
-                            Err(crab_common::Error::Other("tool cancelled".into()))
+                            Err(crab_core::Error::Other("tool cancelled".into()))
                         }
                     };
                     let _ = event_tx
@@ -250,7 +250,7 @@ pub async fn execute_tool_calls(
 
             let result = exec_handle
                 .await
-                .unwrap_or_else(|e| Err(crab_common::Error::Other(format!("join error: {e}"))));
+                .unwrap_or_else(|e| Err(crab_core::Error::Other(format!("join error: {e}"))));
             let _ = delta_fwd.await;
             result
         } else {
@@ -311,7 +311,7 @@ pub async fn execute_tool_calls(
 
 /// Build a tool result `Message` (role: User) from tool outputs.
 pub fn tool_results_message(
-    results: Vec<(String, Result<ToolOutput, crab_common::Error>)>,
+    results: Vec<(String, Result<ToolOutput, crab_core::Error>)>,
 ) -> Message {
     let content: Vec<ContentBlock> = results
         .into_iter()
@@ -337,7 +337,7 @@ mod tests {
             ("tu_1".to_string(), Ok(ToolOutput::success("file contents"))),
             (
                 "tu_2".to_string(),
-                Err(crab_common::Error::Other("not found".into())),
+                Err(crab_core::Error::Other("not found".into())),
             ),
         ];
         let msg = tool_results_message(results);

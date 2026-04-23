@@ -58,14 +58,14 @@ fn default_kind() -> PluginKind {
 
 impl PluginManifest {
     /// Validate the manifest for required fields and consistency.
-    pub fn validate(&self) -> crab_common::Result<()> {
+    pub fn validate(&self) -> crab_core::Result<()> {
         if self.name.is_empty() {
-            return Err(crab_common::Error::Other(
+            return Err(crab_core::Error::Other(
                 "plugin manifest: 'name' is required".into(),
             ));
         }
         if self.name.contains(char::is_whitespace) {
-            return Err(crab_common::Error::Other(
+            return Err(crab_core::Error::Other(
                 "plugin manifest: 'name' must not contain whitespace".into(),
             ));
         }
@@ -80,12 +80,12 @@ impl PluginManifest {
 }
 
 /// Load a plugin manifest from a `plugin.json` file.
-pub fn load_manifest(path: &Path) -> crab_common::Result<PluginManifest> {
+pub fn load_manifest(path: &Path) -> crab_core::Result<PluginManifest> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| crab_common::Error::Other(format!("failed to read plugin manifest: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to read plugin manifest: {e}")))?;
 
     let mut manifest: PluginManifest = serde_json::from_str(&content)
-        .map_err(|e| crab_common::Error::Other(format!("invalid plugin manifest JSON: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("invalid plugin manifest JSON: {e}")))?;
 
     manifest.source_dir = path.parent().map(Path::to_path_buf);
     manifest.validate()?;

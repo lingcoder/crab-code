@@ -20,7 +20,7 @@ pub enum ApiError {
     Timeout,
 
     #[error(transparent)]
-    Common(#[from] crab_common::Error),
+    Common(#[from] crab_core::Error),
 }
 
 /// Convenience result type for the api crate.
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn api_error_from_common() {
-        let common_err = crab_common::Error::Other("test".into());
+        let common_err = crab_core::Error::Other("test".into());
         let api_err: ApiError = common_err.into();
         assert!(matches!(api_err, ApiError::Common(_)));
     }

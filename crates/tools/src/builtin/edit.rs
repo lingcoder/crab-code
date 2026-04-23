@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 use std::fmt::Write;
@@ -69,21 +69,21 @@ impl Tool for EditTool {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: file_path".into())
+                    crab_core::Error::Other("missing required parameter: file_path".into())
                 })?;
 
             let old_string = input
                 .get("old_string")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: old_string".into())
+                    crab_core::Error::Other("missing required parameter: old_string".into())
                 })?;
 
             let new_string = input
                 .get("new_string")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: new_string".into())
+                    crab_core::Error::Other("missing required parameter: new_string".into())
                 })?;
 
             let replace_all = input
@@ -130,9 +130,9 @@ impl Tool for EditTool {
             }
 
             // Read the file
-            let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-                crab_common::Error::Other(format!("failed to read {file_path}: {e}"))
-            })?;
+            let content = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|e| crab_core::Error::Other(format!("failed to read {file_path}: {e}")))?;
 
             // Resolve match: exact or fuzzy
             let resolved = resolve_match(&content, old_string, fuzzy_match, replace_all, file_path);
@@ -164,7 +164,7 @@ impl Tool for EditTool {
 
             // Write the file back
             tokio::fs::write(path, &new_content).await.map_err(|e| {
-                crab_common::Error::Other(format!("failed to write {file_path}: {e}"))
+                crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
 
             let mut msg = if replace_all {

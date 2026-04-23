@@ -38,13 +38,13 @@ impl TokenStore {
     /// Returns `Err` only if the directory cannot be opened (permission
     /// denied, is a regular file, etc.). Individual file parse errors
     /// degrade to a warning + skip.
-    pub fn load_from_disk(dir: &Path) -> crab_common::Result<Self> {
+    pub fn load_from_disk(dir: &Path) -> crab_core::Result<Self> {
         let mut store = Self::new();
         if !dir.exists() {
             return Ok(store);
         }
         let entries = fs::read_dir(dir).map_err(|e| {
-            crab_common::Error::Other(format!("failed to read token dir {}: {e}", dir.display()))
+            crab_core::Error::Other(format!("failed to read token dir {}: {e}", dir.display()))
         })?;
         for entry in entries.flatten() {
             let path = entry.path();
@@ -90,14 +90,14 @@ impl TokenStore {
     ///
     /// Returns `Err` on directory creation failure or any individual file
     /// write failure. Successfully-written files are not rolled back.
-    pub fn save_to_disk(&self, dir: &Path) -> crab_common::Result<()> {
+    pub fn save_to_disk(&self, dir: &Path) -> crab_core::Result<()> {
         fs::create_dir_all(dir).map_err(|e| {
-            crab_common::Error::Other(format!("failed to create token dir {}: {e}", dir.display()))
+            crab_core::Error::Other(format!("failed to create token dir {}: {e}", dir.display()))
         })?;
         for (name, tok) in &self.tokens {
             let path = dir.join(format!("{name}.json"));
             let body = serde_json::to_string_pretty(tok).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize token for {name}: {e}"))
+                crab_core::Error::Other(format!("failed to serialize token for {name}: {e}"))
             })?;
             write_token_file(&path, &body)?;
         }
@@ -147,7 +147,7 @@ impl TokenStore {
 /// Uses `fd-lock` exclusive advisory lock for write-safety under concurrent
 /// crab processes. The lock is scoped to the file, so different token
 /// files do not contend.
-fn write_token_file(path: &Path, body: &str) -> crab_common::Result<()> {
+fn write_token_file(path: &Path, body: &str) -> crab_core::Result<()> {
     use std::io::Write;
 
     let f = fs::OpenOptions::new()
@@ -155,9 +155,7 @@ fn write_token_file(path: &Path, body: &str) -> crab_common::Result<()> {
         .write(true)
         .truncate(true)
         .open(path)
-        .map_err(|e| {
-            crab_common::Error::Other(format!("failed to open {}: {e}", path.display()))
-        })?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to open {}: {e}", path.display())))?;
 
     // Apply 0o600 on unix before writing anything.
     #[cfg(unix)]
@@ -165,17 +163,17 @@ fn write_token_file(path: &Path, body: &str) -> crab_common::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let perms = fs::Permissions::from_mode(0o600);
         fs::set_permissions(path, perms).map_err(|e| {
-            crab_common::Error::Other(format!("failed to set 0o600 on {}: {e}", path.display()))
+            crab_core::Error::Other(format!("failed to set 0o600 on {}: {e}", path.display()))
         })?;
     }
 
     let mut lock = fd_lock::RwLock::new(f);
     let mut guard = lock
         .write()
-        .map_err(|e| crab_common::Error::Other(format!("fd-lock failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("fd-lock failed: {e}")))?;
     guard
         .write_all(body.as_bytes())
-        .map_err(|e| crab_common::Error::Other(format!("write failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("write failed: {e}")))?;
     Ok(())
 }
 

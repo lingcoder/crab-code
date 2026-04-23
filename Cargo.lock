@@ -768,7 +768,6 @@ name = "crab-acp"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
- "crab-common",
  "crab-core",
  "futures",
  "thiserror 2.0.18",
@@ -782,7 +781,6 @@ name = "crab-agent"
 version = "0.1.0"
 dependencies = [
  "crab-api",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-engine",
@@ -808,7 +806,6 @@ name = "crab-api"
 version = "0.1.0"
 dependencies = [
  "crab-auth",
- "crab-common",
  "crab-config",
  "crab-core",
  "either",
@@ -854,7 +851,6 @@ dependencies = [
  "crab-agent",
  "crab-api",
  "crab-auth",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-fs",
@@ -901,7 +897,6 @@ name = "crab-config"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "crab-common",
  "crab-core",
  "directories",
  "jsonc-parser",
@@ -930,7 +925,6 @@ dependencies = [
  "anyhow",
  "crab-agent",
  "crab-api",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-session",
@@ -952,7 +946,6 @@ name = "crab-engine"
 version = "0.1.0"
 dependencies = [
  "crab-api",
- "crab-common",
  "crab-core",
  "crab-plugin",
  "crab-session",
@@ -991,7 +984,6 @@ dependencies = [
 name = "crab-ide"
 version = "0.1.0"
 dependencies = [
- "crab-common",
  "crab-core",
  "crab-mcp",
  "directories",
@@ -1008,7 +1000,6 @@ name = "crab-job"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "crab-common",
  "crab-core",
  "croner",
  "serde",
@@ -1024,7 +1015,6 @@ name = "crab-mcp"
 version = "0.1.0"
 dependencies = [
  "base64",
- "crab-common",
  "crab-core",
  "directories",
  "fd-lock",
@@ -1064,9 +1054,9 @@ dependencies = [
 name = "crab-plugin"
 version = "0.1.0"
 dependencies = [
- "crab-common",
  "crab-config",
  "crab-core",
+ "crab-mcp",
  "crab-process",
  "crab-skill",
  "regex",
@@ -1096,7 +1086,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "crab-auth",
- "crab-common",
  "crab-config",
  "crab-core",
  "futures",
@@ -1116,7 +1105,6 @@ dependencies = [
 name = "crab-sandbox"
 version = "0.1.0"
 dependencies = [
- "crab-common",
  "crab-core",
  "landlock",
  "serde",
@@ -1133,7 +1121,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "crab-api",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-memory",
@@ -1179,7 +1166,6 @@ name = "crab-tools"
 version = "0.1.0"
 dependencies = [
  "base64",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-fs",
@@ -1209,7 +1195,6 @@ dependencies = [
  "chrono",
  "crab-agent",
  "crab-api",
- "crab-common",
  "crab-config",
  "crab-core",
  "crab-engine",

@@ -3,7 +3,7 @@
 //! Generates a concise summary of the current conversation or a specific
 //! scope within it, useful for context compression and agent handoff.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::future::Future;

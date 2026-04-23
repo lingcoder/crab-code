@@ -52,9 +52,9 @@ impl JsonRpcResponse {
     }
 
     /// Extract the result value, returning an error if the response is an error.
-    pub fn into_result(self) -> crab_common::Result<Value> {
+    pub fn into_result(self) -> crab_core::Result<Value> {
         if let Some(err) = self.error {
-            Err(crab_common::Error::Other(format!(
+            Err(crab_core::Error::Other(format!(
                 "MCP error: code={}, message={}",
                 err.code, err.message
             )))

@@ -41,7 +41,7 @@ pub async fn run_sse<H: ToolHandler + 'static>(
     server: Arc<McpServer<H>>,
     port: u16,
     cancel: CancellationToken,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     run_sse_with_timeout(server, port, cancel, DEFAULT_REQUEST_TIMEOUT).await
 }
 
@@ -51,10 +51,10 @@ pub async fn run_sse_with_timeout<H: ToolHandler + 'static>(
     port: u16,
     cancel: CancellationToken,
     request_timeout: Duration,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to bind port {port}: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to bind port {port}: {e}")))?;
 
     tracing::info!(port, "MCP SSE server listening");
 
@@ -68,7 +68,7 @@ pub async fn run_sse_with_timeout<H: ToolHandler + 'static>(
             }
             result = listener.accept() => {
                 let (stream, addr) = result.map_err(|e| {
-                    crab_common::Error::Other(format!("accept error: {e}"))
+                    crab_core::Error::Other(format!("accept error: {e}"))
                 })?;
                 tracing::debug!(%addr, "new HTTP connection");
                 let server = Arc::clone(&server);
@@ -88,19 +88,17 @@ pub async fn run_sse_with_timeout<H: ToolHandler + 'static>(
 /// Returns (method, path, body).
 async fn parse_http_request(
     stream: &mut BufReader<tokio::net::TcpStream>,
-) -> crab_common::Result<(String, String, String)> {
+) -> crab_core::Result<(String, String, String)> {
     // Read request line
     let mut request_line = String::new();
     stream
         .read_line(&mut request_line)
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to read request line: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to read request line: {e}")))?;
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
-        return Err(crab_common::Error::Other(
-            "invalid HTTP request line".into(),
-        ));
+        return Err(crab_core::Error::Other("invalid HTTP request line".into()));
     }
     let method = parts[0].to_string();
     let path = parts[1].to_string();
@@ -113,7 +111,7 @@ async fn parse_http_request(
         stream
             .read_line(&mut header)
             .await
-            .map_err(|e| crab_common::Error::Other(format!("failed to read header: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read header: {e}")))?;
         let trimmed = header.trim();
         if trimmed.is_empty() {
             break;
@@ -128,9 +126,9 @@ async fn parse_http_request(
         let mut buf = vec![0u8; content_length];
         tokio::io::AsyncReadExt::read_exact(stream, &mut buf)
             .await
-            .map_err(|e| crab_common::Error::Other(format!("failed to read body: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read body: {e}")))?;
         String::from_utf8(buf)
-            .map_err(|e| crab_common::Error::Other(format!("invalid UTF-8 body: {e}")))?
+            .map_err(|e| crab_core::Error::Other(format!("invalid UTF-8 body: {e}")))?
     } else {
         String::new()
     };
@@ -158,7 +156,7 @@ async fn handle_connection<H: ToolHandler + 'static>(
     sessions: SessionRegistry,
     port: u16,
     request_timeout: Duration,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let mut reader = BufReader::new(stream);
     let (method, path, body) = parse_http_request(&mut reader).await?;
 
@@ -183,7 +181,7 @@ async fn handle_connection<H: ToolHandler + 'static>(
             stream
                 .write_all(response.as_bytes())
                 .await
-                .map_err(|e| crab_common::Error::Other(format!("write error: {e}")))?;
+                .map_err(|e| crab_core::Error::Other(format!("write error: {e}")))?;
             Ok(())
         }
     }
@@ -194,7 +192,7 @@ async fn handle_sse_stream(
     mut stream: tokio::net::TcpStream,
     sessions: SessionRegistry,
     port: u16,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let session_id = uuid_v4_simple();
 
     // Send HTTP response headers for SSE
@@ -207,7 +205,7 @@ async fn handle_sse_stream(
     stream
         .write_all(headers.as_bytes())
         .await
-        .map_err(|e| crab_common::Error::Other(format!("write SSE headers: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("write SSE headers: {e}")))?;
 
     // Send the `endpoint` event with the POST URL
     let endpoint_url = format!("http://127.0.0.1:{port}/messages?session_id={session_id}");
@@ -215,11 +213,11 @@ async fn handle_sse_stream(
     stream
         .write_all(endpoint_event.as_bytes())
         .await
-        .map_err(|e| crab_common::Error::Other(format!("write endpoint event: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("write endpoint event: {e}")))?;
     stream
         .flush()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("flush: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("flush: {e}")))?;
 
     tracing::debug!(session_id = %session_id, "SSE session established");
 
@@ -263,7 +261,7 @@ async fn handle_post_message<H: ToolHandler + 'static>(
     server: Arc<McpServer<H>>,
     sessions: SessionRegistry,
     request_timeout: Duration,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     // Parse JSON-RPC request
     let req: JsonRpcRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
@@ -305,7 +303,7 @@ async fn handle_post_message<H: ToolHandler + 'static>(
     };
 
     let json = serde_json::to_string(&resp)
-        .map_err(|e| crab_common::Error::Other(format!("serialize response: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("serialize response: {e}")))?;
 
     // Send response via SSE channel
     send_to_session(&sessions, &session_id, &json).await;
@@ -328,7 +326,7 @@ async fn send_http_response(
     status: u16,
     content_type: &str,
     body: &str,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let status_text = match status {
         202 => "Accepted",
         400 => "Bad Request",
@@ -347,11 +345,11 @@ async fn send_http_response(
     stream
         .write_all(response.as_bytes())
         .await
-        .map_err(|e| crab_common::Error::Other(format!("write response: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("write response: {e}")))?;
     stream
         .flush()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("flush response: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("flush response: {e}")))?;
     Ok(())
 }
 

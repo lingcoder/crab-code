@@ -8,7 +8,6 @@ repository.workspace = true
 description = "crab-proto — remote-control protocol (server + client + wire types)"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
 crab-auth.workspace = true

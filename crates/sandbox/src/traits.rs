@@ -59,7 +59,7 @@ pub trait Sandbox: Send + Sync {
         &self,
         policy: &SandboxPolicy,
         cmd: &mut tokio::process::Command,
-    ) -> crab_common::Result<SandboxResult>;
+    ) -> crab_core::Result<SandboxResult>;
 }
 
 #[cfg(test)]

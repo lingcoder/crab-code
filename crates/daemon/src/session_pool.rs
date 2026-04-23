@@ -71,15 +71,15 @@ impl SessionPool {
     }
 
     /// Create a new session. Returns the session ID, or an error if at capacity.
-    pub fn create_session(&mut self, working_dir: PathBuf) -> crab_common::Result<String> {
+    pub fn create_session(&mut self, working_dir: PathBuf) -> crab_core::Result<String> {
         if self.sessions.len() >= self.max_sessions {
-            return Err(crab_common::Error::Other(format!(
+            return Err(crab_core::Error::Other(format!(
                 "session pool full (max {})",
                 self.max_sessions
             )));
         }
 
-        let id = crab_common::utils::id::new_ulid();
+        let id = crab_core::common::utils::id::new_ulid();
         let now = Instant::now();
         self.sessions.insert(
             id.clone(),

@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{
     Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
 };

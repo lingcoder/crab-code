@@ -51,21 +51,20 @@ pub fn load() -> GlobalState {
 }
 
 /// Persist global state to disk. Creates the parent directory if needed.
-pub fn save(state: &GlobalState) -> crab_common::Result<()> {
+pub fn save(state: &GlobalState) -> crab_core::Result<()> {
     let path = state_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            crab_common::Error::Config(format!(
+            crab_core::Error::Config(format!(
                 "failed to create state directory '{}': {e}",
                 parent.display()
             ))
         })?;
     }
-    let json = serde_json::to_string_pretty(state).map_err(|e| {
-        crab_common::Error::Config(format!("failed to serialize global state: {e}"))
-    })?;
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| crab_core::Error::Config(format!("failed to serialize global state: {e}")))?;
     std::fs::write(&path, json).map_err(|e| {
-        crab_common::Error::Config(format!(
+        crab_core::Error::Config(format!(
             "failed to write state file '{}': {e}",
             path.display()
         ))

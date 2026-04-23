@@ -60,7 +60,7 @@ impl WsTransport {
     ///
     /// Performs the WebSocket handshake with a timeout, then spawns a
     /// background reader task to dispatch incoming JSON-RPC responses.
-    pub async fn connect(url: &str) -> crab_common::Result<Self> {
+    pub async fn connect(url: &str) -> crab_core::Result<Self> {
         Self::connect_inner(url, None).await
     }
 
@@ -69,11 +69,11 @@ impl WsTransport {
     /// Sends the token in the `x-claude-code-ide-authorization` header,
     /// matching the protocol used by the Claude Code IDE plugins we
     /// piggyback on (VS Code / `JetBrains` lockfiles at `~/.claude/ide/*.lock`).
-    pub async fn connect_with_auth(url: &str, auth_token: &str) -> crab_common::Result<Self> {
+    pub async fn connect_with_auth(url: &str, auth_token: &str) -> crab_core::Result<Self> {
         Self::connect_inner(url, Some(auth_token)).await
     }
 
-    async fn connect_inner(url: &str, auth_token: Option<&str>) -> crab_common::Result<Self> {
+    async fn connect_inner(url: &str, auth_token: Option<&str>) -> crab_core::Result<Self> {
         use futures::StreamExt as _;
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -85,10 +85,10 @@ impl WsTransport {
 
         let mut request = url
             .into_client_request()
-            .map_err(|e| crab_common::Error::Other(format!("invalid WebSocket URL {url}: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("invalid WebSocket URL {url}: {e}")))?;
         if let Some(token) = auth_token {
             let header_value = token.parse().map_err(|e| {
-                crab_common::Error::Other(format!("invalid auth token (not HTTP-header-safe): {e}"))
+                crab_core::Error::Other(format!("invalid auth token (not HTTP-header-safe): {e}"))
             })?;
             request
                 .headers_mut()
@@ -99,12 +99,12 @@ impl WsTransport {
             tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request))
                 .await
                 .map_err(|_| {
-                    crab_common::Error::Other(format!(
+                    crab_core::Error::Other(format!(
                         "WebSocket connection to {url} timed out after {CONNECT_TIMEOUT:?}"
                     ))
                 })?
                 .map_err(|e| {
-                    crab_common::Error::Other(format!("WebSocket connection to {url} failed: {e}"))
+                    crab_core::Error::Other(format!("WebSocket connection to {url} failed: {e}"))
                 })?;
 
         tracing::debug!(url, "WebSocket connected");
@@ -192,7 +192,7 @@ impl WsTransport {
     }
 
     /// Send a text frame over the WebSocket.
-    async fn send_text(&self, text: &str) -> crab_common::Result<()> {
+    async fn send_text(&self, text: &str) -> crab_core::Result<()> {
         use futures::SinkExt as _;
 
         self.writer
@@ -201,7 +201,7 @@ impl WsTransport {
             .send(Message::Text(text.to_string().into()))
             .await
             .map_err(|e| {
-                crab_common::Error::Other(format!(
+                crab_core::Error::Other(format!(
                     "failed to send WebSocket message to {}: {e}",
                     self.url
                 ))
@@ -213,7 +213,7 @@ impl Transport for WsTransport {
     fn send(
         &self,
         req: JsonRpcRequest,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>> {
         Box::pin(async move {
             let id = req.id;
 
@@ -224,7 +224,7 @@ impl Transport for WsTransport {
             }
 
             let json = serde_json::to_string(&req).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize request: {e}"))
+                crab_core::Error::Other(format!("failed to serialize request: {e}"))
             })?;
 
             tracing::debug!(method = %req.method, id, url = %self.url, "sending WS request");
@@ -232,7 +232,7 @@ impl Transport for WsTransport {
 
             // Wait for the response from the reader task.
             rx.await.map_err(|_| {
-                crab_common::Error::Other(
+                crab_core::Error::Other(
                     "WebSocket connection closed before response received".into(),
                 )
             })
@@ -243,21 +243,21 @@ impl Transport for WsTransport {
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
         let notif = JsonRpcNotification::new(
             method.to_string(),
             if params.is_null() { None } else { Some(params) },
         );
         Box::pin(async move {
             let json = serde_json::to_string(&notif).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize notification: {e}"))
+                crab_core::Error::Other(format!("failed to serialize notification: {e}"))
             })?;
             tracing::debug!(method = notif.method, url = %self.url, "sending WS notification");
             self.send_text(&json).await
         })
     }
 
-    fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+    fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
         Box::pin(async move {
             use futures::SinkExt as _;
 

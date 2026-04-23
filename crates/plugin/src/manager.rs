@@ -147,18 +147,18 @@ impl PluginManager {
     ///
     /// Copies the plugin directory into the first search dir (global).
     /// Returns the loaded manifest on success.
-    pub fn install_from_path(&mut self, source: &Path) -> crab_common::Result<PluginManifest> {
+    pub fn install_from_path(&mut self, source: &Path) -> crab_core::Result<PluginManifest> {
         let manifest_path = source.join("plugin.json");
         let manifest = load_manifest(&manifest_path)?;
 
         let target_dir = self
             .search_dirs
             .first()
-            .ok_or_else(|| crab_common::Error::Other("no plugin search directory".into()))?
+            .ok_or_else(|| crab_core::Error::Other("no plugin search directory".into()))?
             .join(&manifest.name);
 
         if target_dir.exists() {
-            return Err(crab_common::Error::Other(format!(
+            return Err(crab_core::Error::Other(format!(
                 "plugin '{}' already installed at {}",
                 manifest.name,
                 target_dir.display()
@@ -181,17 +181,17 @@ impl PluginManager {
     }
 
     /// Remove a plugin by name. Deletes from disk.
-    pub fn remove(&mut self, name: &str) -> crab_common::Result<()> {
+    pub fn remove(&mut self, name: &str) -> crab_core::Result<()> {
         let entry = self
             .plugins
             .remove(name)
-            .ok_or_else(|| crab_common::Error::Other(format!("plugin '{name}' not found")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("plugin '{name}' not found")))?;
 
         if let Some(dir) = &entry.manifest.source_dir
             && dir.exists()
         {
             std::fs::remove_dir_all(dir).map_err(|e| {
-                crab_common::Error::Other(format!(
+                crab_core::Error::Other(format!(
                     "failed to remove plugin directory {}: {e}",
                     dir.display()
                 ))
@@ -202,21 +202,21 @@ impl PluginManager {
 }
 
 /// Recursively copy a directory.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> crab_common::Result<()> {
+fn copy_dir_recursive(src: &Path, dst: &Path) -> crab_core::Result<()> {
     std::fs::create_dir_all(dst)
-        .map_err(|e| crab_common::Error::Other(format!("mkdir {}: {e}", dst.display())))?;
+        .map_err(|e| crab_core::Error::Other(format!("mkdir {}: {e}", dst.display())))?;
 
     for entry in std::fs::read_dir(src)
-        .map_err(|e| crab_common::Error::Other(format!("read_dir {}: {e}", src.display())))?
+        .map_err(|e| crab_core::Error::Other(format!("read_dir {}: {e}", src.display())))?
     {
-        let entry = entry.map_err(|e| crab_common::Error::Other(format!("dir entry: {e}")))?;
+        let entry = entry.map_err(|e| crab_core::Error::Other(format!("dir entry: {e}")))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path).map_err(|e| {
-                crab_common::Error::Other(format!(
+                crab_core::Error::Other(format!(
                     "copy {} -> {}: {e}",
                     src_path.display(),
                     dst_path.display()

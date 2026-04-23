@@ -95,12 +95,12 @@ impl WasmPluginInstance {
     ///
     /// For simpler plugins that don't use the memory protocol, we also
     /// support a no-arg `plugin_execute` that returns an i32 status code.
-    pub fn execute(&self, input: &str) -> crab_common::Result<PluginOutput> {
+    pub fn execute(&self, input: &str) -> crab_core::Result<PluginOutput> {
         let mut store = self.create_store()?;
         let linker = self.create_linker()?;
         let instance = linker
             .instantiate(&mut store, &self.module)
-            .map_err(|e| crab_common::Error::Other(format!("wasm instantiate failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("wasm instantiate failed: {e}")))?;
 
         // Try the memory-based protocol first: plugin_execute(ptr, len) -> ptr
         if let Some(exec_fn) = instance
@@ -118,14 +118,14 @@ impl WasmPluginInstance {
         {
             let status = exec_fn
                 .call(&mut store, ())
-                .map_err(|e| crab_common::Error::Other(format!("wasm execute failed: {e}")))?;
+                .map_err(|e| crab_core::Error::Other(format!("wasm execute failed: {e}")))?;
             return Ok(PluginOutput {
                 status,
                 output: String::new(),
             });
         }
 
-        Err(crab_common::Error::Other(
+        Err(crab_core::Error::Other(
             "wasm plugin does not export 'plugin_execute' function".into(),
         ))
     }
@@ -137,34 +137,32 @@ impl WasmPluginInstance {
         instance: &wasmtime::Instance,
         exec_fn: wasmtime::TypedFunc<(i32, i32), i32>,
         input: &str,
-    ) -> crab_common::Result<PluginOutput> {
+    ) -> crab_core::Result<PluginOutput> {
         // Get the plugin's memory export
         let memory = instance
             .get_memory(store.as_context_mut(), "memory")
             .ok_or_else(|| {
-                crab_common::Error::Other("wasm plugin does not export 'memory'".into())
+                crab_core::Error::Other("wasm plugin does not export 'memory'".into())
             })?;
 
         // Allocate space in guest memory for input via `plugin_alloc(size) -> ptr`
         let alloc_fn = instance
             .get_typed_func::<i32, i32>(store.as_context_mut(), "plugin_alloc")
             .map_err(|e| {
-                crab_common::Error::Other(format!(
-                    "wasm plugin does not export 'plugin_alloc': {e}"
-                ))
+                crab_core::Error::Other(format!("wasm plugin does not export 'plugin_alloc': {e}"))
             })?;
 
         let input_bytes = input.as_bytes();
         let input_ptr = alloc_fn
             .call(&mut *store, input_bytes.len() as i32)
-            .map_err(|e| crab_common::Error::Other(format!("wasm alloc failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("wasm alloc failed: {e}")))?;
 
         // Write input into guest memory
         let mem_data = memory.data_mut(&mut *store);
         let start = input_ptr as usize;
         let end = start + input_bytes.len();
         if end > mem_data.len() {
-            return Err(crab_common::Error::Other(
+            return Err(crab_core::Error::Other(
                 "wasm input exceeds guest memory".into(),
             ));
         }
@@ -173,7 +171,7 @@ impl WasmPluginInstance {
         // Call plugin_execute(ptr, len) -> result_ptr
         let result_ptr = exec_fn
             .call(&mut *store, (input_ptr, input_bytes.len() as i32))
-            .map_err(|e| crab_common::Error::Other(format!("wasm execute failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("wasm execute failed: {e}")))?;
 
         // Read the result: a length-prefixed string at result_ptr
         // Format: [len: i32][data: u8 * len]
@@ -201,7 +199,7 @@ impl WasmPluginInstance {
     }
 
     /// Create a new Store with sandbox constraints.
-    fn create_store(&self) -> crab_common::Result<Store<HostState>> {
+    fn create_store(&self) -> crab_core::Result<Store<HostState>> {
         let mut store = Store::new(
             &self.engine,
             HostState {
@@ -212,14 +210,14 @@ impl WasmPluginInstance {
         if let Some(fuel) = self.sandbox_config.max_fuel {
             store
                 .set_fuel(fuel)
-                .map_err(|e| crab_common::Error::Other(format!("failed to set wasm fuel: {e}")))?;
+                .map_err(|e| crab_core::Error::Other(format!("failed to set wasm fuel: {e}")))?;
         }
 
         Ok(store)
     }
 
     /// Create a Linker with host functions.
-    fn create_linker(&self) -> crab_common::Result<Linker<HostState>> {
+    fn create_linker(&self) -> crab_core::Result<Linker<HostState>> {
         let mut linker = Linker::new(&self.engine);
 
         // Provide a minimal host_log function for debugging
@@ -241,7 +239,7 @@ impl WasmPluginInstance {
                     }
                 },
             )
-            .map_err(|e| crab_common::Error::Other(format!("failed to define host_log: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to define host_log: {e}")))?;
 
         // Provide host_output for plugins to write output
         linker
@@ -262,7 +260,7 @@ impl WasmPluginInstance {
                     }
                 },
             )
-            .map_err(|e| crab_common::Error::Other(format!("failed to define host_output: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to define host_output: {e}")))?;
 
         Ok(linker)
     }
@@ -297,19 +295,19 @@ impl std::fmt::Debug for WasmRuntime {
 
 impl WasmRuntime {
     /// Create a new runtime with default sandbox settings.
-    pub fn new() -> crab_common::Result<Self> {
+    pub fn new() -> crab_core::Result<Self> {
         Self::with_config(WasmSandboxConfig::default())
     }
 
     /// Create a new runtime with custom sandbox config.
-    pub fn with_config(sandbox_config: WasmSandboxConfig) -> crab_common::Result<Self> {
+    pub fn with_config(sandbox_config: WasmSandboxConfig) -> crab_core::Result<Self> {
         let mut config = wasmtime::Config::new();
         config.consume_fuel(sandbox_config.max_fuel.is_some());
         // Limit memory via the memory configuration
         config.memory_guaranteed_dense_image_size(0);
 
         let engine = Engine::new(&config)
-            .map_err(|e| crab_common::Error::Other(format!("failed to create wasm engine: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to create wasm engine: {e}")))?;
 
         Ok(Self {
             engine: Arc::new(engine),
@@ -323,9 +321,9 @@ impl WasmRuntime {
         &mut self,
         wasm_path: &Path,
         manifest: Option<PluginManifest>,
-    ) -> crab_common::Result<usize> {
+    ) -> crab_core::Result<usize> {
         let wasm_bytes = std::fs::read(wasm_path).map_err(|e| {
-            crab_common::Error::Other(format!(
+            crab_core::Error::Other(format!(
                 "failed to read wasm file {}: {e}",
                 wasm_path.display()
             ))
@@ -339,10 +337,9 @@ impl WasmRuntime {
         &mut self,
         wasm_bytes: &[u8],
         manifest: Option<PluginManifest>,
-    ) -> crab_common::Result<usize> {
-        let module = Module::new(&self.engine, wasm_bytes).map_err(|e| {
-            crab_common::Error::Other(format!("failed to compile wasm module: {e}"))
-        })?;
+    ) -> crab_core::Result<usize> {
+        let module = Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| crab_core::Error::Other(format!("failed to compile wasm module: {e}")))?;
 
         let name = manifest
             .as_ref()
@@ -387,10 +384,11 @@ impl WasmRuntime {
     }
 
     /// Execute a plugin by index.
-    pub fn execute_plugin(&self, index: usize, input: &str) -> crab_common::Result<PluginOutput> {
-        let plugin = self.plugins.get(index).ok_or_else(|| {
-            crab_common::Error::Other(format!("plugin index {index} out of range"))
-        })?;
+    pub fn execute_plugin(&self, index: usize, input: &str) -> crab_core::Result<PluginOutput> {
+        let plugin = self
+            .plugins
+            .get(index)
+            .ok_or_else(|| crab_core::Error::Other(format!("plugin index {index} out of range")))?;
         plugin.execute(input)
     }
 
@@ -401,7 +399,7 @@ impl WasmRuntime {
     pub fn discover_and_load(
         &mut self,
         plugins_dir: &Path,
-    ) -> Vec<(String, crab_common::Result<usize>)> {
+    ) -> Vec<(String, crab_core::Result<usize>)> {
         let manifests = crate::manifest::discover_plugins(plugins_dir);
         let mut results = Vec::new();
 
@@ -416,13 +414,13 @@ impl WasmRuntime {
                     if wasm_path.exists() {
                         self.load_plugin(&wasm_path, Some(manifest))
                     } else {
-                        Err(crab_common::Error::Other(format!(
+                        Err(crab_core::Error::Other(format!(
                             "wasm entry point not found: {}",
                             wasm_path.display()
                         )))
                     }
                 }
-                None => Err(crab_common::Error::Other(
+                None => Err(crab_core::Error::Other(
                     "plugin manifest has no source directory".into(),
                 )),
             };

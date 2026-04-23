@@ -51,7 +51,7 @@ impl Sandbox for LandlockSandbox {
         &self,
         policy: &SandboxPolicy,
         _cmd: &mut tokio::process::Command,
-    ) -> crab_common::Result<SandboxResult> {
+    ) -> crab_core::Result<SandboxResult> {
         if !self.is_available() {
             return Ok(SandboxResult {
                 applied: false,

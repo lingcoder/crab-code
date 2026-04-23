@@ -198,7 +198,7 @@ fn merge_maps(
 /// Return the global config directory: `~/.crab/`.
 #[must_use]
 pub fn global_config_dir() -> PathBuf {
-    crab_common::utils::path::home_dir().join(CONFIG_DIR)
+    crab_core::common::utils::path::home_dir().join(CONFIG_DIR)
 }
 
 /// Return the project config directory: `<project_dir>/.crab/`.
@@ -211,24 +211,24 @@ pub fn project_config_dir(project_dir: &Path) -> PathBuf {
 ///
 /// Applies schema migrations (if needed) before deserialization so that
 /// older settings files are transparently upgraded.
-fn parse_jsonc(content: &str) -> crab_common::Result<Settings> {
+fn parse_jsonc(content: &str) -> crab_core::Result<Settings> {
     let mut json = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
         content,
         &jsonc_parser::ParseOptions::default(),
     )
-    .map_err(|e| crab_common::Error::Config(format!("JSONC parse error: {e}")))?;
+    .map_err(|e| crab_core::Error::Config(format!("JSONC parse error: {e}")))?;
     crate::migration::migrate_settings(&mut json);
     serde_json::from_value(json)
-        .map_err(|e| crab_common::Error::Config(format!("settings deserialization error: {e}")))
+        .map_err(|e| crab_core::Error::Config(format!("settings deserialization error: {e}")))
 }
 
 /// Load settings from a specific JSON/JSONC file.
 /// Returns `Ok(Settings::default())` if the file does not exist.
-fn load_from_file(path: &Path) -> crab_common::Result<Settings> {
+fn load_from_file(path: &Path) -> crab_core::Result<Settings> {
     match std::fs::read_to_string(path) {
         Ok(content) => parse_jsonc(&content),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
-        Err(e) => Err(crab_common::Error::Config(format!(
+        Err(e) => Err(crab_core::Error::Config(format!(
             "failed to read {}: {e}",
             path.display()
         ))),
@@ -237,28 +237,27 @@ fn load_from_file(path: &Path) -> crab_common::Result<Settings> {
 
 /// Load settings from an explicit file path. Unlike the internal `load_from_file`,
 /// this returns an error if the file does not exist.
-pub fn load_settings_from_path(path: &Path) -> crab_common::Result<Settings> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        crab_common::Error::Config(format!("failed to read {}: {e}", path.display()))
-    })?;
+pub fn load_settings_from_path(path: &Path) -> crab_core::Result<Settings> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| crab_core::Error::Config(format!("failed to read {}: {e}", path.display())))?;
     parse_jsonc(&content)
 }
 
 /// Load global settings from `~/.crab/settings.json`.
-pub fn load_global() -> crab_common::Result<Settings> {
+pub fn load_global() -> crab_core::Result<Settings> {
     let path = global_config_dir().join(SETTINGS_FILE);
     load_from_file(&path)
 }
 
 /// Load project-level settings from `<project_dir>/.crab/settings.json`.
-pub fn load_project(project_dir: &Path) -> crab_common::Result<Settings> {
+pub fn load_project(project_dir: &Path) -> crab_core::Result<Settings> {
     let path = project_config_dir(project_dir).join(SETTINGS_FILE);
     load_from_file(&path)
 }
 
 /// Load project-local settings from `<project_dir>/.crab/settings.local.json`.
 /// This file is intended to be gitignored and holds per-developer overrides.
-pub fn load_local(project_dir: &Path) -> crab_common::Result<Settings> {
+pub fn load_local(project_dir: &Path) -> crab_core::Result<Settings> {
     let path = project_config_dir(project_dir).join("settings.local.json");
     load_from_file(&path)
 }
@@ -275,7 +274,7 @@ pub fn load_local(project_dir: &Path) -> crab_common::Result<Settings> {
 ///
 /// Provider-specific API key env vars (used when `CRAB_API_KEY` is not set):
 /// - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`
-pub fn load_merged_settings(project_dir: Option<&PathBuf>) -> crab_common::Result<Settings> {
+pub fn load_merged_settings(project_dir: Option<&PathBuf>) -> crab_core::Result<Settings> {
     load_merged_settings_with_env(project_dir, |k| std::env::var(k))
 }
 
@@ -310,7 +309,7 @@ impl SettingSource {
 pub fn load_merged_settings_with_sources(
     project_dir: Option<&PathBuf>,
     sources: Option<&[SettingSource]>,
-) -> crab_common::Result<Settings> {
+) -> crab_core::Result<Settings> {
     load_merged_settings_with_env_and_sources(project_dir, |k| std::env::var(k), sources)
 }
 
@@ -324,7 +323,7 @@ pub fn load_merged_settings_with_sources(
 pub fn load_merged_settings_validated(
     project_dir: Option<&PathBuf>,
     sources: Option<&[SettingSource]>,
-) -> crab_common::Result<(Settings, Vec<crate::validation::ValidationError>)> {
+) -> crab_core::Result<(Settings, Vec<crate::validation::ValidationError>)> {
     let settings = load_merged_settings_with_sources(project_dir, sources)?;
     let warnings =
         crate::validation::validate_all_settings_files(project_dir.map(PathBuf::as_path));
@@ -338,7 +337,7 @@ pub fn load_merged_settings_validated(
 fn load_merged_settings_with_env<F>(
     project_dir: Option<&PathBuf>,
     env_lookup: F,
-) -> crab_common::Result<Settings>
+) -> crab_core::Result<Settings>
 where
     F: Fn(&str) -> std::result::Result<String, std::env::VarError>,
 {
@@ -350,7 +349,7 @@ fn load_merged_settings_with_env_and_sources<F>(
     project_dir: Option<&PathBuf>,
     env_lookup: F,
     sources: Option<&[SettingSource]>,
-) -> crab_common::Result<Settings>
+) -> crab_core::Result<Settings>
 where
     F: Fn(&str) -> std::result::Result<String, std::env::VarError>,
 {

@@ -121,7 +121,7 @@ impl PermissionRuleSet {
     /// Default global permissions path: `~/.crab/permissions.json`.
     #[must_use]
     pub fn global_path() -> PathBuf {
-        crab_common::utils::path::home_dir()
+        crab_core::common::utils::path::home_dir()
             .join(".crab")
             .join("permissions.json")
     }
@@ -242,7 +242,7 @@ impl PermissionRuleSet {
 
     /// Load permanent rules (and audit log) from disk.
     /// Missing file is treated as empty. Session rules are not affected.
-    pub fn load(&mut self) -> crab_common::Result<()> {
+    pub fn load(&mut self) -> crab_core::Result<()> {
         let store = load_permission_store(&self.store_path)?;
         // Merge loaded permanent rules, keeping existing session rules
         let session_rules: Vec<PermissionRule> = self
@@ -258,7 +258,7 @@ impl PermissionRuleSet {
 
     /// Save permanent rules and audit log to disk.
     /// Session-scoped rules are excluded from the persisted file.
-    pub fn save(&self) -> crab_common::Result<()> {
+    pub fn save(&self) -> crab_core::Result<()> {
         let store = PermissionStore {
             rules: self
                 .rules
@@ -283,13 +283,13 @@ impl PermissionRuleSet {
 
 /// Load a `PermissionStore` from a JSON file.
 /// Returns `Ok(default)` if the file does not exist.
-pub fn load_permission_store(path: &Path) -> crab_common::Result<PermissionStore> {
+pub fn load_permission_store(path: &Path) -> crab_core::Result<PermissionStore> {
     match std::fs::read_to_string(path) {
         Ok(content) => serde_json::from_str(&content).map_err(|e| {
-            crab_common::Error::Config(format!("failed to parse {}: {e}", path.display()))
+            crab_core::Error::Config(format!("failed to parse {}: {e}", path.display()))
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PermissionStore::default()),
-        Err(e) => Err(crab_common::Error::Config(format!(
+        Err(e) => Err(crab_core::Error::Config(format!(
             "failed to read {}: {e}",
             path.display()
         ))),
@@ -297,16 +297,16 @@ pub fn load_permission_store(path: &Path) -> crab_common::Result<PermissionStore
 }
 
 /// Save a `PermissionStore` to a JSON file, creating parent directories.
-pub fn save_permission_store(path: &Path, store: &PermissionStore) -> crab_common::Result<()> {
+pub fn save_permission_store(path: &Path, store: &PermissionStore) -> crab_core::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            crab_common::Error::Config(format!("failed to create {}: {e}", parent.display()))
+            crab_core::Error::Config(format!("failed to create {}: {e}", parent.display()))
         })?;
     }
     let json = serde_json::to_string_pretty(store)
-        .map_err(|e| crab_common::Error::Config(format!("failed to serialize permissions: {e}")))?;
+        .map_err(|e| crab_core::Error::Config(format!("failed to serialize permissions: {e}")))?;
     std::fs::write(path, json)
-        .map_err(|e| crab_common::Error::Config(format!("failed to write {}: {e}", path.display())))
+        .map_err(|e| crab_core::Error::Config(format!("failed to write {}: {e}", path.display())))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

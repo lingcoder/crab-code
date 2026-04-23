@@ -93,7 +93,7 @@ impl SessionHistory {
     }
 
     /// Ensure the base directory exists.
-    fn ensure_dir(&self) -> crab_common::Result<()> {
+    fn ensure_dir(&self) -> crab_core::Result<()> {
         std::fs::create_dir_all(&self.base_dir)?;
         Ok(())
     }
@@ -104,7 +104,7 @@ impl SessionHistory {
     }
 
     /// Save a session transcript to disk.
-    pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_common::Result<()> {
+    pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_core::Result<()> {
         self.save_with_metadata(session_id, None, None, messages)
     }
 
@@ -115,7 +115,7 @@ impl SessionHistory {
         name: Option<&str>,
         working_dir: Option<&str>,
         messages: &[Message],
-    ) -> crab_common::Result<()> {
+    ) -> crab_core::Result<()> {
         self.ensure_dir()?;
         let file = SessionFile {
             session_id: session_id.to_string(),
@@ -124,25 +124,25 @@ impl SessionHistory {
             messages: messages.to_vec(),
         };
         let json = serde_json::to_string_pretty(&file)
-            .map_err(|e| crab_common::Error::Other(format!("serialize session: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("serialize session: {e}")))?;
         std::fs::write(self.session_path(session_id), json)?;
         Ok(())
     }
 
     /// Load a session transcript from disk. Returns `None` if the file doesn't exist.
-    pub fn load(&self, session_id: &str) -> crab_common::Result<Option<Vec<Message>>> {
+    pub fn load(&self, session_id: &str) -> crab_core::Result<Option<Vec<Message>>> {
         let path = self.session_path(session_id);
         if !path.exists() {
             return Ok(None);
         }
         let data = std::fs::read_to_string(&path)?;
         let file: SessionFile = serde_json::from_str(&data)
-            .map_err(|e| crab_common::Error::Other(format!("parse session: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
         Ok(Some(file.messages))
     }
 
     /// List all saved session IDs (sorted by name).
-    pub fn list_sessions(&self) -> crab_common::Result<Vec<String>> {
+    pub fn list_sessions(&self) -> crab_core::Result<Vec<String>> {
         if !self.base_dir.exists() {
             return Ok(Vec::new());
         }
@@ -161,7 +161,7 @@ impl SessionHistory {
 
     /// List all sessions with metadata (name, `working_dir`, message count, mtime).
     /// Sorted by modification time (newest first).
-    pub fn list_sessions_with_metadata(&self) -> crab_common::Result<Vec<SessionMetadata>> {
+    pub fn list_sessions_with_metadata(&self) -> crab_core::Result<Vec<SessionMetadata>> {
         if !self.base_dir.exists() {
             return Ok(Vec::new());
         }
@@ -195,7 +195,7 @@ impl SessionHistory {
     }
 
     /// Delete a session file.
-    pub fn delete(&self, session_id: &str) -> crab_common::Result<()> {
+    pub fn delete(&self, session_id: &str) -> crab_core::Result<()> {
         let path = self.session_path(session_id);
         if path.exists() {
             std::fs::remove_file(&path)?;
@@ -238,7 +238,7 @@ impl SessionHistory {
         &self,
         session_id: &str,
         query: &str,
-    ) -> crab_common::Result<Vec<SearchResult>> {
+    ) -> crab_core::Result<Vec<SearchResult>> {
         let Some(messages) = self.load(session_id)? else {
             return Ok(Vec::new());
         };
@@ -247,7 +247,7 @@ impl SessionHistory {
 
     /// Search all sessions for a keyword (case-insensitive).
     /// Returns matches across all sessions, ordered by session ID.
-    pub fn search_all(&self, query: &str) -> crab_common::Result<Vec<SearchResult>> {
+    pub fn search_all(&self, query: &str) -> crab_core::Result<Vec<SearchResult>> {
         let session_ids = self.list_sessions()?;
         let mut all_results = Vec::new();
         for sid in &session_ids {
@@ -265,7 +265,7 @@ impl SessionHistory {
         &self,
         session_id: &str,
         format: ExportFormat,
-    ) -> crab_common::Result<Option<String>> {
+    ) -> crab_core::Result<Option<String>> {
         let Some(messages) = self.load(session_id)? else {
             return Ok(None);
         };
@@ -278,7 +278,7 @@ impl SessionHistory {
                     messages,
                 };
                 serde_json::to_string_pretty(&file)
-                    .map_err(|e| crab_common::Error::Other(format!("export json: {e}")))?
+                    .map_err(|e| crab_core::Error::Other(format!("export json: {e}")))?
             }
             ExportFormat::Markdown => export_markdown(session_id, &messages),
         };
@@ -289,7 +289,7 @@ impl SessionHistory {
 
     /// Compute statistics for a single session.
     /// Returns `None` if the session doesn't exist.
-    pub fn stats(&self, session_id: &str) -> crab_common::Result<Option<SessionStats>> {
+    pub fn stats(&self, session_id: &str) -> crab_core::Result<Option<SessionStats>> {
         let Some(messages) = self.load(session_id)? else {
             return Ok(None);
         };
@@ -303,10 +303,10 @@ impl SessionHistory {
     }
 
     /// Append a single message as one JSONL line (crash-resilient).
-    pub fn append_jsonl(&self, session_id: &str, msg: &Message) -> crab_common::Result<()> {
+    pub fn append_jsonl(&self, session_id: &str, msg: &Message) -> crab_core::Result<()> {
         self.ensure_dir()?;
         let mut line = serde_json::to_string(msg)
-            .map_err(|e| crab_common::Error::Other(format!("serialize message: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("serialize message: {e}")))?;
         line.push('\n');
 
         let mut file = std::fs::OpenOptions::new()
@@ -320,7 +320,7 @@ impl SessionHistory {
     /// Load messages from a JSONL transcript. Returns `None` if the file
     /// doesn't exist. Silently skips malformed lines (partial writes from
     /// crashes).
-    pub fn load_jsonl(&self, session_id: &str) -> crab_common::Result<Option<Vec<Message>>> {
+    pub fn load_jsonl(&self, session_id: &str) -> crab_core::Result<Option<Vec<Message>>> {
         let path = self.jsonl_path(session_id);
         if !path.exists() {
             return Ok(None);

@@ -57,11 +57,11 @@ pub enum DaemonResponse {
 }
 
 /// Encode a message as length-prefixed JSON bytes.
-pub fn encode_message<T: Serialize>(msg: &T) -> crab_common::Result<Vec<u8>> {
+pub fn encode_message<T: Serialize>(msg: &T) -> crab_core::Result<Vec<u8>> {
     let json = serde_json::to_vec(msg)
-        .map_err(|e| crab_common::Error::Other(format!("IPC encode error: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("IPC encode error: {e}")))?;
     let len = u32::try_from(json.len())
-        .map_err(|_| crab_common::Error::Other("IPC message too large".into()))?;
+        .map_err(|_| crab_core::Error::Other("IPC message too large".into()))?;
     let mut buf = Vec::with_capacity(4 + json.len());
     buf.extend_from_slice(&len.to_le_bytes());
     buf.extend_from_slice(&json);
@@ -74,7 +74,7 @@ pub fn encode_message<T: Serialize>(msg: &T) -> crab_common::Result<Vec<u8>> {
 /// Returns `Ok(None)` if the buffer doesn't contain a complete message yet.
 pub fn decode_message<T: for<'de> Deserialize<'de>>(
     buf: &[u8],
-) -> crab_common::Result<Option<(T, usize)>> {
+) -> crab_core::Result<Option<(T, usize)>> {
     if buf.len() < 4 {
         return Ok(None);
     }
@@ -84,7 +84,7 @@ pub fn decode_message<T: for<'de> Deserialize<'de>>(
         return Ok(None);
     }
     let msg: T = serde_json::from_slice(&buf[4..total])
-        .map_err(|e| crab_common::Error::Other(format!("IPC decode error: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("IPC decode error: {e}")))?;
     Ok(Some((msg, total)))
 }
 
@@ -150,13 +150,13 @@ mod tests {
     #[test]
     fn decode_incomplete_buffer_returns_none() {
         // Too short for length header
-        let result: crab_common::Result<Option<(DaemonRequest, usize)>> = decode_message(&[0, 0]);
+        let result: crab_core::Result<Option<(DaemonRequest, usize)>> = decode_message(&[0, 0]);
         assert!(result.unwrap().is_none());
 
         // Length says 100 bytes but only 10 available
         let mut buf = vec![100, 0, 0, 0]; // len = 100
         buf.extend_from_slice(&[0u8; 10]);
-        let result: crab_common::Result<Option<(DaemonRequest, usize)>> = decode_message(&buf);
+        let result: crab_core::Result<Option<(DaemonRequest, usize)>> = decode_message(&buf);
         assert!(result.unwrap().is_none());
     }
 
@@ -164,7 +164,7 @@ mod tests {
     fn decode_invalid_json_returns_error() {
         let mut buf = vec![5, 0, 0, 0]; // len = 5
         buf.extend_from_slice(b"hello"); // not valid JSON
-        let result: crab_common::Result<Option<(DaemonRequest, usize)>> = decode_message(&buf);
+        let result: crab_core::Result<Option<(DaemonRequest, usize)>> = decode_message(&buf);
         assert!(result.is_err());
     }
 

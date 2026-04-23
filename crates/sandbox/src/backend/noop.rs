@@ -34,7 +34,7 @@ impl Sandbox for NoopSandbox {
         &self,
         policy: &SandboxPolicy,
         _cmd: &mut tokio::process::Command,
-    ) -> crab_common::Result<SandboxResult> {
+    ) -> crab_core::Result<SandboxResult> {
         Ok(SandboxResult {
             applied: false,
             description: format!(

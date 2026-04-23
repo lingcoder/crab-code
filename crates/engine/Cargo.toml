@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Raw query loop for Crab Code — extracted from crab-agent in v2.3"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-api.workspace = true
 crab-session.workspace = true

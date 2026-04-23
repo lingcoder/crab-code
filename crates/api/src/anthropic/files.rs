@@ -84,7 +84,7 @@ impl AnthropicFilesClient {
     /// or malformed response.
     pub async fn upload(&self, path: &Path) -> Result<FileUploadResponse> {
         let bytes = tokio::fs::read(path).await.map_err(|e| {
-            ApiError::Common(crab_common::Error::Other(format!(
+            ApiError::Common(crab_core::Error::Other(format!(
                 "files/upload: read {} failed: {e}",
                 path.display()
             )))
@@ -118,7 +118,7 @@ impl AnthropicFilesClient {
             .file_name(filename.to_string())
             .mime_str(mime)
             .map_err(|e| {
-                ApiError::Common(crab_common::Error::Other(format!(
+                ApiError::Common(crab_core::Error::Other(format!(
                     "files/upload: invalid mime `{mime}`: {e}"
                 )))
             })?;
@@ -141,26 +141,26 @@ impl AnthropicFilesClient {
         }
 
         let resp = builder.send().await.map_err(|e| {
-            ApiError::Common(crab_common::Error::Other(format!(
+            ApiError::Common(crab_core::Error::Other(format!(
                 "files/upload: POST failed: {e}"
             )))
         })?;
 
         let status = resp.status();
         let body = resp.text().await.map_err(|e| {
-            ApiError::Common(crab_common::Error::Other(format!(
+            ApiError::Common(crab_core::Error::Other(format!(
                 "files/upload: read body failed: {e}"
             )))
         })?;
 
         if !status.is_success() {
-            return Err(ApiError::Common(crab_common::Error::Other(format!(
+            return Err(ApiError::Common(crab_core::Error::Other(format!(
                 "files/upload: HTTP {status}: {body}"
             ))));
         }
 
         serde_json::from_str::<FileUploadResponse>(&body).map_err(|e| {
-            ApiError::Common(crab_common::Error::Other(format!(
+            ApiError::Common(crab_core::Error::Other(format!(
                 "files/upload: parse response failed: {e}; body: {body}"
             )))
         })
@@ -193,14 +193,14 @@ impl AnthropicFilesClient {
         }
 
         let resp = builder.send().await.map_err(|e| {
-            ApiError::Common(crab_common::Error::Other(format!(
+            ApiError::Common(crab_core::Error::Other(format!(
                 "files/delete: DELETE failed: {e}"
             )))
         })?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ApiError::Common(crab_common::Error::Other(format!(
+            return Err(ApiError::Common(crab_core::Error::Other(format!(
                 "files/delete: HTTP {status}: {body}"
             ))));
         }

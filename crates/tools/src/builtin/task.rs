@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -440,7 +440,7 @@ impl Tool for TaskUpdateTool {
                 .as_str()
                 .map(|s| serde_json::from_value::<TaskStatus>(Value::String(s.into())))
                 .transpose()
-                .map_err(|e| crab_common::Error::Tool(format!("invalid status: {e}")))?;
+                .map_err(|e| crab_core::Error::Tool(format!("invalid status: {e}")))?;
             let subject = input["subject"].as_str().map(String::from);
             let description = input["description"].as_str().map(String::from);
             let owner = input["owner"].as_str().map(String::from);
@@ -525,7 +525,7 @@ impl Tool for TaskStopTool {
                 .get("task_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: task_id".into())
+                    crab_core::Error::Other("missing required parameter: task_id".into())
                 })?;
 
             if task_id.trim().is_empty() {
@@ -597,7 +597,7 @@ impl Tool for TaskOutputTool {
                 .get("task_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: task_id".into())
+                    crab_core::Error::Other("missing required parameter: task_id".into())
                 })?;
 
             if task_id.trim().is_empty() {

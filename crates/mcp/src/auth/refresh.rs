@@ -18,7 +18,7 @@ pub async fn refresh_token(
     http: &reqwest::Client,
     config: &OAuthConfig,
     refresh_token: &str,
-) -> crab_common::Result<AuthToken> {
+) -> crab_core::Result<AuthToken> {
     let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -42,17 +42,17 @@ pub async fn refresh_token(
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("refresh endpoint POST failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("refresh endpoint POST failed: {e}")))?;
 
     let (status, body) = quirks::normalise_response(resp).await?;
     if !status.is_success() {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "token refresh HTTP {status}: {body}"
         )));
     }
 
     let mut parsed: TokenResponse = serde_json::from_str(&body).map_err(|e| {
-        crab_common::Error::Other(format!(
+        crab_core::Error::Other(format!(
             "token refresh returned unparseable body: {e}; body was: {body}"
         ))
     })?;

@@ -45,12 +45,12 @@ impl McpClient {
     pub async fn connect(
         transport: Box<dyn Transport>,
         server_name: &str,
-    ) -> crab_common::Result<Self> {
+    ) -> crab_core::Result<Self> {
         let params = InitializeParams::default();
         let req = JsonRpcRequest::new(
             crate::protocol::method::INITIALIZE,
             Some(serde_json::to_value(&params).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize initialize params: {e}"))
+                crab_core::Error::Other(format!("failed to serialize initialize params: {e}"))
             })?),
         );
 
@@ -60,7 +60,7 @@ impl McpClient {
         let result_value = resp.into_result()?;
 
         let init_result: InitializeResult = serde_json::from_value(result_value).map_err(|e| {
-            crab_common::Error::Other(format!("failed to parse initialize result: {e}"))
+            crab_core::Error::Other(format!("failed to parse initialize result: {e}"))
         })?;
 
         tracing::info!(
@@ -105,7 +105,7 @@ impl McpClient {
         args: &[String],
         env: Option<&HashMap<String, String>>,
         server_name: &str,
-    ) -> crab_common::Result<Self> {
+    ) -> crab_core::Result<Self> {
         let mut cmd = tokio::process::Command::new(command);
         cmd.args(args)
             .stdin(Stdio::piped())
@@ -117,7 +117,7 @@ impl McpClient {
         }
 
         let transport = TokioChildProcess::new(cmd).map_err(|e| {
-            crab_common::Error::Other(format!("failed to spawn MCP child process: {e}"))
+            crab_core::Error::Other(format!("failed to spawn MCP child process: {e}"))
         })?;
 
         let service = rmcp::serve_client(rmcp::model::ClientInfo::default(), transport)
@@ -128,10 +128,7 @@ impl McpClient {
     }
 
     /// Connect to a remote MCP HTTP endpoint via the official `rmcp` SDK.
-    pub async fn connect_streamable_http(
-        url: &str,
-        server_name: &str,
-    ) -> crab_common::Result<Self> {
+    pub async fn connect_streamable_http(url: &str, server_name: &str) -> crab_core::Result<Self> {
         let transport = StreamableHttpClientTransport::from_uri(url.to_string());
         let service = rmcp::serve_client(rmcp::model::ClientInfo::default(), transport)
             .await
@@ -143,7 +140,7 @@ impl McpClient {
     async fn from_rmcp_service(
         service: RmcpClientService,
         server_name: &str,
-    ) -> crab_common::Result<Self> {
+    ) -> crab_core::Result<Self> {
         let peer_info = service.peer().peer_info().cloned().unwrap_or_default();
 
         tracing::info!(
@@ -183,7 +180,7 @@ impl McpClient {
         &self,
         name: &str,
         arguments: serde_json::Value,
-    ) -> crab_common::Result<ToolCallResult> {
+    ) -> crab_core::Result<ToolCallResult> {
         tracing::debug!(server = %self.server_name, tool = name, "calling MCP tool");
 
         match &self.backend {
@@ -195,7 +192,7 @@ impl McpClient {
     }
 
     /// List resources from the connected MCP server.
-    pub async fn list_resources(&self) -> crab_common::Result<Vec<McpResource>> {
+    pub async fn list_resources(&self) -> crab_core::Result<Vec<McpResource>> {
         match &self.backend {
             ClientBackend::Legacy(transport) => list_resources_legacy(&**transport).await,
             ClientBackend::Rmcp(service) => list_resources_rmcp(service.peer()).await,
@@ -203,7 +200,7 @@ impl McpClient {
     }
 
     /// Read a resource from the connected MCP server.
-    pub async fn read_resource(&self, uri: &str) -> crab_common::Result<ResourceReadResult> {
+    pub async fn read_resource(&self, uri: &str) -> crab_core::Result<ResourceReadResult> {
         match &self.backend {
             ClientBackend::Legacy(transport) => read_resource_legacy(&**transport, uri).await,
             ClientBackend::Rmcp(service) => read_resource_rmcp(service.peer(), uri).await,
@@ -211,7 +208,7 @@ impl McpClient {
     }
 
     /// List prompts from the connected MCP server.
-    pub async fn list_prompts(&self) -> crab_common::Result<Vec<McpPrompt>> {
+    pub async fn list_prompts(&self) -> crab_core::Result<Vec<McpPrompt>> {
         match &self.backend {
             ClientBackend::Legacy(transport) => list_prompts_legacy(&**transport).await,
             ClientBackend::Rmcp(service) => list_prompts_rmcp(service.peer()).await,
@@ -219,7 +216,7 @@ impl McpClient {
     }
 
     /// Refresh the tool list from the server.
-    pub async fn refresh_tools(&mut self) -> crab_common::Result<()> {
+    pub async fn refresh_tools(&mut self) -> crab_core::Result<()> {
         self.tools = match &self.backend {
             ClientBackend::Legacy(transport) => fetch_tools_legacy(&**transport).await?,
             ClientBackend::Rmcp(service) => fetch_tools_rmcp(service.peer()).await?,
@@ -228,12 +225,14 @@ impl McpClient {
     }
 
     /// Close the connection to the MCP server.
-    pub async fn close(&mut self) -> crab_common::Result<()> {
+    pub async fn close(&mut self) -> crab_core::Result<()> {
         match &mut self.backend {
             ClientBackend::Legacy(transport) => transport.close().await,
-            ClientBackend::Rmcp(service) => service.close().await.map(|_| ()).map_err(|e| {
-                crab_common::Error::Other(format!("failed to close rmcp service: {e}"))
-            }),
+            ClientBackend::Rmcp(service) => {
+                service.close().await.map(|_| ()).map_err(|e| {
+                    crab_core::Error::Other(format!("failed to close rmcp service: {e}"))
+                })
+            }
         }
     }
 
@@ -258,8 +257,8 @@ impl McpClient {
     }
 }
 
-fn map_rmcp_error(error: impl std::fmt::Display) -> crab_common::Error {
-    crab_common::Error::Other(format!("rmcp error: {error}"))
+fn map_rmcp_error(error: impl std::fmt::Display) -> crab_core::Error {
+    crab_core::Error::Other(format!("rmcp error: {error}"))
 }
 
 fn convert_server_capabilities(
@@ -358,17 +357,17 @@ fn convert_tool_result_content(content: rmcp::model::Content) -> ToolResultConte
     }
 }
 
-fn value_to_json_object(value: Value) -> crab_common::Result<Map<String, Value>> {
+fn value_to_json_object(value: Value) -> crab_core::Result<Map<String, Value>> {
     match value {
         Value::Object(map) => Ok(map),
         Value::Null => Ok(Map::new()),
-        other => Err(crab_common::Error::Other(format!(
+        other => Err(crab_core::Error::Other(format!(
             "MCP tool arguments must be a JSON object, got {other}"
         ))),
     }
 }
 
-async fn fetch_tools_legacy(transport: &dyn Transport) -> crab_common::Result<Vec<McpToolDef>> {
+async fn fetch_tools_legacy(transport: &dyn Transport) -> crab_core::Result<Vec<McpToolDef>> {
     let mut all_tools = Vec::new();
     let mut cursor: Option<String> = None;
 
@@ -382,10 +381,8 @@ async fn fetch_tools_legacy(transport: &dyn Transport) -> crab_common::Result<Ve
         let result_value = resp.into_result()?;
 
         if let Some(tools_arr) = result_value.get("tools") {
-            let tools: Vec<McpToolDef> =
-                serde_json::from_value(tools_arr.clone()).map_err(|e| {
-                    crab_common::Error::Other(format!("failed to parse tools list: {e}"))
-                })?;
+            let tools: Vec<McpToolDef> = serde_json::from_value(tools_arr.clone())
+                .map_err(|e| crab_core::Error::Other(format!("failed to parse tools list: {e}")))?;
             all_tools.extend(tools);
         }
 
@@ -404,7 +401,7 @@ async fn fetch_tools_legacy(transport: &dyn Transport) -> crab_common::Result<Ve
 
 async fn fetch_tools_rmcp(
     peer: &rmcp::Peer<rmcp::RoleClient>,
-) -> crab_common::Result<Vec<McpToolDef>> {
+) -> crab_core::Result<Vec<McpToolDef>> {
     peer.list_all_tools()
         .await
         .map_err(map_rmcp_error)
@@ -415,7 +412,7 @@ async fn call_tool_legacy(
     transport: &dyn Transport,
     name: &str,
     arguments: serde_json::Value,
-) -> crab_common::Result<ToolCallResult> {
+) -> crab_core::Result<ToolCallResult> {
     let params = ToolCallParams {
         name: name.to_string(),
         arguments,
@@ -424,7 +421,7 @@ async fn call_tool_legacy(
     let req = JsonRpcRequest::new(
         crate::protocol::method::TOOLS_CALL,
         Some(serde_json::to_value(&params).map_err(|e| {
-            crab_common::Error::Other(format!("failed to serialize tool call params: {e}"))
+            crab_core::Error::Other(format!("failed to serialize tool call params: {e}"))
         })?),
     );
 
@@ -432,14 +429,14 @@ async fn call_tool_legacy(
     let result_value = resp.into_result()?;
 
     serde_json::from_value(result_value)
-        .map_err(|e| crab_common::Error::Other(format!("failed to parse tool call result: {e}")))
+        .map_err(|e| crab_core::Error::Other(format!("failed to parse tool call result: {e}")))
 }
 
 async fn call_tool_rmcp(
     peer: &rmcp::Peer<rmcp::RoleClient>,
     name: &str,
     arguments: serde_json::Value,
-) -> crab_common::Result<ToolCallResult> {
+) -> crab_core::Result<ToolCallResult> {
     let params = rmcp::model::CallToolRequestParams::new(name.to_string())
         .with_arguments(value_to_json_object(arguments)?);
 
@@ -456,7 +453,7 @@ async fn call_tool_rmcp(
         })
 }
 
-async fn list_resources_legacy(transport: &dyn Transport) -> crab_common::Result<Vec<McpResource>> {
+async fn list_resources_legacy(transport: &dyn Transport) -> crab_core::Result<Vec<McpResource>> {
     let req = JsonRpcRequest::new(crate::protocol::method::RESOURCES_LIST, Some(json!({})));
     let resp = transport.send(req).await?;
     let result_value = resp.into_result()?;
@@ -469,7 +466,7 @@ async fn list_resources_legacy(transport: &dyn Transport) -> crab_common::Result
 
 async fn list_resources_rmcp(
     peer: &rmcp::Peer<rmcp::RoleClient>,
-) -> crab_common::Result<Vec<McpResource>> {
+) -> crab_core::Result<Vec<McpResource>> {
     peer.list_all_resources()
         .await
         .map_err(map_rmcp_error)
@@ -479,7 +476,7 @@ async fn list_resources_rmcp(
 async fn read_resource_legacy(
     transport: &dyn Transport,
     uri: &str,
-) -> crab_common::Result<ResourceReadResult> {
+) -> crab_core::Result<ResourceReadResult> {
     let params = ResourceReadParams {
         uri: uri.to_string(),
     };
@@ -487,22 +484,21 @@ async fn read_resource_legacy(
     let req = JsonRpcRequest::new(
         crate::protocol::method::RESOURCES_READ,
         Some(serde_json::to_value(&params).map_err(|e| {
-            crab_common::Error::Other(format!("failed to serialize resource read params: {e}"))
+            crab_core::Error::Other(format!("failed to serialize resource read params: {e}"))
         })?),
     );
 
     let resp = transport.send(req).await?;
     let result_value = resp.into_result()?;
 
-    serde_json::from_value(result_value).map_err(|e| {
-        crab_common::Error::Other(format!("failed to parse resource read result: {e}"))
-    })
+    serde_json::from_value(result_value)
+        .map_err(|e| crab_core::Error::Other(format!("failed to parse resource read result: {e}")))
 }
 
 async fn read_resource_rmcp(
     peer: &rmcp::Peer<rmcp::RoleClient>,
     uri: &str,
-) -> crab_common::Result<ResourceReadResult> {
+) -> crab_core::Result<ResourceReadResult> {
     let params = rmcp::model::ReadResourceRequestParams::new(uri.to_string());
     peer.read_resource(params)
         .await
@@ -516,7 +512,7 @@ async fn read_resource_rmcp(
         })
 }
 
-async fn list_prompts_legacy(transport: &dyn Transport) -> crab_common::Result<Vec<McpPrompt>> {
+async fn list_prompts_legacy(transport: &dyn Transport) -> crab_core::Result<Vec<McpPrompt>> {
     let req = JsonRpcRequest::new(crate::protocol::method::PROMPTS_LIST, Some(json!({})));
     let resp = transport.send(req).await?;
     let result_value = resp.into_result()?;
@@ -529,7 +525,7 @@ async fn list_prompts_legacy(transport: &dyn Transport) -> crab_common::Result<V
 
 async fn list_prompts_rmcp(
     peer: &rmcp::Peer<rmcp::RoleClient>,
-) -> crab_common::Result<Vec<McpPrompt>> {
+) -> crab_core::Result<Vec<McpPrompt>> {
     peer.list_all_prompts()
         .await
         .map_err(map_rmcp_error)
@@ -562,8 +558,7 @@ mod tests {
         fn send(
             &self,
             req: JsonRpcRequest,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>>
-        {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>> {
             Box::pin(async move {
                 let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
                 let result = {
@@ -587,11 +582,11 @@ mod tests {
             &self,
             _method: &str,
             _params: serde_json::Value,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
     }

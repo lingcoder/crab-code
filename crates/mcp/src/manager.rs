@@ -75,7 +75,7 @@ impl McpManager {
     }
 
     /// Connect to a single MCP server and add it to the manager.
-    pub async fn connect_one(&mut self, config: &McpServerConfig) -> crab_common::Result<()> {
+    pub async fn connect_one(&mut self, config: &McpServerConfig) -> crab_core::Result<()> {
         let client = connect_server(config).await?;
         self.clients
             .insert(config.name.clone(), Arc::new(Mutex::new(client)));
@@ -124,16 +124,16 @@ impl McpManager {
     }
 
     /// Refresh the tool list for a specific server.
-    pub async fn refresh_tools(&self, server_name: &str) -> crab_common::Result<()> {
+    pub async fn refresh_tools(&self, server_name: &str) -> crab_core::Result<()> {
         let client_arc = self.clients.get(server_name).ok_or_else(|| {
-            crab_common::Error::Other(format!("MCP server '{server_name}' not connected"))
+            crab_core::Error::Other(format!("MCP server '{server_name}' not connected"))
         })?;
         let mut client = client_arc.lock().await;
         client.refresh_tools().await
     }
 
     /// Disconnect a specific server.
-    pub async fn disconnect(&mut self, server_name: &str) -> crab_common::Result<()> {
+    pub async fn disconnect(&mut self, server_name: &str) -> crab_core::Result<()> {
         if let Some(client_arc) = self.clients.remove(server_name) {
             // Tool adapters may still hold a client reference, so shutdown
             // must go through the shared mutex instead of reaching into a
@@ -151,14 +151,14 @@ impl McpManager {
     pub async fn start_all(
         &mut self,
         mcp_servers_value: &serde_json::Value,
-    ) -> crab_common::Result<Vec<String>> {
+    ) -> crab_core::Result<Vec<String>> {
         let configs = crate::discovery::parse_mcp_servers(mcp_servers_value)?;
         let failed = self.connect_all(&configs).await;
         Ok(failed)
     }
 
     /// Restart a specific server by disconnecting and reconnecting.
-    pub async fn restart_server(&mut self, config: &McpServerConfig) -> crab_common::Result<()> {
+    pub async fn restart_server(&mut self, config: &McpServerConfig) -> crab_core::Result<()> {
         self.disconnect(&config.name).await?;
         self.connect_one(config).await
     }
@@ -262,7 +262,7 @@ mod tests {
             fn send(
                 &self,
                 req: JsonRpcRequest,
-            ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>>
+            ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>>
             {
                 Box::pin(async move {
                     let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
@@ -286,11 +286,11 @@ mod tests {
                 &self,
                 _method: &str,
                 _params: serde_json::Value,
-            ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
                 Box::pin(async { Ok(()) })
             }
 
-            fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+            fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
                 Box::pin(async { Ok(()) })
             }
         }

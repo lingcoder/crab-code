@@ -121,13 +121,13 @@ impl WorkerPool {
     /// Respects team communication rules if a team is configured.
     /// Returns the number of agents the message was delivered to,
     /// or `Err` if communication is not allowed.
-    pub async fn route_message(&self, envelope: &Envelope) -> crab_common::Result<usize> {
+    pub async fn route_message(&self, envelope: &Envelope) -> crab_core::Result<usize> {
         // Enforce team communication rules
         if let Some(team) = &self.team
             && !envelope.is_broadcast()
             && !team.can_communicate(&envelope.from, &envelope.to)
         {
-            return Err(crab_common::Error::Other(format!(
+            return Err(crab_core::Error::Other(format!(
                 "communication not allowed from '{}' to '{}' in {} mode",
                 envelope.from, envelope.to, team.mode,
             )));

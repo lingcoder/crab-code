@@ -137,7 +137,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crab_common::Result;
+    use crab_core::Result;
     use crab_core::tool::{ToolContext, ToolOutput};
     use serde_json::Value;
     use std::future::Future;

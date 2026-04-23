@@ -14,15 +14,15 @@ pub trait Transport: Send + Sync {
     fn send(
         &self,
         req: JsonRpcRequest,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>>;
 
     /// Send a notification (fire-and-forget, no response expected).
     fn notify(
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>>;
 
     /// Close the transport connection.
-    fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>>;
+    fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>>;
 }

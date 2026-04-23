@@ -25,12 +25,12 @@ use reqwest::StatusCode;
 /// Returns `Err` if the body cannot be read.
 pub async fn normalise_response(
     resp: reqwest::Response,
-) -> crab_common::Result<(StatusCode, String)> {
+) -> crab_core::Result<(StatusCode, String)> {
     let mut status = resp.status();
     let body = resp
         .text()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("read response body failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("read response body failed: {e}")))?;
 
     if status == StatusCode::OK && looks_like_slack_error(&body) {
         tracing::debug!("normalising Slack 200+error body → 400");

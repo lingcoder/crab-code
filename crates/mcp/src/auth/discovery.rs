@@ -70,22 +70,22 @@ pub struct AuthServerMetadata {
 pub async fn discover_resource(
     base: &str,
     http: &reqwest::Client,
-) -> crab_common::Result<ResourceMetadata> {
+) -> crab_core::Result<ResourceMetadata> {
     let url = join_well_known(base, "oauth-protected-resource");
     let resp = http
         .get(&url)
         .send()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("RFC 9728 fetch failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("RFC 9728 fetch failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "RFC 9728 discovery at {url} returned {}",
             resp.status()
         )));
     }
     resp.json::<ResourceMetadata>()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("RFC 9728 parse failed: {e}")))
+        .map_err(|e| crab_core::Error::Other(format!("RFC 9728 parse failed: {e}")))
 }
 
 /// Fetch and parse `<issuer>/.well-known/oauth-authorization-server`.
@@ -97,22 +97,22 @@ pub async fn discover_resource(
 pub async fn discover_auth_server(
     issuer: &str,
     http: &reqwest::Client,
-) -> crab_common::Result<AuthServerMetadata> {
+) -> crab_core::Result<AuthServerMetadata> {
     let url = join_well_known(issuer, "oauth-authorization-server");
     let resp = http
         .get(&url)
         .send()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("RFC 8414 fetch failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("RFC 8414 fetch failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "RFC 8414 discovery at {url} returned {}",
             resp.status()
         )));
     }
     resp.json::<AuthServerMetadata>()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("RFC 8414 parse failed: {e}")))
+        .map_err(|e| crab_core::Error::Other(format!("RFC 8414 parse failed: {e}")))
 }
 
 /// Join a base URL with `/.well-known/<suffix>`, handling trailing slashes.

@@ -8,9 +8,9 @@ repository.workspace = true
 description = "Plugin system for Crab Code"
 
 [dependencies]
-crab-common.workspace = true
-crab-config.workspace = true
 crab-core.workspace = true
+crab-config.workspace = true
+crab-mcp.workspace = true
 crab-process.workspace = true
 crab-skill.workspace = true
 serde.workspace = true

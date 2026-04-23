@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -176,7 +176,7 @@ impl Tool for RemoteTriggerTool {
                 .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: action".into())
+                    crab_core::Error::Other("missing required parameter: action".into())
                 })?;
 
             match action {
@@ -207,7 +207,7 @@ impl Tool for RemoteTriggerTool {
                         .get("trigger_id")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            crab_common::Error::Other(
+                            crab_core::Error::Other(
                                 "trigger_id is required for 'get' action".into(),
                             )
                         })?;
@@ -236,16 +236,14 @@ impl Tool for RemoteTriggerTool {
                 }
                 "create" => {
                     let name = input.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-                        crab_common::Error::Other("name is required for 'create' action".into())
+                        crab_core::Error::Other("name is required for 'create' action".into())
                     })?;
 
                     let prompt = input
                         .get("prompt")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            crab_common::Error::Other(
-                                "prompt is required for 'create' action".into(),
-                            )
+                            crab_core::Error::Other("prompt is required for 'create' action".into())
                         })?;
 
                     if name.trim().is_empty() {
@@ -277,7 +275,7 @@ impl Tool for RemoteTriggerTool {
                         .get("trigger_id")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            crab_common::Error::Other(
+                            crab_core::Error::Other(
                                 "trigger_id is required for 'update' action".into(),
                             )
                         })?;
@@ -313,7 +311,7 @@ impl Tool for RemoteTriggerTool {
                         .get("trigger_id")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            crab_common::Error::Other(
+                            crab_core::Error::Other(
                                 "trigger_id is required for 'run' action".into(),
                             )
                         })?;
@@ -339,7 +337,7 @@ impl Tool for RemoteTriggerTool {
                         .get("trigger_id")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            crab_common::Error::Other(
+                            crab_core::Error::Other(
                                 "trigger_id is required for 'delete' action".into(),
                             )
                         })?;

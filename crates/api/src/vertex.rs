@@ -52,9 +52,9 @@ impl VertexConfig {
 /// # Errors
 ///
 /// Returns an error if GCP credentials cannot be resolved.
-pub fn create_vertex_client(config: &VertexConfig) -> crab_common::Result<AnthropicClient> {
+pub fn create_vertex_client(config: &VertexConfig) -> crab_core::Result<AnthropicClient> {
     let credentials = crab_auth::vertex_auth::GcpCredentials::from_env().ok_or_else(|| {
-        crab_common::Error::Other(
+        crab_core::Error::Other(
             "GCP credentials not found. Set GOOGLE_CLOUD_PROJECT and configure ADC.".into(),
         )
     })?;

@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde_json::Value;
 use std::future::Future;
@@ -52,7 +52,7 @@ impl Tool for TeamCreateTool {
                 .get("team_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: team_name".into())
+                    crab_core::Error::Other("missing required parameter: team_name".into())
                 })?;
 
             if team_name.trim().is_empty() {
@@ -205,15 +205,16 @@ impl Tool for SendMessageTool {
         let session_id = ctx.session_id.clone();
 
         Box::pin(async move {
-            let to = input.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: to".into())
-            })?;
+            let to = input
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crab_core::Error::Other("missing required parameter: to".into()))?;
 
             let message = input
                 .get("message")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: message".into())
+                    crab_core::Error::Other("missing required parameter: message".into())
                 })?;
 
             if to.trim().is_empty() {

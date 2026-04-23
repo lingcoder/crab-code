@@ -68,13 +68,13 @@ impl PaneManager {
     ///
     /// Returns an error if the `tmux` command fails.
     #[allow(clippy::literal_string_with_formatting_args)]
-    pub async fn create_pane(&mut self, teammate_id: &str) -> crab_common::Result<String> {
+    pub async fn create_pane(&mut self, teammate_id: &str) -> crab_core::Result<String> {
         let target = format!("{}:{}", self.session_name, self.window_id);
         let output = run_tmux(&["split-window", "-t", &target, "-P", "-F", "#{pane_id}"]).await?;
 
         let pane_id = output.stdout.trim().to_owned();
         if pane_id.is_empty() {
-            return Err(crab_common::Error::Other(
+            return Err(crab_core::Error::Other(
                 "tmux split-window returned empty pane ID".into(),
             ));
         }
@@ -97,7 +97,7 @@ impl PaneManager {
     /// # Errors
     ///
     /// Returns an error if the `tmux` command fails.
-    pub async fn kill_pane(&mut self, pane_id: &str) -> crab_common::Result<()> {
+    pub async fn kill_pane(&mut self, pane_id: &str) -> crab_core::Result<()> {
         run_tmux(&["kill-pane", "-t", pane_id]).await?;
         self.panes.remove(pane_id);
         Ok(())
@@ -113,7 +113,7 @@ impl PaneManager {
         pane_id: &str,
         width: u16,
         height: u16,
-    ) -> crab_common::Result<()> {
+    ) -> crab_core::Result<()> {
         let w = width.to_string();
         let h = height.to_string();
         run_tmux(&["resize-pane", "-t", pane_id, "-x", &w, "-y", &h]).await?;
@@ -131,7 +131,7 @@ impl PaneManager {
     /// # Errors
     ///
     /// Returns an error if the `tmux` command fails.
-    pub async fn send_keys(&self, pane_id: &str, keys: &str) -> crab_common::Result<()> {
+    pub async fn send_keys(&self, pane_id: &str, keys: &str) -> crab_core::Result<()> {
         run_tmux(&["send-keys", "-t", pane_id, keys, "Enter"]).await?;
         Ok(())
     }
@@ -161,7 +161,7 @@ impl PaneManager {
 ///
 /// Returns an error if the process cannot be spawned or exits with a
 /// non-zero status.
-async fn run_tmux(args: &[&str]) -> crab_common::Result<SpawnOutput> {
+async fn run_tmux(args: &[&str]) -> crab_core::Result<SpawnOutput> {
     let output = crab_process::spawn::run(SpawnOptions {
         command: "tmux".into(),
         args: args.iter().map(|s| (*s).to_owned()).collect(),
@@ -175,7 +175,7 @@ async fn run_tmux(args: &[&str]) -> crab_common::Result<SpawnOutput> {
     .await?;
 
     if output.exit_code != 0 {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "tmux command failed (exit {}): {}",
             output.exit_code,
             output.stderr.trim()

@@ -4,7 +4,7 @@
 //! `[snipped N chars]` marker. Can target a specific message or apply
 //! a global character limit.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::future::Future;

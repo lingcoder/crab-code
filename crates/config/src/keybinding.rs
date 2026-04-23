@@ -369,12 +369,12 @@ impl KeybindingResolver {
     ///
     /// User bindings are merged on top of defaults — any matching
     /// `(context, chord)` pair replaces the default action.
-    pub fn load_user_bindings(path: &Path) -> Result<Self, crab_common::Error> {
+    pub fn load_user_bindings(path: &Path) -> Result<Self, crab_core::Error> {
         let mut resolver = Self::with_defaults();
 
         let content = std::fs::read_to_string(path)?;
         let entries: Vec<KeybindingConfigEntry> = serde_json::from_str(&content)
-            .map_err(|e| crab_common::Error::Config(format!("invalid keybindings JSON: {e}")))?;
+            .map_err(|e| crab_core::Error::Config(format!("invalid keybindings JSON: {e}")))?;
 
         for entry in entries {
             if let Ok(chord) = parse_chord(&entry.chord) {

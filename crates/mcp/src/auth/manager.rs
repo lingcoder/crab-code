@@ -43,13 +43,13 @@ impl McpAuthManager {
     }
 
     /// Return the shared HTTP client, initialising it on first use.
-    fn http(&mut self) -> crab_common::Result<&reqwest::Client> {
+    fn http(&mut self) -> crab_core::Result<&reqwest::Client> {
         if self.http.is_none() {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|e| {
-                    crab_common::Error::Other(format!("failed to build HTTP client: {e}"))
+                    crab_core::Error::Other(format!("failed to build HTTP client: {e}"))
                 })?;
             self.http = Some(client);
         }
@@ -73,7 +73,7 @@ impl McpAuthManager {
         &mut self,
         server_name: &str,
         method: &McpAuthMethod,
-    ) -> crab_common::Result<AuthToken> {
+    ) -> crab_core::Result<AuthToken> {
         let token = match method {
             McpAuthMethod::None => AuthToken {
                 access_token: String::new(),
@@ -102,7 +102,7 @@ impl McpAuthManager {
         &mut self,
         server_name: &str,
         config: &OAuthConfig,
-    ) -> crab_common::Result<AuthToken> {
+    ) -> crab_core::Result<AuthToken> {
         let req = AuthorizationRequest::build(config);
         let addr = redirect_uri_addr(&req.redirect_uri)?;
 
@@ -135,19 +135,19 @@ impl McpAuthManager {
 
         let callback = callback_task
             .await
-            .map_err(|e| crab_common::Error::Other(format!("callback task panicked: {e}")))??;
+            .map_err(|e| crab_core::Error::Other(format!("callback task panicked: {e}")))??;
 
         // CSRF state verification
         match &callback.state {
             Some(got) if got == &req.state => {}
             Some(got) => {
-                return Err(crab_common::Error::Other(format!(
+                return Err(crab_core::Error::Other(format!(
                     "OAuth CSRF state mismatch: expected {}, got {got}",
                     req.state
                 )));
             }
             None => {
-                return Err(crab_common::Error::Other(
+                return Err(crab_core::Error::Other(
                     "OAuth callback missing state parameter".into(),
                 ));
             }
@@ -171,14 +171,14 @@ impl McpAuthManager {
         &mut self,
         server_name: &str,
         config: &OAuthConfig,
-    ) -> crab_common::Result<AuthToken> {
+    ) -> crab_core::Result<AuthToken> {
         let Some(current) = self.tokens.get(server_name) else {
-            return Err(crab_common::Error::Config(format!(
+            return Err(crab_core::Error::Config(format!(
                 "no token cached for '{server_name}' — call authenticate() first"
             )));
         };
         let Some(refresh) = current.refresh_token.clone() else {
-            return Err(crab_common::Error::Config(format!(
+            return Err(crab_core::Error::Config(format!(
                 "cached token for '{server_name}' has no refresh_token; re-run full auth"
             )));
         };

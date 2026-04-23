@@ -195,7 +195,7 @@ pub struct SessionSummary {
 pub fn quick_resume_list(
     history: &SessionHistory,
     limit: usize,
-) -> crab_common::Result<Vec<SessionSummary>> {
+) -> crab_core::Result<Vec<SessionSummary>> {
     let session_ids = history.list_sessions()?;
     let mut summaries = Vec::new();
 

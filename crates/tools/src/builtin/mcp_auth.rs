@@ -3,7 +3,7 @@
 //! Provides login, logout, and status operations for MCP server
 //! authentication. Supports `OAuth2` and API key flows.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::future::Future;

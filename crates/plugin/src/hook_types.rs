@@ -174,7 +174,7 @@ impl HookResult {
 pub async fn execute_command_hook(
     hook: &CommandHook,
     event_json: &serde_json::Value,
-) -> crab_common::Result<HookResult> {
+) -> crab_core::Result<HookResult> {
     let mut opts = crab_process::spawn::shell_command(&hook.command);
 
     // Pass event data via environment variable
@@ -211,7 +211,7 @@ pub async fn execute_command_hook(
 pub async fn execute_agent_hook(
     hook: &AgentHook,
     event_json: &serde_json::Value,
-) -> crab_common::Result<HookResult> {
+) -> crab_core::Result<HookResult> {
     let expanded_prompt = expand_template(&hook.prompt_template, event_json);
 
     // For now, return the expanded prompt as stdout. The agent orchestrator
@@ -232,7 +232,7 @@ pub async fn execute_agent_hook(
 pub async fn execute_http_hook(
     hook: &HttpHook,
     event_json: &serde_json::Value,
-) -> crab_common::Result<HookResult> {
+) -> crab_core::Result<HookResult> {
     // Validate URL against SSRF guard first.
     validate_http_hook_url(&hook.url)?;
 
@@ -268,7 +268,7 @@ pub async fn execute_http_hook(
 pub async fn execute_prompt_hook(
     hook: &PromptHook,
     event_json: &serde_json::Value,
-) -> crab_common::Result<HookResult> {
+) -> crab_core::Result<HookResult> {
     let expanded = expand_template(&hook.prompt_template, event_json);
 
     // Return the expanded prompt. The caller (hook executor in hook.rs or
@@ -332,7 +332,7 @@ impl fmt::Display for SsrfError {
 
 impl std::error::Error for SsrfError {}
 
-impl From<SsrfError> for crab_common::Error {
+impl From<SsrfError> for crab_core::Error {
     fn from(e: SsrfError) -> Self {
         Self::Other(format!("SSRF guard: {e}"))
     }

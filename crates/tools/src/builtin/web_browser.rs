@@ -7,7 +7,7 @@
 //! The tool communicates with a browser instance via the Chrome `DevTools`
 //! Protocol (CDP) or Playwright server.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -109,7 +109,7 @@ impl Tool for WebBrowserTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         Box::pin(async move {
             let parsed: WebBrowserInput = serde_json::from_value(input)
-                .map_err(|e| crab_common::Error::Tool(format!("Invalid input: {e}")))?;
+                .map_err(|e| crab_core::Error::Tool(format!("Invalid input: {e}")))?;
 
             // All browser actions require Playwright MCP integration which
             // is not yet wired up. Return a descriptive error instead of

@@ -97,11 +97,11 @@ impl ToolExecutor {
         tool_name: &str,
         input: serde_json::Value,
         ctx: &ToolContext,
-    ) -> crab_common::Result<ToolOutput> {
+    ) -> crab_core::Result<ToolOutput> {
         let tool = self
             .registry
             .get(tool_name)
-            .ok_or_else(|| crab_common::Error::Other(format!("tool not found: {tool_name}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
 
         let decision = check_permission(
             &ctx.permission_policy,
@@ -148,7 +148,7 @@ impl ToolExecutor {
         ctx: &ToolContext,
     ) -> (
         mpsc::Receiver<String>,
-        JoinHandle<crab_common::Result<ToolOutput>>,
+        JoinHandle<crab_core::Result<ToolOutput>>,
     ) {
         let (streaming, rx) = StreamingOutput::channel(64);
         let registry = Arc::clone(&self.registry);
@@ -159,7 +159,7 @@ impl ToolExecutor {
         let handle = tokio::spawn(async move {
             let tool = registry
                 .get(&tool_name)
-                .ok_or_else(|| crab_common::Error::Other(format!("tool not found: {tool_name}")))?;
+                .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
 
             let policy = &ctx.permission_policy;
             let decision = check_permission(
@@ -208,11 +208,11 @@ impl ToolExecutor {
         tool_name: &str,
         input: serde_json::Value,
         ctx: &ToolContext,
-    ) -> crab_common::Result<ToolOutput> {
+    ) -> crab_core::Result<ToolOutput> {
         let tool = self
             .registry
             .get(tool_name)
-            .ok_or_else(|| crab_common::Error::Other(format!("tool not found: {tool_name}")))?;
+            .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
         tool.execute(input, ctx).await
     }
 }
@@ -247,7 +247,7 @@ mod tests {
             &self,
             input: Value,
             _ctx: &ToolContext,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<ToolOutput>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<ToolOutput>> + Send + '_>> {
             Box::pin(async move {
                 let text = input
                     .get("text")

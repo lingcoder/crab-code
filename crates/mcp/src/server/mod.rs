@@ -133,7 +133,7 @@ impl<H: ToolHandler + 'static> McpServer<H> {
     ///
     /// This is a long-running loop that processes requests until EOF or error.
     /// For stdio usage, pass `tokio::io::stdin()` and `tokio::io::stdout()`.
-    pub async fn run<R, W>(&self, reader: R, writer: W) -> crab_common::Result<()>
+    pub async fn run<R, W>(&self, reader: R, writer: W) -> crab_core::Result<()>
     where
         R: tokio::io::AsyncRead + Unpin + Send,
         W: tokio::io::AsyncWrite + Unpin + Send,
@@ -152,7 +152,7 @@ impl<H: ToolHandler + 'static> McpServer<H> {
                     if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(&data) {
                         let resp = self.handle_request(req).await;
                         let json = serde_json::to_string(&resp).map_err(|e| {
-                            crab_common::Error::Other(format!("failed to serialize response: {e}"))
+                            crab_core::Error::Other(format!("failed to serialize response: {e}"))
                         })?;
                         write_message(&writer, &json).await?;
                     }
@@ -298,7 +298,7 @@ impl<H: ToolHandler + 'static> McpServer<H> {
 /// Returns `Ok(None)` on EOF.
 async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
-) -> crab_common::Result<Option<String>> {
+) -> crab_core::Result<Option<String>> {
     let mut content_length: Option<usize> = None;
     let mut header_line = String::new();
 
@@ -307,7 +307,7 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
         let bytes_read = reader
             .read_line(&mut header_line)
             .await
-            .map_err(|e| crab_common::Error::Other(format!("failed to read header: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read header: {e}")))?;
 
         if bytes_read == 0 {
             return Ok(None);
@@ -324,31 +324,31 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     }
 
     let length = content_length
-        .ok_or_else(|| crab_common::Error::Other("missing Content-Length header".into()))?;
+        .ok_or_else(|| crab_core::Error::Other("missing Content-Length header".into()))?;
 
     let mut body = vec![0u8; length];
     tokio::io::AsyncReadExt::read_exact(reader, &mut body)
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to read body: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to read body: {e}")))?;
 
     String::from_utf8(body)
         .map(Some)
-        .map_err(|e| crab_common::Error::Other(format!("invalid UTF-8: {e}")))
+        .map_err(|e| crab_core::Error::Other(format!("invalid UTF-8: {e}")))
 }
 
 /// Write a Content-Length framed message to a shared async writer.
 async fn write_message<W: tokio::io::AsyncWrite + Unpin>(
     writer: &Arc<Mutex<W>>,
     json: &str,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let frame = format!("Content-Length: {}\r\n\r\n{json}", json.len());
     let mut w = writer.lock().await;
     w.write_all(frame.as_bytes())
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to write response: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to write response: {e}")))?;
     w.flush()
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to flush: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to flush: {e}")))?;
     drop(w);
     Ok(())
 }

@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
@@ -93,7 +93,7 @@ impl Tool for EnterWorktreeTool {
             // Create parent directory
             if let Some(parent) = worktree_dir.parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    crab_common::Error::Other(format!("failed to create worktree directory: {e}"))
+                    crab_core::Error::Other(format!("failed to create worktree directory: {e}"))
                 })?;
             }
 

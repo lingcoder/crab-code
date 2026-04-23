@@ -12,7 +12,6 @@ name = "crab-daemon"
 path = "src/main.rs"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 crab-config.workspace = true
 crab-api.workspace = true

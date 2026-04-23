@@ -40,9 +40,9 @@ impl BedrockConfig {
 /// # Errors
 ///
 /// Returns an error if AWS credentials cannot be resolved.
-pub fn create_bedrock_client(config: &BedrockConfig) -> crab_common::Result<AnthropicClient> {
+pub fn create_bedrock_client(config: &BedrockConfig) -> crab_core::Result<AnthropicClient> {
     let credentials = crab_auth::bedrock_auth::AwsCredentials::from_env().ok_or_else(|| {
-        crab_common::Error::Other(
+        crab_core::Error::Other(
             "AWS credentials not found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
         )
     })?;

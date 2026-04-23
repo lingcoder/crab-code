@@ -139,7 +139,7 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<ExitInfo> {
 
     // ── Phase 4c: Settings & skills filesystem watcher ─────────────────
 
-    let home = crab_common::utils::path::home_dir();
+    let home = crab_core::common::utils::path::home_dir();
     let mut settings_watch_paths = vec![home.join(".crab").join("settings.json")];
     if let Ok(cwd) = std::env::current_dir() {
         settings_watch_paths.push(cwd.join(".crab").join("settings.json"));
@@ -592,7 +592,7 @@ impl PermissionHandler for TuiPermissionHandler {
     ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
         let tool_name = tool_name.to_string();
         let prompt = prompt.to_string();
-        let request_id = crab_common::utils::id::new_ulid();
+        let request_id = crab_core::common::utils::id::new_ulid();
         let event_tx = self.event_tx.clone();
         let response_rx = self.response_rx.clone();
 
@@ -621,7 +621,7 @@ impl PermissionHandler for TuiPermissionHandler {
 /// Wrapper to shuttle conversation back from a spawned agent task.
 struct AgentTaskResult {
     conversation: Conversation,
-    result: crab_common::Result<()>,
+    result: crab_core::Result<()>,
     cost: crab_session::CostAccumulator,
 }
 
@@ -1175,7 +1175,7 @@ mod tests {
         let conv = Conversation::new("test".into(), "prompt".into(), 200_000);
         let result = AgentTaskResult {
             conversation: conv,
-            result: Err(crab_common::Error::Other("test error".into())),
+            result: Err(crab_core::Error::Other("test error".into())),
             cost: crab_session::CostAccumulator::default(),
         };
         assert!(result.result.is_err());

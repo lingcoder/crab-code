@@ -37,7 +37,7 @@ impl SettingsCache {
     /// # Errors
     ///
     /// Returns an error if settings files cannot be read or parsed.
-    pub fn get_or_load(&self) -> crab_common::Result<Settings> {
+    pub fn get_or_load(&self) -> crab_core::Result<Settings> {
         let mut guard = self.cached.lock().unwrap();
         if let Some(ref cached) = *guard {
             return Ok(cached.clone());

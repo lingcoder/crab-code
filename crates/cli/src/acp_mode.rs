@@ -117,7 +117,7 @@ impl CrabAcpAgent {
     }
 
     fn new_session_id() -> String {
-        crab_common::utils::id::new_ulid()
+        crab_core::common::utils::id::new_ulid()
     }
 }
 

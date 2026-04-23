@@ -98,7 +98,7 @@ impl PrContext {
 ///
 /// `pr_ref` can be a PR number (e.g. "123") or a URL.
 /// Returns `None` if `gh` is not available or the PR cannot be fetched.
-pub fn load_pr_context(pr_ref: &str) -> crab_common::Result<PrContext> {
+pub fn load_pr_context(pr_ref: &str) -> crab_core::Result<PrContext> {
     // Fetch structured PR info
     let info = fetch_pr_info(pr_ref)?;
 
@@ -109,7 +109,7 @@ pub fn load_pr_context(pr_ref: &str) -> crab_common::Result<PrContext> {
 }
 
 /// Fetch PR metadata via `gh pr view --json`.
-fn fetch_pr_info(pr_ref: &str) -> crab_common::Result<PrInfo> {
+fn fetch_pr_info(pr_ref: &str) -> crab_core::Result<PrInfo> {
     let output = Command::new("gh")
         .args([
             "pr",
@@ -120,14 +120,14 @@ fn fetch_pr_info(pr_ref: &str) -> crab_common::Result<PrInfo> {
         ])
         .output()
         .map_err(|e| {
-            crab_common::Error::Other(format!(
+            crab_core::Error::Other(format!(
                 "failed to run `gh pr view`: {e}. Is the GitHub CLI installed?"
             ))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "`gh pr view` failed: {stderr}"
         )));
     }
@@ -137,7 +137,7 @@ fn fetch_pr_info(pr_ref: &str) -> crab_common::Result<PrInfo> {
     // gh returns `files` as an array of objects with `path`, `additions`, `deletions`.
     // We need to map that into our ChangedFile struct.
     let raw: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| crab_common::Error::Other(format!("failed to parse gh output: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to parse gh output: {e}")))?;
 
     let number = raw["number"].as_u64().unwrap_or(0);
     let title = raw["title"].as_str().unwrap_or("").to_string();

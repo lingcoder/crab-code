@@ -165,7 +165,7 @@ pub async fn run_once(config: RunConfig) -> anyhow::Result<()> {
     );
 
     let global_dir = settings::global_config_dir();
-    let session_id = crab_common::utils::id::new_ulid();
+    let session_id = crab_core::common::utils::id::new_ulid();
 
     // 6. Build session config
     let coordinator_mode = crate::coordinator_mode_enabled();

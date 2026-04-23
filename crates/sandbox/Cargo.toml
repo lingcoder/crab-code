@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Process sandbox — trait + platform backends (landlock / Windows Job Object / noop)"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

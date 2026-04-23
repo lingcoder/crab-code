@@ -238,7 +238,7 @@ async fn run_with_turn_limit(
     cancel: CancellationToken,
     timeout_cancel: CancellationToken,
     max_turns: usize,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     // We implement turn limiting by counting TurnStart events.
     // Since query_loop emits TurnStart at each turn, we wrap the event_tx
     // with a counting forwarder that cancels after max_turns.

@@ -123,7 +123,7 @@ impl QueryEngine {
     }
 
     /// Drive the full query loop against the given conversation.
-    pub async fn run(&mut self, conversation: &mut Conversation) -> crab_common::Result<()> {
+    pub async fn run(&mut self, conversation: &mut Conversation) -> crab_core::Result<()> {
         query_loop::query_loop(
             conversation,
             &self.backend,

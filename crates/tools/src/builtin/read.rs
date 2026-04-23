@@ -3,7 +3,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use serde_json::Value;
 
@@ -263,9 +263,7 @@ async fn read_pdf(path: &Path, pages_spec: Option<&str>) -> Result<ToolOutput> {
         let result =
             tokio::task::spawn_blocking(move || extract_pdf_text(&bytes, pages_owned.as_deref()))
                 .await
-                .map_err(|e| {
-                    crab_common::Error::Other(format!("PDF extraction task failed: {e}"))
-                })?;
+                .map_err(|e| crab_core::Error::Other(format!("PDF extraction task failed: {e}")))?;
 
         match result {
             Ok(text) => Ok(ToolOutput::success(text)),

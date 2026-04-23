@@ -43,7 +43,7 @@ impl SandboxConfig {
 /// Implementations apply OS-level restrictions to a `Command` before execution.
 pub trait SandboxPolicy: Send + Sync {
     /// Apply sandbox restrictions to a command that is about to be spawned.
-    fn apply(&self, cmd: &mut std::process::Command) -> crab_common::Result<()>;
+    fn apply(&self, cmd: &mut std::process::Command) -> crab_core::Result<()>;
 
     /// Returns the platform name for diagnostics.
     fn platform_name(&self) -> &'static str;
@@ -56,7 +56,7 @@ pub trait SandboxPolicy: Send + Sync {
 pub struct NoopSandbox;
 
 impl SandboxPolicy for NoopSandbox {
-    fn apply(&self, _cmd: &mut std::process::Command) -> crab_common::Result<()> {
+    fn apply(&self, _cmd: &mut std::process::Command) -> crab_core::Result<()> {
         Ok(())
     }
 

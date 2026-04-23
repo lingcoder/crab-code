@@ -6,7 +6,7 @@
 //!
 //! Maps to Claude Code's `SkillTool`.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde_json::Value;
 use std::future::Future;
@@ -84,7 +84,7 @@ impl Tool for SkillTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         Box::pin(async move {
             let skill_name = input.get("skill").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: skill".into())
+                crab_core::Error::Other("missing required parameter: skill".into())
             })?;
 
             if skill_name.trim().is_empty() {

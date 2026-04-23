@@ -44,7 +44,7 @@
 // The tool itself does not interpret structured messages — it passes them
 // through as JSON actions for the agent layer to handle.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use serde_json::Value;
 use std::future::Future;
@@ -123,15 +123,16 @@ impl Tool for StandaloneSendMessageTool {
         Box::pin(async move {
             // ── Extract and validate parameters ──
 
-            let to = input.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
-                crab_common::Error::Other("missing required parameter: to".into())
-            })?;
+            let to = input
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crab_core::Error::Other("missing required parameter: to".into()))?;
 
             let message = input
                 .get("message")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    crab_common::Error::Other("missing required parameter: message".into())
+                    crab_core::Error::Other("missing required parameter: message".into())
                 })?;
 
             if to.trim().is_empty() {

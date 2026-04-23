@@ -167,7 +167,7 @@ pub async fn run_chat(config: ChatConfig) -> anyhow::Result<()> {
         None
     };
 
-    let session_id = crab_common::utils::id::new_ulid();
+    let session_id = crab_core::common::utils::id::new_ulid();
 
     // 7. Build system prompt
     let registry = crab_tools::builtin::create_default_registry();

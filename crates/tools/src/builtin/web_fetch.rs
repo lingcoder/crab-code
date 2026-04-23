@@ -3,7 +3,7 @@
 //! Currently returns a stub response. Real HTTP fetching with HTML-to-text
 //! conversion is deferred to Phase 2 (requires adding `reqwest` dependency).
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 use std::future::Future;
@@ -215,11 +215,7 @@ struct FetchResult {
 }
 
 /// Fetch a URL using curl subprocess, capturing HTTP status code.
-async fn fetch_url(
-    url: &str,
-    timeout_secs: u64,
-    max_size: u64,
-) -> crab_common::Result<FetchResult> {
+async fn fetch_url(url: &str, timeout_secs: u64, max_size: u64) -> crab_core::Result<FetchResult> {
     // -w '\n%{http_code}' appends the status code on the last line
     let cmd = format!(
         "curl -sS -L --max-time {timeout_secs} --max-filesize {max_size} \
@@ -230,7 +226,7 @@ async fn fetch_url(
 
     let output = crab_process::spawn::run(opts).await?;
     if output.exit_code != 0 {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "curl failed (exit {}): {}",
             output.exit_code,
             output.stderr.trim()

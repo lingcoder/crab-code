@@ -39,7 +39,7 @@ pub async fn query_loop(
     cost_tracker: &mut CostAccumulator,
     event_tx: mpsc::Sender<Event>,
     cancel: CancellationToken,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let mut turn_index: usize = 0;
     let mut plan_mode = false;
     let context_mgr = ContextManager::default();
@@ -261,7 +261,7 @@ async fn stream_with_retry(
     policy: &RetryPolicy,
     event_tx: &mpsc::Sender<Event>,
     cancel: &CancellationToken,
-) -> crab_common::Result<(Message, TokenUsage, Option<String>)> {
+) -> crab_core::Result<(Message, TokenUsage, Option<String>)> {
     let mut attempt = 0u32;
     loop {
         let req_clone = req.clone();
@@ -292,8 +292,8 @@ async fn stream_with_retry(
     }
 }
 
-/// Check if a `crab_common::Error` represents a transient/retryable condition.
-fn is_transient_error(err: &crab_common::Error) -> bool {
+/// Check if a `crab_core::Error` represents a transient/retryable condition.
+fn is_transient_error(err: &crab_core::Error) -> bool {
     let msg = err.to_string().to_lowercase();
     msg.contains("timeout")
         || msg.contains("timed out")
@@ -306,7 +306,7 @@ fn is_transient_error(err: &crab_common::Error) -> bool {
 
 /// Check if an error specifically indicates an overloaded/rate-limited model
 /// (suitable for model fallback).
-fn is_overloaded_error(err: &crab_common::Error) -> bool {
+fn is_overloaded_error(err: &crab_core::Error) -> bool {
     let msg = err.to_string().to_lowercase();
     msg.contains("529")
         || msg.contains("overloaded")
@@ -315,7 +315,7 @@ fn is_overloaded_error(err: &crab_common::Error) -> bool {
 }
 
 /// Check if an error indicates the prompt exceeded the model's context window.
-fn is_prompt_too_long_error(err: &crab_common::Error) -> bool {
+fn is_prompt_too_long_error(err: &crab_core::Error) -> bool {
     let msg = err.to_string().to_lowercase();
     msg.contains("prompt is too long")
         || msg.contains("prompt too long")
@@ -344,7 +344,7 @@ async fn stream_response(
     req: MessageRequest<'_>,
     event_tx: &mpsc::Sender<Event>,
     cancel: &CancellationToken,
-) -> crab_common::Result<(Message, TokenUsage, Option<String>)> {
+) -> crab_core::Result<(Message, TokenUsage, Option<String>)> {
     let mut stream = std::pin::pin!(backend.stream_message(req));
 
     // Use StreamingToolParser for incremental tool_use parsing
@@ -360,8 +360,7 @@ async fn stream_response(
             break;
         }
 
-        let event =
-            event.map_err(|e| crab_common::Error::Other(format!("SSE stream error: {e}")))?;
+        let event = event.map_err(|e| crab_core::Error::Other(format!("SSE stream error: {e}")))?;
 
         // Update usage tracker
         usage_tracker.update(&event);
@@ -401,7 +400,7 @@ async fn stream_response(
                         message: message.clone(),
                     })
                     .await;
-                return Err(crab_common::Error::Other(format!(
+                return Err(crab_core::Error::Other(format!(
                     "SSE stream error: {message}"
                 )));
             }
@@ -691,7 +690,7 @@ async fn run_compaction(
     client: Option<&dyn CompactionClient>,
     config: &CompactionConfig,
     strategy: CompactionStrategy,
-) -> crab_common::Result<crab_session::CompactionReport> {
+) -> crab_core::Result<crab_session::CompactionReport> {
     if let Some(client) = client {
         compact_with_config(conversation, config, client).await
     } else {
@@ -743,7 +742,7 @@ async fn execute_tool_calls(
     hook_executor: Option<&HookExecutor>,
     session_id: Option<&str>,
     plan_mode: bool,
-) -> crab_common::Result<Vec<(String, Result<ToolOutput, crab_common::Error>)>> {
+) -> crab_core::Result<Vec<(String, Result<ToolOutput, crab_core::Error>)>> {
     let registry = executor.registry();
     let mut results = Vec::new();
 
@@ -922,7 +921,7 @@ async fn execute_tool_calls(
 
             let result = exec_handle
                 .await
-                .unwrap_or_else(|e| Err(crab_common::Error::Other(format!("join error: {e}"))));
+                .unwrap_or_else(|e| Err(crab_core::Error::Other(format!("join error: {e}"))));
             let _ = delta_fwd.await;
             result
         } else {
@@ -1000,7 +999,7 @@ pub fn partition_tool_calls<'a>(
 /// Streaming tool executor -- starts tool execution as soon as
 /// a `tool_use` block's JSON is fully parsed during SSE streaming.
 pub struct StreamingToolExecutor {
-    pub pending: Vec<tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>>,
+    pub pending: Vec<tokio::task::JoinHandle<(String, crab_core::Result<ToolOutput>)>>,
 }
 
 impl StreamingToolExecutor {
@@ -1022,14 +1021,14 @@ impl StreamingToolExecutor {
             serde_json::Value,
             ToolContext,
         )
-            -> tokio::task::JoinHandle<(String, crab_common::Result<ToolOutput>)>,
+            -> tokio::task::JoinHandle<(String, crab_core::Result<ToolOutput>)>,
     ) {
         let handle = tool_fn(name, input, ctx);
         self.pending.push(handle);
     }
 
     /// Collect all pending tool results after `message_stop`.
-    pub async fn collect_all(&mut self) -> Vec<(String, crab_common::Result<ToolOutput>)> {
+    pub async fn collect_all(&mut self) -> Vec<(String, crab_core::Result<ToolOutput>)> {
         let mut results = Vec::new();
         for handle in self.pending.drain(..) {
             results.push(handle.await.expect("tool task panicked"));
@@ -1046,7 +1045,7 @@ impl Default for StreamingToolExecutor {
 
 /// Build a tool result `Message` (role: User) from tool outputs.
 pub fn tool_results_message(
-    results: Vec<(String, Result<ToolOutput, crab_common::Error>)>,
+    results: Vec<(String, Result<ToolOutput, crab_core::Error>)>,
 ) -> Message {
     let content: Vec<ContentBlock> = results
         .into_iter()
@@ -1075,7 +1074,7 @@ mod tests {
             ("tu_1".to_string(), Ok(ToolOutput::success("file contents"))),
             (
                 "tu_2".to_string(),
-                Err(crab_common::Error::Other("not found".into())),
+                Err(crab_core::Error::Other("not found".into())),
             ),
         ];
         let msg = tool_results_message(results);
@@ -1242,7 +1241,7 @@ mod tests {
 
     #[test]
     fn tool_results_message_empty() {
-        let results: Vec<(String, Result<ToolOutput, crab_common::Error>)> = vec![];
+        let results: Vec<(String, Result<ToolOutput, crab_core::Error>)> = vec![];
         let msg = tool_results_message(results);
         assert_eq!(msg.role, Role::User);
         assert!(msg.content.is_empty());
@@ -1250,37 +1249,37 @@ mod tests {
 
     #[test]
     fn transient_error_timeout() {
-        let err = crab_common::Error::Other("request timed out".into());
+        let err = crab_core::Error::Other("request timed out".into());
         assert!(is_transient_error(&err));
     }
 
     #[test]
     fn transient_error_connection() {
-        let err = crab_common::Error::Other("connection refused".into());
+        let err = crab_core::Error::Other("connection refused".into());
         assert!(is_transient_error(&err));
     }
 
     #[test]
     fn transient_error_rate_limit() {
-        let err = crab_common::Error::Other("SSE stream error: rate limit exceeded 429".into());
+        let err = crab_core::Error::Other("SSE stream error: rate limit exceeded 429".into());
         assert!(is_transient_error(&err));
     }
 
     #[test]
     fn transient_error_overloaded() {
-        let err = crab_common::Error::Other("server overloaded".into());
+        let err = crab_core::Error::Other("server overloaded".into());
         assert!(is_transient_error(&err));
     }
 
     #[test]
     fn non_transient_error_json() {
-        let err = crab_common::Error::Other("invalid JSON".into());
+        let err = crab_core::Error::Other("invalid JSON".into());
         assert!(!is_transient_error(&err));
     }
 
     #[test]
     fn non_transient_error_auth() {
-        let err = crab_common::Error::Other("unauthorized: invalid API key".into());
+        let err = crab_core::Error::Other("unauthorized: invalid API key".into());
         assert!(!is_transient_error(&err));
     }
 
@@ -1288,37 +1287,37 @@ mod tests {
 
     #[test]
     fn overloaded_error_529() {
-        let err = crab_common::Error::Other("HTTP 529: model is overloaded".into());
+        let err = crab_core::Error::Other("HTTP 529: model is overloaded".into());
         assert!(is_overloaded_error(&err));
     }
 
     #[test]
     fn overloaded_error_429() {
-        let err = crab_common::Error::Other("rate limit exceeded 429".into());
+        let err = crab_core::Error::Other("rate limit exceeded 429".into());
         assert!(is_overloaded_error(&err));
     }
 
     #[test]
     fn overloaded_error_rate_limit_text() {
-        let err = crab_common::Error::Other("Rate Limit exceeded".into());
+        let err = crab_core::Error::Other("Rate Limit exceeded".into());
         assert!(is_overloaded_error(&err));
     }
 
     #[test]
     fn overloaded_error_overloaded_text() {
-        let err = crab_common::Error::Other("server overloaded, try again".into());
+        let err = crab_core::Error::Other("server overloaded, try again".into());
         assert!(is_overloaded_error(&err));
     }
 
     #[test]
     fn not_overloaded_error_auth() {
-        let err = crab_common::Error::Other("unauthorized: invalid API key".into());
+        let err = crab_core::Error::Other("unauthorized: invalid API key".into());
         assert!(!is_overloaded_error(&err));
     }
 
     #[test]
     fn not_overloaded_error_json() {
-        let err = crab_common::Error::Other("invalid JSON response".into());
+        let err = crab_core::Error::Other("invalid JSON response".into());
         assert!(!is_overloaded_error(&err));
     }
 
@@ -1354,7 +1353,7 @@ mod tests {
 
     #[test]
     fn ptl_error_prompt_is_too_long() {
-        let err = crab_common::Error::Other(
+        let err = crab_core::Error::Other(
             "SSE stream error: prompt is too long: 250000 tokens > 200000 maximum".into(),
         );
         assert!(is_prompt_too_long_error(&err));
@@ -1362,31 +1361,31 @@ mod tests {
 
     #[test]
     fn ptl_error_context_length_exceeded() {
-        let err = crab_common::Error::Other("This model's maximum context length exceeded".into());
+        let err = crab_core::Error::Other("This model's maximum context length exceeded".into());
         assert!(is_prompt_too_long_error(&err));
     }
 
     #[test]
     fn ptl_error_too_many_tokens() {
-        let err = crab_common::Error::Other("too many tokens in the request".into());
+        let err = crab_core::Error::Other("too many tokens in the request".into());
         assert!(is_prompt_too_long_error(&err));
     }
 
     #[test]
     fn ptl_error_input_too_long() {
-        let err = crab_common::Error::Other("input too long for this model".into());
+        let err = crab_core::Error::Other("input too long for this model".into());
         assert!(is_prompt_too_long_error(&err));
     }
 
     #[test]
     fn not_ptl_error_other() {
-        let err = crab_common::Error::Other("invalid API key".into());
+        let err = crab_core::Error::Other("invalid API key".into());
         assert!(!is_prompt_too_long_error(&err));
     }
 
     #[test]
     fn not_ptl_error_overloaded() {
-        let err = crab_common::Error::Other("server overloaded".into());
+        let err = crab_core::Error::Other("server overloaded".into());
         assert!(!is_prompt_too_long_error(&err));
     }
 

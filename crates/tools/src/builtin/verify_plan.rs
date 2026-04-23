@@ -3,7 +3,7 @@
 //! Loads a plan file, checks each step's completion status, runs optional
 //! verification commands, and reports discrepancies.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -99,7 +99,7 @@ impl Tool for VerifyPlanExecutionTool {
 async fn verify_plan(plan_file: &str) -> Result<ToolOutput> {
     let path = std::path::Path::new(plan_file);
     let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        crab_common::Error::Tool(format!("failed to read plan file '{plan_file}': {e}"))
+        crab_core::Error::Tool(format!("failed to read plan file '{plan_file}': {e}"))
     })?;
 
     // Parse markdown-style checkboxes: `- [x]` (done) and `- [ ]` (pending).
@@ -137,7 +137,7 @@ async fn verify_plan(plan_file: &str) -> Result<ToolOutput> {
     };
 
     let json = serde_json::to_string_pretty(&report).map_err(|e| {
-        crab_common::Error::Tool(format!("failed to serialize verification report: {e}"))
+        crab_core::Error::Tool(format!("failed to serialize verification report: {e}"))
     })?;
     Ok(ToolOutput::success(json))
 }

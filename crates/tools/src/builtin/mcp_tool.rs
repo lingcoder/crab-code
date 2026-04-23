@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{
     Tool, ToolContext, ToolDisplayLine, ToolDisplayResult, ToolDisplayStyle, ToolOutput,
     ToolOutputContent, ToolSource,
@@ -284,8 +284,7 @@ mod tests {
         fn send(
             &self,
             req: JsonRpcRequest,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>>
-        {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>> {
             Box::pin(async move {
                 let idx = self.call_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
@@ -308,11 +307,11 @@ mod tests {
             &self,
             _method: &str,
             _params: serde_json::Value,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+        fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
     }

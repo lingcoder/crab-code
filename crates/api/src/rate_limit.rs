@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn common_error_is_not_retryable() {
-        let err = ApiError::Common(crab_common::Error::Other("test".into()));
+        let err = ApiError::Common(crab_core::Error::Other("test".into()));
         assert!(!is_retryable(&err));
     }
 

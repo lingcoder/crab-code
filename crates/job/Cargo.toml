@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Unified job scheduling — one-shot / interval / cron — for crab subsystems"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
 # serde (Job / JobHandle ids, persisted state)
 serde.workspace = true

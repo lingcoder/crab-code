@@ -4,7 +4,7 @@
 //! planning phase (e.g., outlining steps before executing). The actual mode
 //! transition is handled by the agent loop; this tool returns a confirmation.
 
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
 use serde_json::Value;
 use std::fmt::Write;

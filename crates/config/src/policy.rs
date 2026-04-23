@@ -120,7 +120,7 @@ pub fn policy_file_paths() -> Vec<PathBuf> {
         #[cfg(unix)]
         PathBuf::from("/etc/crab-code/policy.json"),
         // 2. Global user
-        crab_common::utils::path::home_dir()
+        crab_core::common::utils::path::home_dir()
             .join(".crab")
             .join("policy.json"),
     ];
@@ -139,13 +139,13 @@ pub fn project_policy_path(project_dir: &Path) -> PathBuf {
 /// Load a policy from a single JSON file.
 ///
 /// Returns `Ok(PolicyConfig::default())` if the file does not exist.
-fn load_from_file(path: &Path) -> crab_common::Result<PolicyConfig> {
+fn load_from_file(path: &Path) -> crab_core::Result<PolicyConfig> {
     match std::fs::read_to_string(path) {
         Ok(content) => serde_json::from_str(&content).map_err(|e| {
-            crab_common::Error::Config(format!("failed to parse policy {}: {e}", path.display()))
+            crab_core::Error::Config(format!("failed to parse policy {}: {e}", path.display()))
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PolicyConfig::default()),
-        Err(e) => Err(crab_common::Error::Config(format!(
+        Err(e) => Err(crab_core::Error::Config(format!(
             "failed to read policy {}: {e}",
             path.display()
         ))),

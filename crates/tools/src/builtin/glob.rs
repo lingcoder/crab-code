@@ -1,4 +1,4 @@
-use crab_common::Result;
+use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
 use crab_fs::glob::{GlobOptions, find_files};
 use serde_json::Value;
@@ -45,9 +45,9 @@ impl Tool for GlobTool {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let working_dir = ctx.working_dir.clone();
         Box::pin(async move {
-            let pattern = input["pattern"].as_str().ok_or_else(|| {
-                crab_common::Error::Other("missing required field: pattern".into())
-            })?;
+            let pattern = input["pattern"]
+                .as_str()
+                .ok_or_else(|| crab_core::Error::Other("missing required field: pattern".into()))?;
 
             let search_path = match input["path"].as_str() {
                 Some(p) if !p.is_empty() => {

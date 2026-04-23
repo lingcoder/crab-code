@@ -41,15 +41,15 @@ impl CallbackResult {
     ///
     /// Returns `Err` if the provider reported an error or if the callback
     /// contained neither a code nor an error.
-    pub fn into_code(self) -> crab_common::Result<String> {
+    pub fn into_code(self) -> crab_core::Result<String> {
         if let Some(err) = self.error {
             let detail = self.error_description.unwrap_or_default();
-            return Err(crab_common::Error::Other(format!(
+            return Err(crab_core::Error::Other(format!(
                 "OAuth provider returned error '{err}': {detail}"
             )));
         }
         self.code.ok_or_else(|| {
-            crab_common::Error::Other(
+            crab_core::Error::Other(
                 "OAuth callback missing both 'code' and 'error' parameters".into(),
             )
         })
@@ -99,25 +99,25 @@ pub const DEFAULT_WAIT: Duration = Duration::from_secs(300);
 ///
 /// Returns `Err` on bind failure, timeout, malformed HTTP request, or
 /// IO errors while writing the response.
-pub async fn await_callback(addr: &str, timeout: Duration) -> crab_common::Result<CallbackResult> {
+pub async fn await_callback(addr: &str, timeout: Duration) -> crab_core::Result<CallbackResult> {
     let listener = TcpListener::bind(addr)
         .await
-        .map_err(|e| crab_common::Error::Other(format!("bind {addr} failed: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("bind {addr} failed: {e}")))?;
 
     let accept = async {
         let (mut stream, _peer) = listener
             .accept()
             .await
-            .map_err(|e| crab_common::Error::Other(format!("accept failed: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("accept failed: {e}")))?;
 
         let mut buf = vec![0u8; 4096];
         let n = match tokio::time::timeout(READ_TIMEOUT, stream.read(&mut buf)).await {
             Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(crab_common::Error::Other(format!("read failed: {e}"))),
-            Err(_) => return Err(crab_common::Error::Other("callback read timeout".into())),
+            Ok(Err(e)) => return Err(crab_core::Error::Other(format!("read failed: {e}"))),
+            Err(_) => return Err(crab_core::Error::Other("callback read timeout".into())),
         };
         let req = std::str::from_utf8(&buf[..n]).map_err(|e| {
-            crab_common::Error::Other(format!("callback HTTP request is not UTF-8: {e}"))
+            crab_core::Error::Other(format!("callback HTTP request is not UTF-8: {e}"))
         })?;
 
         let parsed = parse_request_line(req);
@@ -140,7 +140,7 @@ pub async fn await_callback(addr: &str, timeout: Duration) -> crab_common::Resul
 
     match tokio::time::timeout(timeout, accept).await {
         Ok(result) => result,
-        Err(_) => Err(crab_common::Error::Other(format!(
+        Err(_) => Err(crab_core::Error::Other(format!(
             "no callback received within {}s — user did not complete browser auth",
             timeout.as_secs()
         ))),
@@ -156,16 +156,16 @@ pub async fn await_callback(addr: &str, timeout: Duration) -> crab_common::Resul
 /// # Errors
 ///
 /// Returns `Err` when the URL cannot be parsed as `http://host:port/path`.
-pub fn redirect_uri_addr(uri: &str) -> crab_common::Result<String> {
+pub fn redirect_uri_addr(uri: &str) -> crab_core::Result<String> {
     // Cheap inline parser — the URL shape for OAuth callbacks is fixed.
     let Some(rest) = uri.strip_prefix("http://") else {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "redirect_uri must be http:// (got {uri})"
         )));
     };
     let rest = rest.split_once('/').map_or(rest, |(host, _)| host);
     if rest.is_empty() {
-        return Err(crab_common::Error::Other(format!(
+        return Err(crab_core::Error::Other(format!(
             "redirect_uri missing host:port ({uri})"
         )));
     }

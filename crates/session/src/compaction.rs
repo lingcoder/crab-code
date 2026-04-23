@@ -229,7 +229,7 @@ pub trait CompactionClient: Send + Sync {
         &self,
         messages: &[Message],
         instruction: &str,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<String>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<String>> + Send + '_>>;
 }
 
 // ── Main compaction entry point ───────────────────────────────────────
@@ -240,7 +240,7 @@ pub async fn compact_with_config(
     conversation: &mut Conversation,
     config: &CompactionConfig,
     client: &dyn CompactionClient,
-) -> crab_common::Result<CompactionReport> {
+) -> crab_core::Result<CompactionReport> {
     let tokens_before = conversation.estimated_tokens();
     let messages_before = conversation.len();
 
@@ -283,7 +283,7 @@ pub async fn compact(
     conversation: &mut Conversation,
     strategy: CompactionStrategy,
     client: &dyn CompactionClient,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let config = CompactionConfig::default();
     apply_strategy(conversation, &strategy, &config, client).await
 }
@@ -294,7 +294,7 @@ async fn apply_strategy(
     strategy: &CompactionStrategy,
     config: &CompactionConfig,
     client: &dyn CompactionClient,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     match strategy {
         CompactionStrategy::SessionMemory { recent_turns } => {
             extract_session_memory(conversation, *recent_turns, client).await
@@ -503,7 +503,7 @@ async fn summarize_large_tool_results(
     conversation: &mut Conversation,
     config: &CompactionConfig,
     client: &dyn CompactionClient,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let turn_count = conversation.turn_count();
     let preserve_turns = turn_count.saturating_sub(config.preserve_recent_turns);
 
@@ -569,7 +569,7 @@ async fn summarize_old_messages(
     conversation: &mut Conversation,
     config: &CompactionConfig,
     client: &dyn CompactionClient,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     summarize_old_messages_keeping(conversation, config, client, config.preserve_recent_turns).await
 }
 
@@ -579,7 +579,7 @@ async fn summarize_old_messages_keeping(
     config: &CompactionConfig,
     client: &dyn CompactionClient,
     keep_recent: usize,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let turn_count = conversation.turn_count();
     if turn_count <= keep_recent {
         return Ok(()); // nothing old to summarize
@@ -694,7 +694,7 @@ async fn extract_session_memory(
     conversation: &mut Conversation,
     recent_turns: usize,
     client: &dyn CompactionClient,
-) -> crab_common::Result<()> {
+) -> crab_core::Result<()> {
     let turn_count = conversation.turn_count();
     if turn_count == 0 {
         return Ok(());
@@ -778,7 +778,7 @@ mod tests {
             &self,
             _messages: &[Message],
             _instruction: &str,
-        ) -> Pin<Box<dyn Future<Output = crab_common::Result<String>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crab_core::Result<String>> + Send + '_>> {
             Box::pin(async { Ok("summary".into()) })
         }
     }

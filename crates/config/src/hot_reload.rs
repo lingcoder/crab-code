@@ -188,7 +188,7 @@ fn load_current_settings(config: &HotReloadConfig) -> Settings {
 
 /// Manually reload settings from disk. Useful for one-shot reloads
 /// without the background watcher.
-pub fn reload_settings(project_dir: Option<&PathBuf>) -> crab_common::Result<Settings> {
+pub fn reload_settings(project_dir: Option<&PathBuf>) -> crab_core::Result<Settings> {
     crate::settings::load_merged_settings(project_dir)
 }
 

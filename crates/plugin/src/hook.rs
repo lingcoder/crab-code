@@ -147,9 +147,9 @@ impl HookExecutor {
     ///   }
     /// ]
     /// ```
-    pub fn from_settings_value(value: &serde_json::Value) -> crab_common::Result<Self> {
+    pub fn from_settings_value(value: &serde_json::Value) -> crab_core::Result<Self> {
         let hooks: Vec<HookDef> = serde_json::from_value(value.clone())
-            .map_err(|e| crab_common::Error::Other(format!("invalid hooks config: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("invalid hooks config: {e}")))?;
         Ok(Self::with_hooks(hooks))
     }
 
@@ -197,7 +197,7 @@ impl HookExecutor {
         &self,
         trigger: HookTrigger,
         ctx: &HookContext,
-    ) -> crab_common::Result<HookResult> {
+    ) -> crab_core::Result<HookResult> {
         let hooks = self.matching_hooks(trigger, &ctx.tool_name);
 
         if hooks.is_empty() {

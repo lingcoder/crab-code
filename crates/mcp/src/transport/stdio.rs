@@ -34,7 +34,7 @@ impl StdioTransport {
         command: &str,
         args: &[String],
         env: Option<&HashMap<String, String>>,
-    ) -> crab_common::Result<Self> {
+    ) -> crab_core::Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
@@ -48,16 +48,18 @@ impl StdioTransport {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            crab_common::Error::Other(format!("failed to spawn MCP server '{command}': {e}"))
+            crab_core::Error::Other(format!("failed to spawn MCP server '{command}': {e}"))
         })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            crab_common::Error::Other("failed to capture MCP server stdin".into())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| crab_core::Error::Other("failed to capture MCP server stdin".into()))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            crab_common::Error::Other("failed to capture MCP server stdout".into())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| crab_core::Error::Other("failed to capture MCP server stdout".into()))?;
 
         let writer = Arc::new(Mutex::new(stdin));
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
@@ -102,14 +104,15 @@ impl StdioTransport {
     }
 
     /// Write a framed message (Content-Length header + body) to stdin.
-    async fn write_message(&self, json: &str) -> crab_common::Result<()> {
+    async fn write_message(&self, json: &str) -> crab_core::Result<()> {
         let frame = format!("Content-Length: {}\r\n\r\n{}", json.len(), json);
         let mut writer = self.writer.lock().await;
-        writer.write_all(frame.as_bytes()).await.map_err(|e| {
-            crab_common::Error::Other(format!("failed to write to MCP server: {e}"))
-        })?;
+        writer
+            .write_all(frame.as_bytes())
+            .await
+            .map_err(|e| crab_core::Error::Other(format!("failed to write to MCP server: {e}")))?;
         writer.flush().await.map_err(|e| {
-            crab_common::Error::Other(format!("failed to flush MCP server stdin: {e}"))
+            crab_core::Error::Other(format!("failed to flush MCP server stdin: {e}"))
         })?;
         drop(writer);
         Ok(())
@@ -120,7 +123,7 @@ impl Transport for StdioTransport {
     fn send(
         &self,
         req: JsonRpcRequest,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<JsonRpcResponse>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<JsonRpcResponse>> + Send + '_>> {
         Box::pin(async move {
             let id = req.id;
 
@@ -133,7 +136,7 @@ impl Transport for StdioTransport {
 
             // Serialize and send the request.
             let json = serde_json::to_string(&req).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize request: {e}"))
+                crab_core::Error::Other(format!("failed to serialize request: {e}"))
             })?;
 
             tracing::debug!(method = %req.method, id, "sending MCP request");
@@ -141,7 +144,7 @@ impl Transport for StdioTransport {
 
             // Wait for the response from the reader task.
             rx.await.map_err(|_| {
-                crab_common::Error::Other("MCP server closed connection before responding".into())
+                crab_core::Error::Other("MCP server closed connection before responding".into())
             })
         })
     }
@@ -150,21 +153,21 @@ impl Transport for StdioTransport {
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
         let notif = JsonRpcNotification::new(
             method.to_string(),
             if params.is_null() { None } else { Some(params) },
         );
         Box::pin(async move {
             let json = serde_json::to_string(&notif).map_err(|e| {
-                crab_common::Error::Other(format!("failed to serialize notification: {e}"))
+                crab_core::Error::Other(format!("failed to serialize notification: {e}"))
             })?;
             tracing::debug!(method = notif.method, "sending MCP notification");
             self.write_message(&json).await
         })
     }
 
-    fn close(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>> {
+    fn close(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
         Box::pin(async move {
             // Abort the reader task.
             let reader_handle = self.reader_handle.lock().await.take();
@@ -185,7 +188,7 @@ impl Transport for StdioTransport {
 /// Returns `Ok(None)` on EOF, `Ok(Some(body))` on success.
 async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
-) -> crab_common::Result<Option<String>> {
+) -> crab_core::Result<Option<String>> {
     // Read headers until we find Content-Length.
     let mut content_length: Option<usize> = None;
     let mut header_line = String::new();
@@ -195,7 +198,7 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
         let bytes_read = reader
             .read_line(&mut header_line)
             .await
-            .map_err(|e| crab_common::Error::Other(format!("failed to read header: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read header: {e}")))?;
 
         if bytes_read == 0 {
             return Ok(None); // EOF
@@ -213,18 +216,18 @@ async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     }
 
     let length = content_length.ok_or_else(|| {
-        crab_common::Error::Other("missing Content-Length header in MCP message".into())
+        crab_core::Error::Other("missing Content-Length header in MCP message".into())
     })?;
 
     // Read exactly `length` bytes of the body.
     let mut body = vec![0u8; length];
     tokio::io::AsyncReadExt::read_exact(reader, &mut body)
         .await
-        .map_err(|e| crab_common::Error::Other(format!("failed to read message body: {e}")))?;
+        .map_err(|e| crab_core::Error::Other(format!("failed to read message body: {e}")))?;
 
     String::from_utf8(body)
         .map(Some)
-        .map_err(|e| crab_common::Error::Other(format!("invalid UTF-8 in MCP message: {e}")))
+        .map_err(|e| crab_core::Error::Other(format!("invalid UTF-8 in MCP message: {e}")))
 }
 
 #[cfg(test)]

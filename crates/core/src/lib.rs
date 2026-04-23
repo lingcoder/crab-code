@@ -1,3 +1,6 @@
+pub use crab_common as common;
+pub use crab_common::{Error, Result};
+
 pub mod capability;
 pub mod config;
 pub mod conversation;
