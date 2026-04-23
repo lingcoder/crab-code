@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use crab_api::LlmBackend;
 use crab_core::event::Event;
-use crab_core::message::Message;
 use crab_core::model::ModelId;
 use crab_core::tool::ToolContext;
 use crab_memory::MemoryStore;
@@ -194,6 +193,7 @@ impl AgentSession {
             source: crab_core::query::QuerySource::Repl,
             compaction_client: None,
             compaction_config: crab_session::CompactionConfig::default(),
+            session_persister: None,
         };
 
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -225,7 +225,8 @@ impl AgentSession {
             self.compact_conversation().await;
         }
 
-        self.conversation.push(Message::user(input));
+        let user_msg = crab_session::expand_at_mentions(input, &self.tool_ctx.working_dir);
+        self.conversation.push(user_msg);
 
         let result = query_loop::query_loop(
             &mut self.conversation,
@@ -411,6 +412,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crab_core::message::Message;
     use crab_core::permission::PermissionPolicy;
 
     /// Create a dummy `LlmBackend` for tests (`OpenAI` client pointing to localhost).

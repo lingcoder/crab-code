@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crab_core::message::{ContentBlock, Message, Role};
 use serde::{Deserialize, Serialize};
@@ -68,9 +70,19 @@ pub enum ExportFormat {
     Markdown,
 }
 
+/// Callback for auto-persisting messages during the query loop.
+///
+/// Implementors should write the message to durable storage (e.g. JSONL
+/// append) so that crash recovery can reconstruct the conversation.
+pub trait SessionPersister: Send + Sync {
+    fn persist_message(&self, msg: &Message);
+}
+
 /// Persists and recovers session transcripts from disk.
 ///
 /// Each session is stored as `{base_dir}/{session_id}.json`.
+/// JSONL transcripts (one message per line) are stored alongside as
+/// `{base_dir}/{session_id}.jsonl` for crash-resilient per-turn saving.
 pub struct SessionHistory {
     pub base_dir: PathBuf,
 }
@@ -282,6 +294,67 @@ impl SessionHistory {
             return Ok(None);
         };
         Ok(Some(compute_stats(&messages)))
+    }
+
+    // ── JSONL per-turn persistence ─────────────────────────────────
+
+    fn jsonl_path(&self, session_id: &str) -> PathBuf {
+        self.base_dir.join(format!("{session_id}.jsonl"))
+    }
+
+    /// Append a single message as one JSONL line (crash-resilient).
+    pub fn append_jsonl(&self, session_id: &str, msg: &Message) -> crab_common::Result<()> {
+        self.ensure_dir()?;
+        let mut line = serde_json::to_string(msg)
+            .map_err(|e| crab_common::Error::Other(format!("serialize message: {e}")))?;
+        line.push('\n');
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.jsonl_path(session_id))?;
+        file.write_all(line.as_bytes())?;
+        Ok(())
+    }
+
+    /// Load messages from a JSONL transcript. Returns `None` if the file
+    /// doesn't exist. Silently skips malformed lines (partial writes from
+    /// crashes).
+    pub fn load_jsonl(&self, session_id: &str) -> crab_common::Result<Option<Vec<Message>>> {
+        let path = self.jsonl_path(session_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = std::fs::read_to_string(&path)?;
+        let messages: Vec<Message> = data
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        Ok(Some(messages))
+    }
+
+    /// Create a [`SessionPersister`] bound to a specific session ID.
+    pub fn persister(self: &Arc<Self>, session_id: String) -> BoundSessionPersister {
+        BoundSessionPersister {
+            history: Arc::clone(self),
+            session_id,
+        }
+    }
+}
+
+/// A [`SessionPersister`] bound to one session, suitable for passing into
+/// the query loop.
+pub struct BoundSessionPersister {
+    history: Arc<SessionHistory>,
+    session_id: String,
+}
+
+impl SessionPersister for BoundSessionPersister {
+    fn persist_message(&self, msg: &Message) {
+        if let Err(e) = self.history.append_jsonl(&self.session_id, msg) {
+            eprintln!("[session] failed to persist message to JSONL: {e}");
+        }
     }
 }
 
@@ -1052,5 +1125,67 @@ mod tests {
         let metas = history.list_sessions_with_metadata().unwrap();
         assert_eq!(metas.len(), 1);
         assert!(metas[0].name.is_none());
+    }
+
+    // ── JSONL tests ───────────────────────────────────────────────
+
+    #[test]
+    fn jsonl_append_and_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history.append_jsonl("s1", &Message::user("hello")).unwrap();
+        history
+            .append_jsonl("s1", &Message::assistant("hi"))
+            .unwrap();
+
+        let msgs = history.load_jsonl("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].text(), "hello");
+        assert_eq!(msgs[1].text(), "hi");
+    }
+
+    #[test]
+    fn jsonl_load_nonexistent_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        assert!(history.load_jsonl("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn jsonl_skips_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history.append_jsonl("s1", &Message::user("good")).unwrap();
+        // Simulate a partial write (crash mid-line)
+        let path = dir.path().join("s1.jsonl");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"truncated\n")
+            .unwrap();
+        history
+            .append_jsonl("s1", &Message::assistant("also good"))
+            .unwrap();
+
+        let msgs = history.load_jsonl("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].text(), "good");
+        assert_eq!(msgs[1].text(), "also good");
+    }
+
+    #[test]
+    fn jsonl_persister_via_trait() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = Arc::new(SessionHistory::new(dir.path().to_path_buf()));
+        let persister = history.persister("s1".into());
+
+        persister.persist_message(&Message::user("from trait"));
+        persister.persist_message(&Message::assistant("reply"));
+
+        let msgs = history.load_jsonl("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 2);
     }
 }

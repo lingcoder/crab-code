@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::clipboard::Clipboard;
+use crate::command_queue::CommandQueue;
 use crate::components::approval_queue::ApprovalQueue;
 use crate::components::autocomplete::{AutoComplete, CommandInfo};
 use crate::components::bottom_bar::BottomBar;
@@ -21,13 +22,13 @@ use crate::components::header::HeaderBar;
 use crate::components::input::InputBox;
 use crate::components::input_area::InputArea;
 use crate::components::notification::NotificationManager;
-use crate::components::virtual_list::{VirtualMessage, VirtualMessageList, ViewportState};
 use crate::components::output_styles::OutputStyles;
 use crate::components::permission::{PermissionCard, PermissionResponse};
 use crate::components::search::{self, SearchState};
 use crate::components::session_sidebar::SessionSidebar;
 use crate::components::spinner::Spinner;
 use crate::components::tool_output::{ToolOutputEntry, ToolOutputList};
+use crate::components::virtual_list::{ViewportState, VirtualMessage, VirtualMessageList};
 use crate::event::TuiEvent;
 use crate::keybindings::{Action, KeyContext, Keybindings, ResolveOutcome};
 use crate::layout::AppLayout;
@@ -255,6 +256,8 @@ pub struct App {
     pub session_grants: std::collections::HashSet<String>,
     /// Structured message list — the source of truth for conversation display.
     pub messages: Vec<ChatMessage>,
+    /// Queue of user commands submitted while the agent is processing.
+    pub command_queue: CommandQueue,
     /// Stashed input text (Ctrl+S to save/restore).
     pub stash: Option<String>,
     /// Input history for history search (Ctrl+R).
@@ -313,6 +316,7 @@ impl App {
             permission_mode: crab_core::permission::PermissionMode::Default,
             session_grants: std::collections::HashSet::new(),
             messages: Vec::new(),
+            command_queue: CommandQueue::new(),
             stash: None,
             input_history_list: Vec::new(),
             overlay_stack: crate::overlay::OverlayStack::new(),
@@ -348,8 +352,22 @@ impl App {
         self.content_scroll = 0;
         self.scroll_anchor = None;
         self.unseen_message_count = 0;
+        self.command_queue.clear();
         self.virtual_list.invalidate();
         self.next_msg_id = 0;
+    }
+
+    /// Dequeue the next queued command and prepare the app to submit it.
+    ///
+    /// Returns `Some(text)` if a command was waiting, `None` if the queue is
+    /// empty. When a command is dequeued, the user message is pushed to the
+    /// message list and the state transitions back to `Processing`.
+    pub fn dequeue_command(&mut self) -> Option<String> {
+        let text = self.command_queue.pop()?;
+        self.messages.push(ChatMessage::User { text: text.clone() });
+        self.state = AppState::Processing;
+        self.spinner.start_with_random_verb();
+        Some(text)
     }
 
     /// Toggle `collapsed` on the last `ToolResult` in the message list.
@@ -752,7 +770,8 @@ impl App {
 
         match self.state {
             AppState::Confirming => self.handle_confirming_key(key),
-            AppState::Initializing | AppState::Processing => AppAction::None,
+            AppState::Initializing => AppAction::None,
+            AppState::Processing => self.handle_processing_key(key),
             AppState::Idle | AppState::WaitingForInput => {
                 // Switch to WaitingForInput on first keystroke
                 if self.state == AppState::Idle {
@@ -873,6 +892,25 @@ impl App {
             }
             _ => {}
         }
+        AppAction::None
+    }
+
+    /// Handle keystrokes while the agent is processing.
+    ///
+    /// The user can type ahead and press Enter to queue commands.
+    /// Queued commands are auto-submitted after the current turn finishes.
+    fn handle_processing_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
+        if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
+            if !self.input.is_empty() {
+                let text = self.input.submit();
+                self.input_history_list.push(text.clone());
+                self.command_queue.push(text);
+                self.notifications
+                    .info(format!("Queued ({} pending)", self.command_queue.len()));
+            }
+            return AppAction::None;
+        }
+        self.input.handle_key(key);
         AppAction::None
     }
 
@@ -2871,5 +2909,59 @@ mod tests {
         // And scroll-math sees the full line count (regression anchor for
         // app.rs:399/701/994 scroll-anchor computation).
         assert_eq!(app.content_buffer.lines().count(), 3);
+    }
+
+    #[test]
+    fn typing_during_processing_queues_on_enter() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+
+        app.handle_event(key(KeyCode::Char('h')));
+        app.handle_event(key(KeyCode::Char('i')));
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.command_queue.len(), 1);
+        assert!(app.input.is_empty());
+        assert_eq!(app.state, AppState::Processing);
+    }
+
+    #[test]
+    fn dequeue_command_returns_fifo() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.handle_event(key(KeyCode::Char('a')));
+        app.handle_event(key(KeyCode::Enter));
+        app.handle_event(key(KeyCode::Char('b')));
+        app.handle_event(key(KeyCode::Enter));
+
+        assert_eq!(app.command_queue.len(), 2);
+
+        let first = app.dequeue_command();
+        assert_eq!(first, Some("a".into()));
+        assert_eq!(app.state, AppState::Processing);
+        assert!(messages_contain(&app.messages, "a"));
+
+        let second = app.dequeue_command();
+        assert_eq!(second, Some("b".into()));
+
+        let third = app.dequeue_command();
+        assert_eq!(third, None);
+    }
+
+    #[test]
+    fn empty_enter_during_processing_does_not_queue() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(action, AppAction::None);
+        assert!(app.command_queue.is_empty());
+    }
+
+    #[test]
+    fn reset_clears_command_queue() {
+        let mut app = App::new("test");
+        app.command_queue.push("test".into());
+        app.reset_for_new_session();
+        assert!(app.command_queue.is_empty());
     }
 }

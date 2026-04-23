@@ -119,6 +119,28 @@ pub async fn execute_tool_calls(
     let write_batch_token = cancel.child_token();
     for call in &writes {
         if write_batch_token.is_cancelled() {
+            // Generate synthetic tool_result for all remaining writes
+            // to prevent orphaned tool_use blocks (API validation error).
+            for remaining in &writes {
+                if !results.iter().any(|(id, _)| id == remaining.id) {
+                    let id = remaining.id.to_string();
+                    let output = ToolOutput::error("[Request interrupted by user for tool use]");
+                    let _ = event_tx
+                        .send(Event::ToolUseStart {
+                            id: id.clone(),
+                            name: remaining.name.to_string(),
+                            input: remaining.input.clone(),
+                        })
+                        .await;
+                    let _ = event_tx
+                        .send(Event::ToolResult {
+                            id: id.clone(),
+                            output: output.clone(),
+                        })
+                        .await;
+                    results.push((id, Ok(output)));
+                }
+            }
             break;
         }
         let id = call.id.to_string();
@@ -369,5 +391,56 @@ mod tests {
         assert!(write_batch.is_cancelled());
         // Query-level cancel is NOT affected
         assert!(!query_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancelled_writes_get_synthetic_tool_results() {
+        use crab_core::permission::{PermissionMode, PermissionPolicy};
+        let executor = ToolExecutor::new(std::sync::Arc::new(
+            crab_tools::builtin::create_default_registry(),
+        ));
+        let ctx = ToolContext {
+            working_dir: std::env::current_dir().unwrap(),
+            permission_mode: PermissionMode::Default,
+            session_id: String::new(),
+            cancellation_token: CancellationToken::new(),
+            permission_policy: PermissionPolicy::default(),
+            ext: Default::default(),
+        };
+        let (event_tx, _event_rx) = mpsc::channel(64);
+        let cancel = CancellationToken::new();
+
+        // Pre-cancel so all writes are skipped
+        cancel.cancel();
+
+        let assistant_msg = Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::tool_use("tu_1", "Write", serde_json::json!({"path": "a.txt"})),
+                ContentBlock::tool_use("tu_2", "Edit", serde_json::json!({"path": "b.txt"})),
+            ],
+        );
+
+        let results = execute_tool_calls(
+            &assistant_msg,
+            &executor,
+            &ctx,
+            &event_tx,
+            &cancel,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Both writes should have synthetic interrupt results
+        assert_eq!(results.len(), 2);
+        for (id, result) in &results {
+            assert!(id == "tu_1" || id == "tu_2", "unexpected id: {id}");
+            let output = result.as_ref().unwrap();
+            assert!(output.is_error);
+            assert!(output.text().contains("interrupted by user"));
+        }
     }
 }

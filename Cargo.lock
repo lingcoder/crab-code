@@ -1128,6 +1128,7 @@ dependencies = [
 name = "crab-session"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "crab-api",
  "crab-common",
  "crab-config",

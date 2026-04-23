@@ -3,6 +3,7 @@ pub mod animation;
 pub mod app;
 pub mod app_event;
 pub mod clipboard;
+pub mod command_queue;
 pub mod components;
 pub mod event;
 pub mod event_broker;

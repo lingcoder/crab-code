@@ -18,11 +18,7 @@ pub struct ThinkingCell {
 
 impl ThinkingCell {
     #[must_use]
-    pub fn new(
-        text: String,
-        collapsed: bool,
-        duration: Option<std::time::Duration>,
-    ) -> Self {
+    pub fn new(text: String, collapsed: bool, duration: Option<std::time::Duration>) -> Self {
         Self {
             text,
             collapsed,

@@ -185,6 +185,9 @@ pub async fn query_loop(
 
         // Add assistant message to conversation
         let has_tool_use = assistant_msg.has_tool_use();
+        if let Some(persister) = &config.session_persister {
+            persister.persist_message(&assistant_msg);
+        }
         conversation.push(assistant_msg.clone());
 
         // If no tool use, run stop hooks — continue if any returns Retry
@@ -236,6 +239,9 @@ pub async fn query_loop(
 
         // Build tool result message and add to conversation
         let result_msg = crate::tool_orchestration::tool_results_message(tool_results);
+        if let Some(persister) = &config.session_persister {
+            persister.persist_message(&result_msg);
+        }
         conversation.push(result_msg);
     }
 }
@@ -643,7 +649,8 @@ async fn run_compaction(
         let messages_before = conversation.len();
 
         match strategy {
-            CompactionStrategy::Snip
+            CompactionStrategy::SessionMemory { .. }
+            | CompactionStrategy::Snip
             | CompactionStrategy::Microcompact
             | CompactionStrategy::Summarize
             | CompactionStrategy::Hybrid { .. } => {
@@ -732,6 +739,27 @@ async fn execute_tool_calls(
     // Execute write tools sequentially (with hook support)
     for call in &writes {
         if cancel.is_cancelled() {
+            // Generate synthetic tool_result for all remaining writes
+            for remaining in &writes {
+                if !results.iter().any(|(id, _)| id == remaining.id) {
+                    let id = remaining.id.to_string();
+                    let output = ToolOutput::error("[Request interrupted by user for tool use]");
+                    let _ = event_tx
+                        .send(Event::ToolUseStart {
+                            id: id.clone(),
+                            name: remaining.name.to_string(),
+                            input: remaining.input.clone(),
+                        })
+                        .await;
+                    let _ = event_tx
+                        .send(Event::ToolResult {
+                            id: id.clone(),
+                            output: output.clone(),
+                        })
+                        .await;
+                    results.push((id, Ok(output)));
+                }
+            }
             break;
         }
         let id = call.id.to_string();
@@ -1095,6 +1123,7 @@ mod tests {
             source: QuerySource::Repl,
             compaction_client: None,
             compaction_config: crab_session::CompactionConfig::default(),
+            session_persister: None,
         };
         assert_eq!(config.model.as_str(), "claude-sonnet-4-20250514");
         assert_eq!(config.max_tokens, 4096);
@@ -1119,6 +1148,7 @@ mod tests {
             source: QuerySource::Repl,
             compaction_client: None,
             compaction_config: crab_session::CompactionConfig::default(),
+            session_persister: None,
         };
         assert!(config.retry_policy.is_some());
         assert_eq!(config.retry_policy.unwrap().max_retries, 5);
@@ -1261,6 +1291,7 @@ mod tests {
             source: QuerySource::Repl,
             compaction_client: None,
             compaction_config: crab_session::CompactionConfig::default(),
+            session_persister: None,
         };
         assert_eq!(
             config.fallback_model.as_ref().unwrap().as_str(),
@@ -1360,6 +1391,7 @@ mod tests {
             source: QuerySource::Repl,
             compaction_client: None,
             compaction_config: crab_session::CompactionConfig::default(),
+            session_persister: None,
         };
         assert_eq!(
             config.plan_model.as_ref().unwrap().as_str(),

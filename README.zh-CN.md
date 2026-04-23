@@ -35,7 +35,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## 对比
 
-| | Crab Code | Claude Code | [OpenCode](https://github.com/anomalyco/opencode) | Codex CLI |
+| | Crab Code | Claude Code | OpenCode| Codex CLI |
 |--|-----------|-------------|----------|-----------|
 | 开源 | Apache 2.0 | 闭源 | MIT | Apache 2.0 |
 | 语言 | Rust | TypeScript | TypeScript | Rust |

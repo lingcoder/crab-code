@@ -35,8 +35,8 @@ See `crab --help` for more. Config: `~/.crab/settings.json`
 
 ## Comparison
 
-| | Crab Code | Claude Code | [OpenCode](https://github.com/anomalyco/opencode) | Codex CLI |
-|--|-----------|-------------|----------|-----------|
+| | Crab Code | Claude Code | OpenCode| Codex CLI |
+|--|-----------|-------------|---------|-----------|
 | Open Source | Apache 2.0 | Proprietary | MIT | Apache 2.0 |
 | Language | Rust | TypeScript | TypeScript | Rust |
 | Models | Any provider | Anthropic | Any provider | OpenAI only |

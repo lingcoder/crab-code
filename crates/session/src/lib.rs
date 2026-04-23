@@ -4,6 +4,7 @@ pub mod context;
 pub mod conversation;
 pub mod cost;
 pub mod history;
+pub mod input_expand;
 pub mod memory;
 pub mod memory_extract;
 pub mod micro_compact;
@@ -19,7 +20,11 @@ pub use compaction::{
 pub use context::{ContextAction, ContextManager};
 pub use conversation::Conversation;
 pub use cost::{CostAccumulator, CostSummary, ModelPricing, lookup_pricing};
-pub use history::{ExportFormat, SearchResult, SessionHistory, SessionMetadata, SessionStats};
+pub use history::{
+    BoundSessionPersister, ExportFormat, SearchResult, SessionHistory, SessionMetadata,
+    SessionPersister, SessionStats,
+};
+pub use input_expand::expand_at_mentions;
 pub use memory::{IndexEntry, MemoryFile, MemoryIndex, MemoryStore};
 pub use snip_compact::SnipConfig;
 pub use template::{

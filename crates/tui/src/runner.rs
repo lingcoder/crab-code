@@ -26,7 +26,6 @@ use tokio::sync::mpsc;
 use crab_agent::SessionConfig;
 use crab_api::LlmBackend;
 use crab_core::event::Event;
-use crab_core::message::Message;
 use crab_session::{Conversation, SessionHistory};
 use crab_skill::SkillRegistry;
 use crab_tools::builtin::create_default_registry;
@@ -528,6 +527,7 @@ async fn background_init(config: BackgroundInitConfig) -> InitResult {
         source: crab_core::query::QuerySource::Repl,
         compaction_client: None,
         compaction_config: crab_session::CompactionConfig::default(),
+        session_persister: None,
     };
 
     // Discover skills for /command support
@@ -764,6 +764,51 @@ async fn run_loop(
                             }).await;
                         }
                     }
+
+                    if let Some(queued_text) = app.dequeue_command() {
+                        let effective_text =
+                            resolve_slash_command(&queued_text, &rt.skill_registry);
+
+                        cancel = tokio_util::sync::CancellationToken::new();
+                        rt.tool_ctx.cancellation_token = cancel.clone();
+
+                        let user_msg = crab_session::expand_at_mentions(
+                            &effective_text,
+                            &rt.tool_ctx.working_dir,
+                        );
+                        rt.conversation.push(user_msg);
+                        let mut task_conversation = std::mem::take(&mut rt.conversation);
+                        let task_backend = backend.clone();
+                        let task_executor = rt.executor.clone();
+                        let task_ctx = rt.tool_ctx.clone();
+                        let task_config = rt.loop_config.clone();
+                        let task_event_tx = event_tx.clone();
+                        let task_cancel = cancel.clone();
+
+                        let (return_tx, return_rx) = tokio::sync::oneshot::channel();
+                        conv_return = Some(return_rx);
+
+                        tokio::spawn(async move {
+                            let mut task_cost = crab_session::CostAccumulator::default();
+                            let result = crab_engine::query_loop(
+                                &mut task_conversation,
+                                &task_backend,
+                                &task_executor,
+                                &task_ctx,
+                                &task_config,
+                                &mut task_cost,
+                                task_event_tx,
+                                task_cancel,
+                            )
+                            .await;
+
+                            let _ = return_tx.send(AgentTaskResult {
+                                conversation: task_conversation,
+                                result,
+                                cost: task_cost,
+                            });
+                        });
+                    }
                 }
                 continue;
             }
@@ -833,7 +878,9 @@ async fn run_loop(
                 cancel = tokio_util::sync::CancellationToken::new();
                 rt.tool_ctx.cancellation_token = cancel.clone();
 
-                rt.conversation.push(Message::user(&effective_text));
+                let user_msg =
+                    crab_session::expand_at_mentions(&effective_text, &rt.tool_ctx.working_dir);
+                rt.conversation.push(user_msg);
                 let mut task_conversation = std::mem::take(&mut rt.conversation);
                 let task_backend = backend.clone();
                 let task_executor = rt.executor.clone();

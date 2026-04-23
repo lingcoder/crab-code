@@ -23,6 +23,13 @@ pub enum CompactionMode {
         /// Number of recent turns to keep.
         window_size: usize,
     },
+    /// Lightest compaction: LLM-summarize only the most recent N turns into
+    /// a session memory note prepended to the conversation. No messages are
+    /// removed — this is additive context extraction.
+    SessionMemory {
+        /// Number of recent turns to summarize (default: 5).
+        recent_turns: usize,
+    },
     /// Automatic multi-level strategy (default): picks the best approach
     /// based on context usage percentage.
     #[default]
@@ -158,6 +165,9 @@ impl CompactionReport {
 /// 5-level compaction strategy, triggered by context usage thresholds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompactionStrategy {
+    /// Level 0 (lightest): Extract a session memory note from recent turns.
+    /// Additive — no messages are removed.
+    SessionMemory { recent_turns: usize },
     /// Level 1 (70-80%): Trim old tool output, keep only summary lines.
     Snip,
     /// Level 2 (80-85%): Replace large results (>500 tokens) with AI summary.
@@ -248,6 +258,9 @@ pub async fn compact_with_config(
         CompactionMode::SlidingWindow { window_size } => CompactionStrategy::SlidingWindow {
             window_size: *window_size,
         },
+        CompactionMode::SessionMemory { recent_turns } => CompactionStrategy::SessionMemory {
+            recent_turns: *recent_turns,
+        },
     };
 
     // Apply the strategy
@@ -283,6 +296,9 @@ async fn apply_strategy(
     client: &dyn CompactionClient,
 ) -> crab_common::Result<()> {
     match strategy {
+        CompactionStrategy::SessionMemory { recent_turns } => {
+            extract_session_memory(conversation, *recent_turns, client).await
+        }
         CompactionStrategy::Snip => {
             snip_large_tool_results(conversation, config);
             Ok(())
@@ -670,6 +686,84 @@ fn sliding_window(conversation: &mut Conversation, window_size: usize, config: &
     }
 }
 
+/// Session memory compaction: summarize the most recent N turns into a
+/// session memory note prepended as a user+assistant pair. No messages
+/// are removed — this is purely additive context extraction, the lightest
+/// possible compaction step.
+async fn extract_session_memory(
+    conversation: &mut Conversation,
+    recent_turns: usize,
+    client: &dyn CompactionClient,
+) -> crab_common::Result<()> {
+    let turn_count = conversation.turn_count();
+    if turn_count == 0 {
+        return Ok(());
+    }
+
+    let messages = conversation.inner.messages().to_vec();
+    let summarize_from = turn_count.saturating_sub(recent_turns);
+
+    let mut to_summarize = Vec::new();
+    let mut current_turn = 0usize;
+    for msg in &messages {
+        if msg.role == Role::User {
+            current_turn += 1;
+        }
+        if current_turn > summarize_from {
+            to_summarize.push(msg.clone());
+        }
+    }
+
+    if to_summarize.is_empty() {
+        return Ok(());
+    }
+
+    let memory = client
+        .summarize(
+            &to_summarize,
+            "Extract key facts, decisions, file paths, and outcomes from these recent messages \
+             into a concise session memory note. Use bullet points.",
+        )
+        .await
+        .unwrap_or_else(|_| "[session memory extraction failed]".into());
+
+    let note = Message::new(
+        Role::User,
+        vec![ContentBlock::text(format!(
+            "[Session memory — extracted from recent turns]\n{memory}"
+        ))],
+    );
+    let ack = Message::new(
+        Role::Assistant,
+        vec![ContentBlock::text(
+            "Noted, I'll keep this context in mind.".to_owned(),
+        )],
+    );
+
+    // Prepend after system messages but before the first user turn
+    let mut rebuilt = Vec::with_capacity(messages.len() + 2);
+    let mut inserted = false;
+    for msg in &messages {
+        if !inserted && msg.role != Role::System {
+            rebuilt.push(note.clone());
+            rebuilt.push(ack.clone());
+            inserted = true;
+        }
+        rebuilt.push(msg.clone());
+    }
+    if !inserted {
+        rebuilt.push(note);
+        rebuilt.push(ack);
+    }
+
+    conversation.inner.clear();
+    for msg in rebuilt {
+        conversation.inner.push(msg);
+    }
+
+    Ok(())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -716,6 +810,7 @@ mod tests {
             CompactionMode::Summarize,
             CompactionMode::Truncate,
             CompactionMode::SlidingWindow { window_size: 5 },
+            CompactionMode::SessionMemory { recent_turns: 3 },
             CompactionMode::Auto,
         ];
         for mode in &modes {
@@ -1339,5 +1434,39 @@ mod tests {
         truncate_preserving_important(&mut conv, 100_000, &config);
 
         assert_eq!(conv.len(), before);
+    }
+
+    // ── Session memory compaction ─────────────────────────────────
+
+    #[tokio::test]
+    async fn session_memory_is_additive() {
+        let mut conv = make_conv(100_000);
+        fill_turns(&mut conv, 3);
+        let before = conv.len(); // 6 messages (3 user + 3 assistant)
+
+        let client = DummyClient;
+        extract_session_memory(&mut conv, 2, &client).await.unwrap();
+
+        // 6 original + 2 injected (note + ack) = 8
+        assert_eq!(conv.len(), before + 2);
+        // First message should be the session memory note (injected before first user)
+        let first_text = conv.inner.messages()[0].text();
+        assert!(first_text.contains("[Session memory"));
+    }
+
+    #[tokio::test]
+    async fn session_memory_empty_conv_is_noop() {
+        let mut conv = make_conv(100_000);
+        let client = DummyClient;
+        extract_session_memory(&mut conv, 5, &client).await.unwrap();
+        assert_eq!(conv.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn session_memory_mode_roundtrip() {
+        let mode = CompactionMode::SessionMemory { recent_turns: 3 };
+        let json = serde_json::to_string(&mode).unwrap();
+        let back: CompactionMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, mode);
     }
 }

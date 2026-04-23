@@ -17,7 +17,9 @@ use crab_core::model::ModelId;
 use crab_core::query::QuerySource;
 use crab_core::tool::ToolContext;
 use crab_plugin::hook::HookExecutor;
-use crab_session::{CompactionClient, CompactionConfig, Conversation, CostAccumulator};
+use crab_session::{
+    CompactionClient, CompactionConfig, Conversation, CostAccumulator, SessionPersister,
+};
 use crab_tools::executor::ToolExecutor;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -79,6 +81,9 @@ pub struct QueryConfig {
     pub compaction_client: Option<Arc<dyn CompactionClient>>,
     /// Compaction configuration (mode, trigger thresholds, preservation rules).
     pub compaction_config: CompactionConfig,
+    /// Per-turn message persister for crash-resilient JSONL transcripts.
+    /// When set, each message is appended to disk as it enters the conversation.
+    pub session_persister: Option<Arc<dyn SessionPersister>>,
 }
 
 /// Query engine — bundles the immutable handles needed to run the loop.
