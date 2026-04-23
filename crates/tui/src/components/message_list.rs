@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::app::ChatMessage;
-use crate::history::cell_from_chat_message;
+use crate::history::group_messages;
 use crate::traits::Renderable;
 
 /// Renders the structured message list with scroll support.
@@ -47,8 +47,7 @@ pub fn render_messages(
     }
 
     let mut rendered_lines: Vec<Line<'static>> = Vec::new();
-    for msg in messages {
-        let cell = cell_from_chat_message(msg);
+    for cell in group_messages(messages) {
         rendered_lines.extend(cell.display_lines(area.width));
     }
 

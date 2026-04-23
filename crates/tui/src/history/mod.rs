@@ -12,12 +12,14 @@
 //! forcing every caller to re-flatten `display_lines`.
 
 pub mod cells;
+pub mod grouping;
 
 use std::any::Any;
 
 use ratatui::text::Line;
 
 pub use cells::{AssistantCell, SystemCell, ToolCallCell, ToolResultCell, UserCell};
+pub use grouping::group_messages;
 
 /// A single unit of the transcript.
 pub trait HistoryCell: Send + Sync + std::fmt::Debug {
