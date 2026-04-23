@@ -2,6 +2,7 @@ pub mod action;
 pub mod animation;
 pub mod app;
 pub mod app_event;
+pub mod changelog;
 pub mod clipboard;
 pub mod command_queue;
 pub mod components;

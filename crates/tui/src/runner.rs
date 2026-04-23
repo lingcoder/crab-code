@@ -324,8 +324,8 @@ fn push_welcome_if_needed(app: &mut App, sessions: &[crab_agent::SessionMetadata
         })
         .collect();
 
-    // What's new stays empty until Phase 2 wires in CHANGELOG parsing.
-    let whats_new: Vec<String> = Vec::new();
+    // What's new — top bullets from docs/CHANGELOG.md's most recent entry.
+    let whats_new = crate::changelog::whats_new(3);
 
     let msg = crate::app::ChatMessage::Welcome {
         version: env!("CARGO_PKG_VERSION").to_owned(),
