@@ -182,6 +182,30 @@ fn register_chat(r: &mut Resolver) {
         ),
         Action::OpenAgentDetail,
     );
+    r.bind(
+        KeyContext::Chat,
+        chord_seq(
+            KeyChord::ctrl(KeyCode::Char('k')),
+            KeyChord::ctrl(KeyCode::Char('m')),
+        ),
+        Action::OpenMemoryBrowser,
+    );
+    r.bind(
+        KeyContext::Chat,
+        chord_seq(
+            KeyChord::ctrl(KeyCode::Char('k')),
+            KeyChord::ctrl(KeyCode::Char('r')),
+        ),
+        Action::OpenMcpBrowser,
+    );
+    r.bind(
+        KeyContext::Chat,
+        chord_seq(
+            KeyChord::ctrl(KeyCode::Char('k')),
+            KeyChord::ctrl(KeyCode::Char('e')),
+        ),
+        Action::OpenTeamBrowser,
+    );
 }
 
 fn register_input(r: &mut Resolver) {

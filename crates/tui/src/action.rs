@@ -95,6 +95,9 @@ pub enum Action {
     OpenCommandPalette,
     OpenHelp,
     OpenAgentDetail,
+    OpenMemoryBrowser,
+    OpenMcpBrowser,
+    OpenTeamBrowser,
     ModelPicker,
     ExternalEditor,
 
