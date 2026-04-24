@@ -224,13 +224,23 @@ impl AgentSession {
     /// If the conversation is above the 80% context-window watermark when
     /// this is called, [`compact_conversation`](Self::compact_conversation)
     /// runs first so the new turn starts with headroom.
+    ///
+    /// Fires the `UserPromptSubmit` hook before the message is appended so a
+    /// `Deny` action can cleanly short-circuit the turn. When the hook
+    /// returns an accepted action with a `message`, that message is
+    /// appended as additional context after the user's own prompt.
     pub async fn handle_user_input(&mut self, input: &str) -> crab_core::Result<()> {
         if self.conversation.needs_compaction() {
             self.compact_conversation().await;
         }
 
+        let additional_context = self.fire_user_prompt_submit_hook(input).await?;
+
         let user_msg = crab_session::expand_at_mentions(input, &self.tool_ctx.working_dir);
         self.conversation.push(user_msg);
+        if let Some(ctx_msg) = additional_context {
+            self.conversation.push_user(ctx_msg);
+        }
 
         let starting_len = self.conversation.messages().len();
 
@@ -254,6 +264,46 @@ impl AgentSession {
         self.auto_save_session().await;
 
         result
+    }
+
+    /// Fire `UserPromptSubmit` hooks before the user message enters the
+    /// conversation.
+    ///
+    /// Returns `Ok(Some(msg))` when an accepting hook supplied a message
+    /// that should be appended to the conversation as additional context;
+    /// `Ok(None)` when there is no hook or the hook accepted without a
+    /// message; `Err` when a hook's `Deny` action blocks the turn.
+    ///
+    /// Hook execution failures (process spawn errors) do not block the
+    /// turn — they are logged and treated as Allow so a misconfigured
+    /// script cannot lock the user out of their session.
+    async fn fire_user_prompt_submit_hook(&self, input: &str) -> crab_core::Result<Option<String>> {
+        let Some(hooks) = self.config.hook_executor.as_deref() else {
+            return Ok(None);
+        };
+        let hook_ctx = crab_plugin::hook::HookContext {
+            tool_name: String::new(),
+            tool_input: input.to_string(),
+            working_dir: Some(self.tool_ctx.working_dir.clone()),
+            tool_output: None,
+            tool_exit_code: None,
+            session_id: self.config.session_id.clone(),
+        };
+        match hooks
+            .run(crab_plugin::hook::HookTrigger::UserPromptSubmit, &hook_ctx)
+            .await
+        {
+            Ok(hr) if hr.action == crab_plugin::hook::HookAction::Deny => {
+                Err(crab_core::Error::Other(hr.message.unwrap_or_else(|| {
+                    "user prompt denied by UserPromptSubmit hook".to_string()
+                })))
+            }
+            Ok(hr) => Ok(hr.message),
+            Err(e) => {
+                tracing::warn!(error = %e, "UserPromptSubmit hook execution failed");
+                Ok(None)
+            }
+        }
     }
 
     /// Walk conversation messages appended during the last turn, looking
@@ -810,6 +860,36 @@ mod tests {
             !prompt.contains("Coordinator Mode"),
             "overlay must not leak into non-coordinator sessions"
         );
+    }
+
+    #[tokio::test]
+    async fn user_prompt_submit_hook_no_executor_returns_none() {
+        // When no HookExecutor is configured, the helper must be a no-op:
+        // Ok(None) so handle_user_input pushes the message unchanged.
+        let config = base_config("no-hook");
+        let session = AgentSession::new(config, test_backend(), ToolRegistry::new());
+        let out = session.fire_user_prompt_submit_hook("hi").await;
+        assert!(matches!(out, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn user_prompt_submit_hook_accept_passes_message_through() {
+        // An accepting hook whose stdout is plain text falls back to
+        // exit-code semantics (0 = Allow, message=None). The helper
+        // returns Ok(None) so no additional context is injected.
+        use crab_plugin::hook::{HookDef, HookExecutor, HookTrigger};
+        let config = base_config("accept-hook");
+        let mut session = AgentSession::new(config, test_backend(), ToolRegistry::new());
+        let hook = HookDef {
+            trigger: HookTrigger::UserPromptSubmit,
+            command: "echo ok".into(),
+            timeout_secs: 10,
+            tool_filter: vec![],
+            match_pattern: None,
+        };
+        session.config.hook_executor = Some(Arc::new(HookExecutor::with_hooks(vec![hook])));
+        let out = session.fire_user_prompt_submit_hook("hello").await;
+        assert!(matches!(out, Ok(None)));
     }
 
     #[test]
