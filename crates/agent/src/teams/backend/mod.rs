@@ -1,18 +1,11 @@
-//! Layer 1 — Teammate spawner backends. Creates / drives / tears down a
-//! teammate process or in-proc task, independent of topology (Swarm uses the
-//! same backends as Coordinator Mode).
+//! Layer 1 — Teammate spawner backend. Creates / drives / tears down a
+//! teammate task, aligned with Claude Code's in-process teams model.
 //!
-//! - [`spawner`] — [`SwarmBackend`] trait + [`InProcessBackend`] + [`TmuxBackend`]
-//! - [`tmux`] — [`PaneInfo`] + [`PaneManager`] tmux CLI wrapper (used by `TmuxBackend`)
+//! - [`spawner`] — [`SwarmBackend`] trait + [`InProcessBackend`]
 //! - [`teammate`] — [`Teammate`] / [`TeammateConfig`] / [`TeammateState`] value types
-//! - [`init_script`] — [`generate_init_script`] bash script generator for teammate env
 
-pub mod init_script;
 pub mod spawner;
 pub mod teammate;
-pub mod tmux;
 
-pub use init_script::generate_init_script;
-pub use spawner::{InProcessBackend, SwarmBackend, TmuxBackend};
+pub use spawner::{InProcessBackend, SwarmBackend};
 pub use teammate::{Teammate, TeammateConfig, TeammateState};
-pub use tmux::{PaneInfo, PaneManager};

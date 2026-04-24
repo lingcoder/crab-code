@@ -26,10 +26,9 @@ pub use summarizer::{
 pub use system_prompt::{build_system_prompt, build_system_prompt_with_memories};
 pub use teams::{
     AgentHandle, AgentMessage, AgentStatus, AgentWorker, Capability, Envelope, InProcessBackend,
-    MessageRouter, PaneInfo, PaneManager, RetryDecision, RetryPolicy, RetryTracker, SharedTaskList,
-    SwarmBackend, Task, TaskList, TaskStatus, Team, TeamMember, TeamMode, Teammate, TeammateConfig,
-    TeammateState, TmuxBackend, Worker, WorkerConfig, WorkerPool, WorkerResult, event_channel,
-    generate_init_script, shared_task_list,
+    MessageRouter, RetryDecision, RetryPolicy, RetryTracker, SharedTaskList, SwarmBackend, Task,
+    TaskList, TaskStatus, Team, TeamMember, TeamMode, Teammate, TeammateConfig, TeammateState,
+    Worker, WorkerConfig, WorkerPool, WorkerResult, event_channel, shared_task_list,
 };
 
 // Re-exports: allow tui to depend only on crab-agent instead of individual L2 crates.

@@ -24,8 +24,7 @@ pub mod worker;
 pub mod worker_pool;
 
 pub use backend::{
-    InProcessBackend, PaneInfo, PaneManager, SwarmBackend, Teammate, TeammateConfig, TeammateState,
-    TmuxBackend, generate_init_script,
+    InProcessBackend, SwarmBackend, Teammate, TeammateConfig, TeammateState,
 };
 pub use bus::{AgentMessage, AgentStatus, Envelope, MessageBus, event_channel};
 pub use mailbox::MessageRouter;

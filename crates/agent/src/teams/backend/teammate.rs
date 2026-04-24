@@ -94,8 +94,6 @@ pub struct Teammate {
     pub role: String,
     /// Current lifecycle state.
     pub state: TeammateState,
-    /// Tmux pane ID, if running in tmux mode.
-    pub pane_id: Option<String>,
     /// When this teammate was created.
     created_at: Instant,
 }
@@ -110,7 +108,6 @@ impl Teammate {
             name: name.into(),
             role: role.into(),
             state: TeammateState::Idle,
-            pane_id: None,
             created_at: Instant::now(),
         }
     }
@@ -150,7 +147,7 @@ mod tests {
         assert_eq!(t.name, "Alice");
         assert_eq!(t.role, "code_reviewer");
         assert_eq!(t.state, TeammateState::Idle);
-        assert!(t.pane_id.is_none());
+        assert_eq!(t.state, TeammateState::Idle);
     }
 
     #[test]

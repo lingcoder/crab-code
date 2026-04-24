@@ -1,19 +1,17 @@
 //! Backend-agnostic swarm execution.
 //!
 //! [`SwarmBackend`] defines the trait for spawning and managing teammate
-//! sub-agents. Two implementations are provided:
-//!
-//! - [`InProcessBackend`] — runs teammates as tokio tasks with mpsc IPC
-//! - [`TmuxBackend`] — runs teammates in tmux panes via the CLI
+//! sub-agents. A single in-process implementation aligns with Claude
+//! Code's teammate lifetime model: each teammate is a tokio task with
+//! mpsc IPC, so permissions, tool registries, and state live in the
+//! parent process.
 
 use std::collections::HashMap;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::teams::backend::init_script::generate_init_script;
 use crate::teams::backend::teammate::{Teammate, TeammateConfig, TeammateState};
-use crate::teams::backend::tmux::PaneManager;
 
 /// Trait for swarm execution backends.
 ///
@@ -155,92 +153,6 @@ impl SwarmBackend for InProcessBackend {
     }
 }
 
-// ─── TmuxBackend ─────────────────────────────────────────────────────────────
-
-/// Tmux-based swarm backend.
-///
-/// Spawns each teammate in its own tmux pane, sends messages via
-/// `tmux send-keys`, and kills panes to terminate teammates. The init
-/// script sets up the sub-agent environment before launching `crab`.
-#[allow(dead_code)]
-pub struct TmuxBackend {
-    pane_manager: PaneManager,
-    teammates: HashMap<String, Teammate>,
-    next_id: u64,
-}
-
-#[allow(dead_code)]
-impl TmuxBackend {
-    /// Create a new tmux backend for the given session and window.
-    #[must_use]
-    pub fn new(session_name: impl Into<String>, window_id: impl Into<String>) -> Self {
-        Self {
-            pane_manager: PaneManager::new(session_name, window_id),
-            teammates: HashMap::new(),
-            next_id: 0,
-        }
-    }
-
-    /// Access the underlying pane manager.
-    #[must_use]
-    pub fn pane_manager(&self) -> &PaneManager {
-        &self.pane_manager
-    }
-}
-
-impl SwarmBackend for TmuxBackend {
-    async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_core::Result<String> {
-        let id = format!("tmux-{}", self.next_id);
-        self.next_id += 1;
-
-        // Create a tmux pane
-        let pane_id = self.pane_manager.create_pane(&id).await?;
-
-        // Generate and send the init script
-        let script = generate_init_script(&config);
-        self.pane_manager.send_keys(&pane_id, &script).await?;
-
-        let mut teammate = Teammate::new(&id, &config.name, &config.role);
-        teammate.set_state(TeammateState::Running);
-        teammate.pane_id = Some(pane_id);
-
-        self.teammates.insert(id.clone(), teammate);
-
-        Ok(id)
-    }
-
-    async fn kill_teammate(&mut self, id: &str) -> crab_core::Result<()> {
-        let teammate = self
-            .teammates
-            .remove(id)
-            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
-
-        if let Some(ref pane_id) = teammate.pane_id {
-            self.pane_manager.kill_pane(pane_id).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn send_message(&self, id: &str, message: &str) -> crab_core::Result<()> {
-        let teammate = self
-            .teammates
-            .get(id)
-            .ok_or_else(|| crab_core::Error::Other(format!("teammate not found: {id}")))?;
-
-        let pane_id = teammate
-            .pane_id
-            .as_deref()
-            .ok_or_else(|| crab_core::Error::Other(format!("teammate {id} has no tmux pane")))?;
-
-        self.pane_manager.send_keys(pane_id, message).await
-    }
-
-    fn list_teammates(&self) -> Vec<&Teammate> {
-        self.teammates.values().collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,11 +223,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn tmux_backend_new() {
-        let backend = TmuxBackend::new("crab-swarm", "0");
-        assert!(backend.list_teammates().is_empty());
-        assert_eq!(backend.pane_manager().session_name(), "crab-swarm");
-        assert_eq!(backend.pane_manager().window_id(), "0");
-    }
 }
