@@ -418,6 +418,7 @@ impl App {
         self.state = AppState::Idle;
         self.spinner.stop();
         self.active_tools.clear();
+        self.session_grants.clear();
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
         self.content_scroll = 0;
@@ -3169,6 +3170,15 @@ mod tests {
         app.command_queue.push("test".into());
         app.reset_for_new_session();
         assert!(app.command_queue.is_empty());
+    }
+
+    #[test]
+    fn reset_for_new_session_clears_session_grants() {
+        let mut app = App::new("test");
+        app.session_grants.insert("Bash".to_string());
+        app.session_grants.insert("Write".to_string());
+        app.reset_for_new_session();
+        assert!(app.session_grants.is_empty());
     }
 
     #[test]
