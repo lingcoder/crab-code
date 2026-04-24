@@ -1,11 +1,12 @@
-// TODO(ccb-align): wire up. `crab_mcp` clients expose connected servers
-// and their tools but no Action / keybinding opens this browser yet.
-// Expected trigger: dedicated Action::OpenMcpBrowser bound to a chord,
-// populated from the active McpRegistry.
-
 //! MCP server/tool browser overlay — three-level drill-down navigation.
 //!
 //! `ServerList` → `ToolList` → `ToolDetail`.
+//!
+//! Triggered by `Action::OpenMcpBrowser` (default: Ctrl+K Ctrl+R). Tools
+//! are enumerated from the live `ToolRegistry` by matching the
+//! `mcp__<server>__<tool>` naming convention emitted by [`McpTool::new`].
+
+use std::collections::BTreeMap;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -13,6 +14,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
+
+use crab_agent::ToolRegistry;
 
 use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
@@ -34,6 +37,41 @@ pub struct McpServerInfo {
     pub name: String,
     pub tool_count: usize,
     pub tools: Vec<McpToolInfo>,
+}
+
+/// Enumerate MCP-prefixed tools from a [`ToolRegistry`] and group them by
+/// server. Tool names must be of the form `mcp__<server>__<tool>`; other
+/// tools are skipped.
+#[must_use]
+pub fn load_mcp_servers(registry: &ToolRegistry) -> Vec<McpServerInfo> {
+    let mut by_server: BTreeMap<String, Vec<McpToolInfo>> = BTreeMap::new();
+    for name in registry.tool_names() {
+        let Some(rest) = name.strip_prefix("mcp__") else {
+            continue;
+        };
+        let Some((server, tool_name)) = rest.split_once("__") else {
+            continue;
+        };
+        let Some(tool) = registry.get(name) else {
+            continue;
+        };
+        by_server
+            .entry(server.to_string())
+            .or_default()
+            .push(McpToolInfo {
+                name: tool_name.to_string(),
+                description: tool.description().to_string(),
+                input_schema: tool.input_schema(),
+            });
+    }
+    by_server
+        .into_iter()
+        .map(|(name, tools)| McpServerInfo {
+            tool_count: tools.len(),
+            tools,
+            name,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

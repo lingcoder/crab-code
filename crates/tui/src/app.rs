@@ -717,6 +717,18 @@ impl App {
                     self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }
+                Action::OpenMcpBrowser if self.state != AppState::Confirming => {
+                    let Some(registry) = self.tool_registry.as_ref() else {
+                        self.notifications
+                            .warn("Tool registry not yet initialized".to_string());
+                        return AppAction::None;
+                    };
+                    let servers = crate::components::mcp_browser::load_mcp_servers(registry);
+                    let overlay =
+                        crate::components::mcp_browser::McpBrowserOverlay::new(servers);
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
                 Action::ModelPicker if self.state != AppState::Confirming => {
                     let models = vec![
                         "claude-opus-4-6".to_string(),
