@@ -46,6 +46,15 @@ pub struct QueryTaskResult {
     pub cost: CostAccumulator,
 }
 
+/// Fire-and-forget sink for the `Notification` hook, produced by
+/// [`AgentRuntime::notification_hook_sink`] and consumed by
+/// `NotificationManager::set_on_push` in the TUI crate.
+///
+/// Exposed as a named alias so both ends carry the same bound set
+/// (`Fn(&str) + Send + Sync`, behind `Arc`), and so clippy's
+/// `type_complexity` lint is satisfied where this surfaces.
+pub type NotificationHookSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
 /// High-level runtime that owns all L2 service state.
 ///
 /// The TUI holds an `Option<AgentRuntime>` (populated after background init)
@@ -387,6 +396,45 @@ impl AgentRuntime {
                 tracing::warn!(?trigger, error = %e, "lifecycle hook failed");
             }
         });
+    }
+
+    /// Build a fire-and-forget sink for the `Notification` hook.
+    ///
+    /// Returns `None` when no `HookExecutor` is configured, so the caller
+    /// can skip wiring the callback entirely. Otherwise the returned
+    /// closure captures a cloned `Arc<HookExecutor>` and session id; each
+    /// call spawns a detached task that runs the hook with the message
+    /// passed through `CRAB_TOOL_INPUT`.
+    ///
+    /// This is the hook-side dual of
+    /// [`NotificationManager::set_on_push`](../../crab_tui/components/notification/struct.NotificationManager.html) —
+    /// the UI component stays ignorant of `HookExecutor` while the runtime
+    /// decides whether hooks run at all.
+    #[must_use]
+    pub fn notification_hook_sink(&self) -> Option<NotificationHookSink> {
+        let hooks = self.loop_config.hook_executor.clone()?;
+        let session_id = self.loop_config.session_id.clone();
+        Some(std::sync::Arc::new(move |msg: &str| {
+            let hooks = hooks.clone();
+            let message = msg.to_string();
+            let session_id = session_id.clone();
+            tokio::spawn(async move {
+                let ctx = crab_plugin::hook::HookContext {
+                    tool_name: String::new(),
+                    tool_input: message,
+                    working_dir: None,
+                    tool_output: None,
+                    tool_exit_code: None,
+                    session_id,
+                };
+                if let Err(e) = hooks
+                    .run(crab_plugin::hook::HookTrigger::Notification, &ctx)
+                    .await
+                {
+                    tracing::warn!(error = %e, "notification hook failed");
+                }
+            });
+        }))
     }
 
     // ── Session persistence ─────────────────────────────────────────────

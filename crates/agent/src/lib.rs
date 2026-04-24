@@ -15,7 +15,9 @@ pub use coordinator::{PermissionDecisionEvent, PermissionSyncManager};
 pub use error_recovery::{ErrorCategory, ErrorClassifier, RecoveryAction, RecoveryStrategy};
 pub use file_history::{FileHistory, Snapshot, SnapshotError};
 pub use repl_commands::{CommandResult, ReplCommand};
-pub use runtime::{AgentRuntime, QueryTaskResult, RuntimeInitConfig, RuntimeInitMeta};
+pub use runtime::{
+    AgentRuntime, NotificationHookSink, QueryTaskResult, RuntimeInitConfig, RuntimeInitMeta,
+};
 pub use session::{AgentSession, SessionConfig};
 pub use slash_commands::{
     SlashAction, SlashCommandContext, SlashCommandRegistry, SlashCommandResult,

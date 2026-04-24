@@ -463,6 +463,12 @@ async fn run_loop(
 
                     cancel = runtime.cancellation_token().clone();
                     let working_dir = app.working_dir.clone();
+                    // Route future notification pushes through the Notification
+                    // hook. `notification_hook_sink` returns `None` when no
+                    // HookExecutor is configured, so this is a no-op in that case.
+                    if let Some(sink) = runtime.notification_hook_sink() {
+                        app.notifications.set_on_push(sink);
+                    }
                     state = Some(runtime);
                     if let Some(ref rt) = state {
                         rt.fire_lifecycle_hook(

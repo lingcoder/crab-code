@@ -5,6 +5,7 @@
 //! after a configurable duration.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
@@ -12,6 +13,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+
+/// Callback fired once per newly pushed notification. Receives the message
+/// text; typically wired up to forward to the `Notification` hook.
+pub type OnPushCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Notification severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,6 +136,11 @@ pub struct NotificationManager {
     history: VecDeque<Notification>,
     /// Maximum number of simultaneously visible toasts.
     max_visible: usize,
+    /// Optional callback invoked once per pushed notification. The runtime
+    /// wires this up to forward each notification to the `Notification`
+    /// hook (fire-and-forget). `None` while the TUI runs without a hook
+    /// executor configured.
+    on_push: Option<OnPushCallback>,
 }
 
 impl NotificationManager {
@@ -140,7 +150,17 @@ impl NotificationManager {
             active: VecDeque::new(),
             history: VecDeque::new(),
             max_visible: 3,
+            on_push: None,
         }
+    }
+
+    /// Install a callback to be invoked once per pushed notification.
+    ///
+    /// The runtime uses this to route notifications through the
+    /// `Notification` hook without making `NotificationManager` depend on
+    /// `crab-plugin` directly. Replacing an existing callback is allowed.
+    pub fn set_on_push(&mut self, callback: OnPushCallback) {
+        self.on_push = Some(callback);
     }
 
     /// Set max simultaneously visible notifications.
@@ -281,6 +301,9 @@ impl NotificationManager {
     fn push(&mut self, notification: Notification) {
         if let Some(ref key) = notification.key {
             self.active.retain(|n| n.key.as_deref() != Some(key));
+        }
+        if let Some(ref cb) = self.on_push {
+            cb(&notification.message);
         }
         self.active.push_back(notification);
     }
@@ -543,6 +566,44 @@ mod tests {
     }
 
     // ─── NotificationManager tests ───
+
+    #[test]
+    fn on_push_callback_fires_once_per_pushed_notification() {
+        use std::sync::Mutex;
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cb = Arc::clone(&captured);
+        let mut mgr = NotificationManager::new();
+        mgr.set_on_push(Arc::new(move |msg: &str| {
+            captured_cb.lock().unwrap().push(msg.to_string());
+        }));
+
+        mgr.info("first");
+        mgr.warn("second");
+        // Dedup key: the second push with the same key replaces the first
+        // notification but the callback must still fire for both pushes.
+        mgr.notify_keyed(NotificationLevel::Success, "third", "k");
+        mgr.notify_keyed(NotificationLevel::Success, "third-replaced", "k");
+
+        let captured_list = captured.lock().unwrap().clone();
+        assert_eq!(
+            captured_list,
+            vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+                "third-replaced".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn on_push_callback_noop_when_not_set() {
+        // Without a callback installed, pushing a notification must not
+        // panic or interact with any hook system.
+        let mut mgr = NotificationManager::new();
+        mgr.info("no callback");
+        assert_eq!(mgr.active_count(), 1);
+    }
 
     #[test]
     fn manager_starts_empty() {
