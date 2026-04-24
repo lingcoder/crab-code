@@ -122,6 +122,28 @@ pub enum AppAction {
     ExternalEditor(String),
 }
 
+/// Which key initiated the current double-press exit window.
+///
+/// Recorded on first press so the bottom-bar hint can name the exact key
+/// the user must press again (`Press Ctrl-C again to exit` vs
+/// `Press Ctrl-D again to exit`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitKey {
+    CtrlC,
+    CtrlD,
+}
+
+impl ExitKey {
+    /// Display name shown in the bottom-bar hint.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::CtrlC => "Ctrl-C",
+            Self::CtrlD => "Ctrl-D",
+        }
+    }
+}
+
 /// A single message in the conversation, structurally typed for rendering.
 ///
 /// Replaces the flat `content_buffer: String` with a typed message list.
@@ -278,8 +300,11 @@ pub struct App {
     unseen_message_count: usize,
     /// Current prompt input mode.
     pub input_mode: PromptInputMode,
-    /// Timestamp of last Ctrl+C press for double-press detection.
+    /// Timestamp of last Ctrl+C / Ctrl+D press for double-press detection.
     last_interrupt: Option<Instant>,
+    /// Which key initiated the current pending exit window. Read by the
+    /// bottom bar to pick the correct keyName in the hint.
+    last_interrupt_key: Option<ExitKey>,
     /// Current permission mode (cycled via Shift+Tab).
     pub permission_mode: crab_core::permission::PermissionMode,
     /// Session-level "always allow" grants (tool names granted via 'a' key).
@@ -344,6 +369,7 @@ impl App {
             unseen_message_count: 0,
             input_mode: PromptInputMode::Prompt,
             last_interrupt: None,
+            last_interrupt_key: None,
             permission_mode: crab_core::permission::PermissionMode::Default,
             session_grants: std::collections::HashSet::new(),
             messages: Vec::new(),
@@ -595,6 +621,11 @@ impl App {
             match action {
                 Action::Quit => {
                     let now = Instant::now();
+                    let pressed_key = if matches!(key.code, KeyCode::Char('d')) {
+                        ExitKey::CtrlD
+                    } else {
+                        ExitKey::CtrlC
+                    };
                     if let Some(last) = self.last_interrupt
                         && now.duration_since(last) < Duration::from_millis(800)
                     {
@@ -602,6 +633,7 @@ impl App {
                         return AppAction::Quit;
                     }
                     self.last_interrupt = Some(now);
+                    self.last_interrupt_key = Some(pressed_key);
                     self.input.clear();
                     if self.state == AppState::Confirming {
                         let rejected_ids = self.approval_queue.reject_all();
@@ -1818,7 +1850,8 @@ impl App {
         };
         let exit_pending = self
             .last_interrupt
-            .is_some_and(|t| t.elapsed() < Duration::from_millis(800));
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(800))
+            .then(|| self.last_interrupt_key.unwrap_or(ExitKey::CtrlC));
         let bottom_bar = BottomBar {
             state: self.state,
             search_active: self.search.is_active(),
@@ -2164,6 +2197,20 @@ mod tests {
         app.handle_event(ctrl_key('d'));
         let action = app.handle_event(ctrl_key('d'));
         assert_eq!(action, AppAction::Quit);
+    }
+
+    #[test]
+    fn first_ctrl_c_records_ctrl_c_exit_key() {
+        let mut app = App::new("test");
+        app.handle_event(ctrl_key('c'));
+        assert_eq!(app.last_interrupt_key, Some(ExitKey::CtrlC));
+    }
+
+    #[test]
+    fn first_ctrl_d_records_ctrl_d_exit_key() {
+        let mut app = App::new("test");
+        app.handle_event(ctrl_key('d'));
+        assert_eq!(app.last_interrupt_key, Some(ExitKey::CtrlD));
     }
 
     #[test]
