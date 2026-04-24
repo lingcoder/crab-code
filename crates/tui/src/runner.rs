@@ -93,6 +93,9 @@ pub async fn run(config: TuiConfig) -> anyhow::Result<ExitInfo> {
         app.set_working_dir(cwd.display().to_string());
         app.set_completion_cwd(cwd);
     }
+    if let Some(memory_dir) = config.session_config.memory_dir.clone() {
+        app.set_memory_dir(memory_dir);
+    }
 
     // Register built-in slash commands for Tab completion
     app.set_slash_commands(builtin_slash_commands());

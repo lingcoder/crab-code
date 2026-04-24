@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 crab-config.workspace = true
 crab-agent.workspace = true
+crab-memory.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 syntect.workspace = true

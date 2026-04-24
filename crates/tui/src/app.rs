@@ -263,6 +263,9 @@ pub struct App {
     pub output_styles: OutputStyles,
     /// Working directory (displayed in header).
     pub working_dir: String,
+    /// Memory store directory (populated from `SessionConfig.memory_dir`).
+    /// Used on demand by the memory browser overlay.
+    pub memory_dir: Option<std::path::PathBuf>,
     /// Current LLM thinking state (extended thinking / chain-of-thought).
     pub thinking: ThinkingState,
     /// Scroll anchor: when the user scrolls up, this holds the line index
@@ -332,6 +335,7 @@ impl App {
             context_collapse: ContextCollapse::new(Vec::new()),
             output_styles: OutputStyles::default_styles(),
             working_dir: String::new(),
+            memory_dir: None,
             thinking: ThinkingState::Idle,
             scroll_anchor: None,
             unseen_message_count: 0,
@@ -359,6 +363,11 @@ impl App {
     }
 
     /// Set the current session ID.
+    /// Set the memory store directory (for the memory browser overlay).
+    pub fn set_memory_dir(&mut self, dir: impl Into<std::path::PathBuf>) {
+        self.memory_dir = Some(dir.into());
+    }
+
     pub fn set_session_id(&mut self, id: impl Into<String>) {
         self.session_id = id.into();
     }
@@ -693,6 +702,18 @@ impl App {
                 }
                 Action::OpenHelp if self.state != AppState::Confirming => {
                     let overlay = crate::components::shortcut_hint::HelpOverlay::new();
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
+                Action::OpenMemoryBrowser if self.state != AppState::Confirming => {
+                    let Some(dir) = self.memory_dir.as_ref() else {
+                        self.notifications
+                            .warn("Memory directory not configured".to_string());
+                        return AppAction::None;
+                    };
+                    let entries = crate::components::memory_browser::load_memories(dir);
+                    let overlay =
+                        crate::components::memory_browser::MemoryBrowserOverlay::new(entries);
                     self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }

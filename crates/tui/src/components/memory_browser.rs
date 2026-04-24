@@ -1,11 +1,8 @@
-// TODO(ccb-align): wire up. `crab_memory` crate persists memories but no
-// Action / keybinding opens this browser yet. Expected trigger: dedicated
-// Action::OpenMemoryBrowser bound to a chord, populated from
-// MemoryStore::list_all().
-
 //! Memory browser overlay — browse memory files with type-colored badges.
 //!
 //! Two views: `List` (type badge + name + description) and `Detail` (full body).
+//! Triggered by `Action::OpenMemoryBrowser` (default: Ctrl+K Ctrl+M) which
+//! loads the entries via a fresh `MemoryStore::scan()` on demand.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -13,6 +10,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
+
+use crab_memory::{MemoryFile, MemoryStore, MemoryType};
 
 use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
@@ -58,6 +57,42 @@ pub struct MemoryEntry {
     pub description: String,
     pub kind: MemoryKind,
     pub body: String,
+}
+
+impl From<MemoryType> for MemoryKind {
+    fn from(t: MemoryType) -> Self {
+        match t {
+            MemoryType::User => Self::User,
+            MemoryType::Feedback => Self::Feedback,
+            MemoryType::Project => Self::Project,
+            MemoryType::Reference => Self::Reference,
+        }
+    }
+}
+
+impl From<MemoryFile> for MemoryEntry {
+    fn from(f: MemoryFile) -> Self {
+        Self {
+            name: f.metadata.name,
+            description: f.metadata.description,
+            kind: f.metadata.memory_type.into(),
+            body: f.body,
+        }
+    }
+}
+
+/// Load all memories under `dir` into a list suitable for the browser.
+/// Errors and empty directories both yield an empty vec (the overlay shows
+/// a friendly empty state instead of crashing).
+#[must_use]
+pub fn load_memories(dir: &std::path::Path) -> Vec<MemoryEntry> {
+    let store = MemoryStore::new(dir.to_path_buf());
+    store
+        .scan()
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
