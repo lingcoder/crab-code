@@ -195,7 +195,7 @@ struct Cli {
     fallback_model: Option<String>,
 
     // ─── Step 10: bare + no-session-persistence ───
-    /// Minimal mode — skip hooks, LSP, plugins, auto-memory, CRAB.md discovery.
+    /// Minimal mode — skip hooks, LSP, plugins, auto-memory, AGENTS.md discovery.
     #[arg(long)]
     bare: bool,
 

@@ -2,7 +2,7 @@
 //!
 //! Shown at the top of the transcript when any of these is true:
 //! - the current binary version differs from `global_state.last_welcome_version`
-//! - the current project has no `CRAB.md` (new-project hint)
+//! - the current project has no `AGENTS.md` (new-project hint)
 //! - the `CRAB_FORCE_FULL_LOGO` env var is truthy
 //!
 //! Single-column layout capped at 6 content lines (+ 1 trailing blank) so
@@ -18,7 +18,7 @@
 //!   • bullet 1
 //!   • bullet 2
 //!   • bullet 3
-//! First time? Press /help · No CRAB.md — consider /init
+//! First time? Press /help · No AGENTS.md — consider /init
 //! ```
 //!
 //! Narrow (width < 40):
@@ -160,7 +160,7 @@ fn hint_line(show_project_hint: bool) -> Line<'static> {
     let mut spans = vec![Span::styled("First time? Press /help", dim)];
     if show_project_hint {
         spans.push(Span::styled(
-            "  ·  No CRAB.md — consider /init",
+            "  ·  No AGENTS.md — consider /init",
             dim,
         ));
     }
@@ -224,7 +224,7 @@ mod tests {
         assert!(text.contains("What's new"));
         assert!(text.contains("dropped cmd fallback"));
         assert!(text.contains("First time?"));
-        assert!(text.contains("CRAB.md"));
+        assert!(text.contains("AGENTS.md"));
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod tests {
     fn project_hint_omitted_when_disabled() {
         let cell = WelcomeCell::new("0.1.0".into(), vec!["n".into()], false);
         let text = flatten(&cell.display_lines(120));
-        assert!(!text.contains("CRAB.md"));
+        assert!(!text.contains("AGENTS.md"));
         assert!(text.contains("First time?"));
     }
 

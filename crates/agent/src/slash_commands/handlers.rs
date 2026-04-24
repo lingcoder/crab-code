@@ -315,7 +315,7 @@ pub(super) fn cmd_skills(_args: &str, _ctx: &SlashCommandContext<'_>) -> SlashCo
     // Skills are loaded via the plugin system; this command shows a placeholder
     // until the full SkillRegistry is wired into the context.
     SlashCommandResult::Message(
-        "Skills:\n  No skills loaded.\n  Use /init to create a CRAB.md with skill definitions."
+        "Skills:\n  No skills loaded.\n  Use /init to create a AGENTS.md with skill definitions."
             .into(),
     )
 }

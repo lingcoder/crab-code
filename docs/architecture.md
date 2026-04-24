@@ -56,7 +56,7 @@
 │  │   core   │  │  common  │  │  config  │  │   auth   │               │
 │  │Domain    │  │Error +   │  │Multi-    │  │OAuth +   │               │
 │  │model +   │  │utility   │  │layer     │  │Keychain  │               │
-│  │Tool trait│  │path/text │  │+ CRAB.md │  │          │               │
+│  │Tool trait│  │path/text │  │+ AGENTS.md │  │          │               │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘               │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -240,7 +240,7 @@ crab-code/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── settings.rs            # settings.json read/write, layered merging
-│   │       ├── crab_md.rs             # CRAB.md parsing (project/user/global)
+│   │       ├── agents_md.rs             # AGENTS.md parsing (project/user/global)
 │   │       ├── hooks.rs               # Hook definition and triggering
 │   │       ├── feature_flag.rs        # Runtime feature flag management (local evaluation)
 │   │       ├── policy.rs              # Permission policy restrictions, MDM/managed-path
@@ -1267,7 +1267,7 @@ pub struct PermissionPolicy {
 src/
 ├── lib.rs
 ├── settings.rs           // settings.json read/write, layered merging
-├── crab_md.rs            // CRAB.md parsing (project/user/global)
+├── agents_md.rs            // AGENTS.md parsing (project/user/global)
 ├── hooks.rs              // Hook definition and triggering
 ├── feature_flag.rs       // Feature flag integration
 ├── policy.rs             // Permission policy, restrictions
@@ -1290,20 +1290,20 @@ src/
 The `Settings` struct covers: `api_provider`, `api_base_url`, `api_key`, `model`, `small_model`, `permission_mode`, `system_prompt`, `mcp_servers`, `hooks`, `theme`, and more. The three configuration levels are merged via `load_merged_settings()` (global -> user -> project), with higher-priority fields overriding lower-priority ones.
 
 ```rust
-// crab_md.rs -- CRAB.md parsing
-pub struct CrabMd {
+// agents_md.rs -- AGENTS.md parsing
+pub struct AgentsMd {
     pub content: String,
-    pub source: CrabMdSource,
+    pub source: AgentsMdSource,
 }
 
-pub enum CrabMdSource {
-    Global,   // ~/.crab/CRAB.md
+pub enum AgentsMdSource {
+    Global,   // ~/.crab/AGENTS.md
     User,     // User directory
     Project,  // Project root
 }
 
-/// Collect all CRAB.md content by priority
-pub fn collect_crab_md(project_dir: &std::path::Path) -> Vec<CrabMd> {
+/// Collect all AGENTS.md content by priority
+pub fn collect_agents_md(project_dir: &std::path::Path) -> Vec<AgentsMd> {
     // Global -> user -> project, stacking progressively
     // ...
 }
@@ -3650,8 +3650,8 @@ avoiding a single `Arc<RwLock<AppState>>` where read paths get blocked by write 
 pub struct AppConfig {
     /// Merged settings.json
     pub settings: crab_config::Settings,
-    /// CRAB.md content (global + user + project)
-    pub crab_md: Vec<crab_config::CrabMd>,
+    /// AGENTS.md content (global + user + project)
+    pub agents_md: Vec<crab_config::AgentsMd>,
     /// Permission policy
     pub permission_policy: crab_core::permission::PermissionPolicy,
     /// Model configuration

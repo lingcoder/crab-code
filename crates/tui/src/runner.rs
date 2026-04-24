@@ -271,7 +271,7 @@ fn builtin_slash_commands() -> Vec<CommandInfo> {
 ///
 /// Three independent triggers (mirroring CCB's LogoV2):
 ///   1. The current binary version differs from `state.last_welcome_version`
-///   2. The project has no `CRAB.md` (new project → show creation hint)
+///   2. The project has no `AGENTS.md` (new project → show creation hint)
 ///   3. `CRAB_FORCE_FULL_LOGO` env var is truthy
 fn welcome_triggers(
     state: &crab_config::global_state::GlobalState,
@@ -281,7 +281,7 @@ fn welcome_triggers(
         .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
     let version_new = crab_config::global_state::should_show_welcome(state, env!("CARGO_PKG_VERSION"));
     let is_new_project = !project_dir.as_os_str().is_empty()
-        && !project_dir.join("CRAB.md").exists();
+        && !project_dir.join("AGENTS.md").exists();
     let should_show = force || version_new || is_new_project;
     (should_show, is_new_project)
 }

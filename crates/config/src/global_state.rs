@@ -110,9 +110,9 @@ pub fn compute_project_hash(project_dir: &Path) -> String {
         content.hash(&mut hasher);
     }
 
-    // Hash CRAB.md content if present
-    let crab_md = project_dir.join("CRAB.md");
-    if let Ok(content) = std::fs::read_to_string(crab_md) {
+    // Hash AGENTS.md content if present
+    let agents_md = project_dir.join("AGENTS.md");
+    if let Ok(content) = std::fs::read_to_string(agents_md) {
         content.hash(&mut hasher);
     }
 
@@ -122,11 +122,11 @@ pub fn compute_project_hash(project_dir: &Path) -> String {
 /// Check whether a project directory needs a trust prompt.
 ///
 /// Returns `true` if:
-/// - The project has a `.crab/` directory or `CRAB.md` file, AND
+/// - The project has a `.crab/` directory or `AGENTS.md` file, AND
 /// - There is no matching trust record, OR the recorded hash differs.
 #[must_use]
 pub fn needs_trust_prompt(state: &GlobalState, project_dir: &Path) -> bool {
-    let has_config = project_dir.join(".crab").is_dir() || project_dir.join("CRAB.md").exists();
+    let has_config = project_dir.join(".crab").is_dir() || project_dir.join("AGENTS.md").exists();
     if !has_config {
         return false;
     }
@@ -340,10 +340,10 @@ mod tests {
     }
 
     #[test]
-    fn needs_trust_crab_md_only() {
+    fn needs_trust_agents_md_only() {
         let dir = temp_dir("crab-md");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("CRAB.md"), "# Instructions").unwrap();
+        fs::write(dir.join("AGENTS.md"), "# Instructions").unwrap();
         let state = GlobalState::default();
         assert!(needs_trust_prompt(&state, &dir));
         let _ = fs::remove_dir_all(&dir);

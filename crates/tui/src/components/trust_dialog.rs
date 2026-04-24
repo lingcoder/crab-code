@@ -30,8 +30,8 @@ pub struct TrustContext {
     pub env_vars: Vec<String>,
     /// Whether a project-level `settings.json` file exists.
     pub has_settings: bool,
-    /// Whether a `CRAB.md` instruction file exists.
-    pub has_crab_md: bool,
+    /// Whether a `AGENTS.md` instruction file exists.
+    pub has_agents_md: bool,
 }
 
 impl TrustContext {
@@ -41,7 +41,7 @@ impl TrustContext {
     #[must_use]
     pub fn from_project(project_dir: &Path) -> Self {
         let has_settings = project_dir.join(".crab").join("settings.json").exists();
-        let has_crab_md = project_dir.join("CRAB.md").exists();
+        let has_agents_md = project_dir.join("AGENTS.md").exists();
 
         let project_settings = crab_config::settings::load_project(project_dir).unwrap_or_default();
         let local_settings = crab_config::settings::load_local(project_dir).unwrap_or_default();
@@ -69,7 +69,7 @@ impl TrustContext {
             hook_count,
             env_vars,
             has_settings,
-            has_crab_md,
+            has_agents_md,
         }
     }
 
@@ -78,7 +78,7 @@ impl TrustContext {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         !self.has_settings
-            && !self.has_crab_md
+            && !self.has_agents_md
             && self.mcp_servers.is_empty()
             && self.hook_count == 0
             && self.env_vars.is_empty()
@@ -182,10 +182,10 @@ impl Renderable for TrustDialogOverlay {
             Line::from(""),
         ];
 
-        if self.ctx.has_crab_md {
+        if self.ctx.has_agents_md {
             lines.push(threat_line(
                 "Instructions",
-                Span::styled("CRAB.md", Style::default().fg(Color::White)),
+                Span::styled("AGENTS.md", Style::default().fg(Color::White)),
             ));
         }
         if self.ctx.has_settings {
@@ -270,7 +270,7 @@ impl Renderable for TrustDialogOverlay {
         // Base chrome = 11 (borders, padding, title, project path, intro, blank, buttons).
         // Each threat line adds 1.
         let mut threats: u16 = 0;
-        if self.ctx.has_crab_md {
+        if self.ctx.has_agents_md {
             threats += 1;
         }
         if self.ctx.has_settings {
@@ -347,7 +347,7 @@ mod tests {
     fn base_ctx() -> TrustContext {
         TrustContext {
             has_settings: true,
-            has_crab_md: true,
+            has_agents_md: true,
             ..TrustContext::default()
         }
     }
@@ -383,7 +383,7 @@ mod tests {
         let mut overlay = TrustDialogOverlay::new(
             "/my/project".into(),
             TrustContext {
-                has_crab_md: true,
+                has_agents_md: true,
                 ..TrustContext::default()
             },
         );
@@ -434,7 +434,7 @@ mod tests {
             hook_count: 3,
             env_vars: vec!["API_KEY".into(), "DEBUG".into()],
             has_settings: true,
-            has_crab_md: true,
+            has_agents_md: true,
         };
         let overlay = TrustDialogOverlay::new("/test/project".into(), ctx);
         let area = Rect::new(0, 0, 100, 30);
@@ -461,7 +461,7 @@ mod tests {
         assert!(text.contains("github"));
         assert!(text.contains("3 configured"));
         assert!(text.contains("API_KEY"));
-        assert!(text.contains("CRAB.md"));
+        assert!(text.contains("AGENTS.md"));
     }
 
     #[test]
@@ -495,11 +495,11 @@ mod tests {
             }"#,
         )
         .unwrap();
-        std::fs::write(dir.join("CRAB.md"), "# hi").unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "# hi").unwrap();
 
         let ctx = TrustContext::from_project(&dir);
         assert!(ctx.has_settings);
-        assert!(ctx.has_crab_md);
+        assert!(ctx.has_agents_md);
         assert_eq!(ctx.mcp_servers.len(), 2);
         assert!(ctx.mcp_servers.contains(&"filesystem".to_string()));
         assert!(ctx.mcp_servers.contains(&"github".to_string()));

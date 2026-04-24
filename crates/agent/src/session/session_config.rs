@@ -39,7 +39,7 @@ pub struct SessionConfig {
     pub fallback_model: Option<String>,
 
     // ─── B-level flags (Steps 10–13) ───
-    /// Bare mode — skip hooks, plugins, auto-memory, CRAB.md discovery.
+    /// Bare mode — skip hooks, plugins, auto-memory, AGENTS.md discovery.
     pub bare_mode: bool,
     /// Git worktree branch name (empty string = auto-name).
     pub worktree_name: Option<String>,

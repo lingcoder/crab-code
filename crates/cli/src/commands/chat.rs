@@ -47,7 +47,7 @@ pub struct ChatConfig {
     pub skill_dirs: Vec<PathBuf>,
     /// Whether to disable session persistence.
     pub no_session_persistence: bool,
-    /// Bare mode: skip hooks, plugins, memory, CRAB.md discovery.
+    /// Bare mode: skip hooks, plugins, memory, AGENTS.md discovery.
     pub bare_mode: bool,
     /// Fallback model when primary is overloaded.
     pub fallback_model: Option<String>,

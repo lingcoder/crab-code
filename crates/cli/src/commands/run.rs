@@ -56,7 +56,7 @@ pub struct RunConfig {
     pub verbose: bool,
     /// Custom system prompt from settings.
     pub custom_instructions: Option<String>,
-    /// Bare mode: skip hooks, plugins, memory, CRAB.md.
+    /// Bare mode: skip hooks, plugins, memory, AGENTS.md.
     pub bare_mode: bool,
     /// Allowed tools (filters).
     pub allowed_tools: Vec<String>,

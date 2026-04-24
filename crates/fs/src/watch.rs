@@ -2,7 +2,7 @@
 //!
 //! Provides a [`FileWatcher`] that monitors a directory tree and delivers
 //! [`WatchEvent`]s through a channel. Useful for hot-reloading configuration
-//! files (`CRAB.md`, `settings.json`) and detecting workspace changes.
+//! files (`AGENTS.md`, `settings.json`) and detecting workspace changes.
 //!
 //! Also provides [`WatchConfig`] for event debouncing, pattern-based filtering,
 //! and batch aggregation, plus [`EventFilter`] and [`EventDebouncer`] for

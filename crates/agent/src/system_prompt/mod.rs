@@ -4,7 +4,7 @@
 //! - environment info (OS, shell, cwd, date)
 //! - git status (via [`git_context`])
 //! - available tool descriptions
-//! - CRAB.md project instructions
+//! - AGENTS.md project instructions
 //! - memory files
 //! - optional PR context (via [`pr_context`])
 //! - contextual tips (via [`tips`])

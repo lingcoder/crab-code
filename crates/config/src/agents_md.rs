@@ -1,54 +1,54 @@
 use std::path::Path;
 
-/// Parsed content from a CRAB.md project instruction file.
+/// Parsed content from a AGENTS.md project instruction file.
 #[derive(Debug, Clone)]
-pub struct CrabMd {
+pub struct AgentsMd {
     pub content: String,
-    pub source: CrabMdSource,
+    pub source: AgentsMdSource,
 }
 
-/// Where a CRAB.md file was loaded from.
+/// Where a AGENTS.md file was loaded from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CrabMdSource {
+pub enum AgentsMdSource {
     Global,
     User,
     Project,
 }
 
-/// Collect all CRAB.md files by priority (global -> user -> project).
+/// Collect all AGENTS.md files by priority (global -> user -> project).
 ///
 /// Returns them in order: global first, then user, then project, so the
 /// system prompt builder can append them in that order (project instructions
 /// have the highest effective priority since they come last).
 ///
-/// In addition to the top-level `CRAB.md` at each level, any `*.md` files
+/// In addition to the top-level `AGENTS.md` at each level, any `*.md` files
 /// inside the corresponding `.crab/rules/` directory are loaded and appended
-/// (sorted alphabetically by filename) after the CRAB.md content.
-pub fn collect_crab_md(project_dir: &Path) -> Vec<CrabMd> {
+/// (sorted alphabetically by filename) after the AGENTS.md content.
+pub fn collect_agents_md(project_dir: &Path) -> Vec<AgentsMd> {
     let mut results = Vec::new();
 
-    // 1. Global: ~/.crab/CRAB.md + ~/.crab/rules/*.md
+    // 1. Global: ~/.crab/AGENTS.md + ~/.crab/rules/*.md
     let global_dir = crate::settings::global_config_dir();
-    if let Some(md) = read_crab_md(&global_dir.join("CRAB.md"), CrabMdSource::Global) {
+    if let Some(md) = read_agents_md(&global_dir.join("AGENTS.md"), AgentsMdSource::Global) {
         results.push(md);
     }
     results.extend(collect_rules_dir(
         &global_dir.join("rules"),
-        &CrabMdSource::Global,
+        &AgentsMdSource::Global,
     ));
 
-    // 2. User: ~/.crab/CRAB.md is the same as global for now
+    // 2. User: ~/.crab/AGENTS.md is the same as global for now
     //    (Claude Code has a separate user dir, but we merge global+user)
 
-    // 3. Project: <project_dir>/CRAB.md
-    if let Some(md) = read_crab_md(&project_dir.join("CRAB.md"), CrabMdSource::Project) {
+    // 3. Project: <project_dir>/AGENTS.md
+    if let Some(md) = read_agents_md(&project_dir.join("AGENTS.md"), AgentsMdSource::Project) {
         results.push(md);
     }
 
-    // 4. Also check <project_dir>/.crab/CRAB.md (nested project config)
-    let nested = project_dir.join(".crab").join("CRAB.md");
+    // 4. Also check <project_dir>/.crab/AGENTS.md (nested project config)
+    let nested = project_dir.join(".crab").join("AGENTS.md");
     if nested.exists()
-        && let Some(md) = read_crab_md(&nested, CrabMdSource::Project)
+        && let Some(md) = read_agents_md(&nested, AgentsMdSource::Project)
     {
         // Avoid duplicate if same as #3
         if results.last().is_none_or(|last| last.content != md.content) {
@@ -59,7 +59,7 @@ pub fn collect_crab_md(project_dir: &Path) -> Vec<CrabMd> {
     // 5. Project rules: <project_dir>/.crab/rules/*.md
     results.extend(collect_rules_dir(
         &project_dir.join(".crab").join("rules"),
-        &CrabMdSource::Project,
+        &AgentsMdSource::Project,
     ));
 
     results
@@ -67,7 +67,7 @@ pub fn collect_crab_md(project_dir: &Path) -> Vec<CrabMd> {
 
 /// Load all `*.md` files from a rules directory, sorted alphabetically by
 /// filename. Missing or unreadable directories return an empty vec.
-fn collect_rules_dir(rules_dir: &Path, source: &CrabMdSource) -> Vec<CrabMd> {
+fn collect_rules_dir(rules_dir: &Path, source: &AgentsMdSource) -> Vec<AgentsMd> {
     let Ok(entries) = std::fs::read_dir(rules_dir) else {
         return Vec::new();
     };
@@ -100,18 +100,18 @@ fn collect_rules_dir(rules_dir: &Path, source: &CrabMdSource) -> Vec<CrabMd> {
 
     md_files
         .into_iter()
-        .filter_map(|path| read_crab_md(&path, source.clone()))
+        .filter_map(|path| read_agents_md(&path, source.clone()))
         .collect()
 }
 
-/// Read a single CRAB.md file, returning `None` if it doesn't exist or is empty.
-fn read_crab_md(path: &Path, source: CrabMdSource) -> Option<CrabMd> {
+/// Read a single AGENTS.md file, returning `None` if it doesn't exist or is empty.
+fn read_agents_md(path: &Path, source: AgentsMdSource) -> Option<AgentsMd> {
     let content = std::fs::read_to_string(path).ok()?;
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
     }
-    Some(CrabMd {
+    Some(AgentsMd {
         content: trimmed.to_string(),
         source,
     })
@@ -125,37 +125,37 @@ mod tests {
     #[test]
     fn collect_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let results = collect_crab_md(dir.path());
-        // No CRAB.md files — may have global if ~/.crab/CRAB.md exists,
+        let results = collect_agents_md(dir.path());
+        // No AGENTS.md files — may have global if ~/.crab/AGENTS.md exists,
         // but no project-level ones
         for md in &results {
-            assert_ne!(md.source, CrabMdSource::Project);
+            assert_ne!(md.source, AgentsMdSource::Project);
         }
     }
 
     #[test]
-    fn collect_project_crab_md() {
+    fn collect_project_agents_md() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "# Project Rules\nBe helpful.").unwrap();
-        let results = collect_crab_md(dir.path());
+        fs::write(dir.path().join("AGENTS.md"), "# Project Rules\nBe helpful.").unwrap();
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 1);
         assert!(project_mds[0].content.contains("Be helpful"));
     }
 
     #[test]
-    fn collect_nested_crab_md() {
+    fn collect_nested_agents_md() {
         let dir = tempfile::tempdir().unwrap();
         let nested_dir = dir.path().join(".crab");
         fs::create_dir_all(&nested_dir).unwrap();
-        fs::write(nested_dir.join("CRAB.md"), "Nested instructions").unwrap();
-        let results = collect_crab_md(dir.path());
+        fs::write(nested_dir.join("AGENTS.md"), "Nested instructions").unwrap();
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 1);
         assert!(project_mds[0].content.contains("Nested"));
@@ -164,28 +164,28 @@ mod tests {
     #[test]
     fn empty_file_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "   ").unwrap();
-        let results = collect_crab_md(dir.path());
-        assert!(!results.iter().any(|md| md.source == CrabMdSource::Project));
+        fs::write(dir.path().join("AGENTS.md"), "   ").unwrap();
+        let results = collect_agents_md(dir.path());
+        assert!(!results.iter().any(|md| md.source == AgentsMdSource::Project));
     }
 
     #[test]
     fn read_nonexistent_returns_none() {
-        assert!(read_crab_md(Path::new("/no/such/file"), CrabMdSource::Global).is_none());
+        assert!(read_agents_md(Path::new("/no/such/file"), AgentsMdSource::Global).is_none());
     }
 
     #[test]
-    fn collect_both_root_and_nested_crab_md() {
+    fn collect_both_root_and_nested_agents_md() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "Root instructions").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Root instructions").unwrap();
         let nested = dir.path().join(".crab");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("CRAB.md"), "Nested instructions").unwrap();
+        fs::write(nested.join("AGENTS.md"), "Nested instructions").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         // Both root and nested should be collected (different content)
         assert_eq!(project_mds.len(), 2);
@@ -197,32 +197,32 @@ mod tests {
     fn collect_deduplicates_identical_root_and_nested() {
         let dir = tempfile::tempdir().unwrap();
         let same_content = "Identical instructions";
-        fs::write(dir.path().join("CRAB.md"), same_content).unwrap();
+        fs::write(dir.path().join("AGENTS.md"), same_content).unwrap();
         let nested = dir.path().join(".crab");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("CRAB.md"), same_content).unwrap();
+        fs::write(nested.join("AGENTS.md"), same_content).unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_count = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .count();
         // Should deduplicate identical content
         assert_eq!(project_count, 1);
     }
 
     #[test]
-    fn crab_md_source_equality() {
-        assert_eq!(CrabMdSource::Global, CrabMdSource::Global);
-        assert_ne!(CrabMdSource::Global, CrabMdSource::Project);
-        assert_ne!(CrabMdSource::User, CrabMdSource::Project);
+    fn agents_md_source_equality() {
+        assert_eq!(AgentsMdSource::Global, AgentsMdSource::Global);
+        assert_ne!(AgentsMdSource::Global, AgentsMdSource::Project);
+        assert_ne!(AgentsMdSource::User, AgentsMdSource::Project);
     }
 
     #[test]
-    fn read_crab_md_trims_whitespace() {
+    fn read_agents_md_trims_whitespace() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "  \n  content here  \n  ").unwrap();
-        let md = read_crab_md(&dir.path().join("CRAB.md"), CrabMdSource::Project).unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "  \n  content here  \n  ").unwrap();
+        let md = read_agents_md(&dir.path().join("AGENTS.md"), AgentsMdSource::Project).unwrap();
         assert_eq!(md.content, "content here");
     }
 
@@ -231,9 +231,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join(".crab");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("CRAB.md"), "   \n  \t  ").unwrap();
-        let results = collect_crab_md(dir.path());
-        assert!(!results.iter().any(|md| md.source == CrabMdSource::Project));
+        fs::write(nested.join("AGENTS.md"), "   \n  \t  ").unwrap();
+        let results = collect_agents_md(dir.path());
+        assert!(!results.iter().any(|md| md.source == AgentsMdSource::Project));
     }
 
     #[test]
@@ -245,10 +245,10 @@ mod tests {
         fs::write(rules.join("10-security.md"), "Security rule").unwrap();
         fs::write(rules.join("30-testing.md"), "Testing rule").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 3);
         assert!(project_mds[0].content.contains("Security rule"));
@@ -257,17 +257,17 @@ mod tests {
     }
 
     #[test]
-    fn rules_dir_appended_after_crab_md() {
+    fn rules_dir_appended_after_agents_md() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "Top-level CRAB").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Top-level CRAB").unwrap();
         let rules = dir.path().join(".crab").join("rules");
         fs::create_dir_all(&rules).unwrap();
         fs::write(rules.join("a.md"), "A rule").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 2);
         assert!(project_mds[0].content.contains("Top-level CRAB"));
@@ -284,10 +284,10 @@ mod tests {
         fs::write(rules.join("README"), "Skipped no-ext").unwrap();
         fs::write(rules.join("notes.MD"), "Uppercase ext").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 2);
         let contents: Vec<&str> = project_mds.iter().map(|m| m.content.as_str()).collect();
@@ -303,10 +303,10 @@ mod tests {
         fs::write(rules.join("empty.md"), "   \n\t ").unwrap();
         fs::write(rules.join("real.md"), "Real content").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 1);
         assert!(project_mds[0].content.contains("Real content"));
@@ -315,12 +315,12 @@ mod tests {
     #[test]
     fn rules_dir_missing_ok() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("CRAB.md"), "Just CRAB.md").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Just AGENTS.md").unwrap();
         // No .crab/rules/ directory at all
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_count = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .count();
         assert_eq!(project_count, 1);
     }
@@ -334,24 +334,24 @@ mod tests {
         fs::write(nested.join("inner.md"), "Should not load").unwrap();
         fs::write(rules.join("top.md"), "Top rule").unwrap();
 
-        let results = collect_crab_md(dir.path());
+        let results = collect_agents_md(dir.path());
         let project_mds: Vec<_> = results
             .iter()
-            .filter(|md| md.source == CrabMdSource::Project)
+            .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 1);
         assert!(project_mds[0].content.contains("Top rule"));
     }
 
     #[test]
-    fn crab_md_clone() {
-        let md = CrabMd {
+    fn agents_md_clone() {
+        let md = AgentsMd {
             content: "test".into(),
-            source: CrabMdSource::Global,
+            source: AgentsMdSource::Global,
         };
         #[allow(clippy::redundant_clone)]
         let cloned = md.clone();
         assert_eq!(cloned.content, "test");
-        assert_eq!(cloned.source, CrabMdSource::Global);
+        assert_eq!(cloned.source, AgentsMdSource::Global);
     }
 }

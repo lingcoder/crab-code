@@ -198,7 +198,7 @@ pub enum ChatMessage {
         /// Release-note bullets pulled from the CHANGELOG for the current
         /// version. Up to 3 are rendered.
         whats_new: Vec<String>,
-        /// When true, the hint row suggests creating `CRAB.md`.
+        /// When true, the hint row suggests creating `AGENTS.md`.
         show_project_hint: bool,
     },
 }

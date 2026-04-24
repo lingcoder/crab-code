@@ -18,6 +18,8 @@ imperative.
 - `CRAB_USE_POWERSHELL_TOOL` env var to opt-in PowerShell tool on Windows
 
 ### Changed
+- Project instructions file renamed from `CRAB.md` to `AGENTS.md`
+  (aligns with the cross-tool AGENTS.md standard used by Codex and others)
 - Bash tool now strictly requires POSIX shell (bash/zsh); no cmd.exe fallback
 - Read-only tool classification now queried from `Tool::is_read_only()` trait
   rather than a hardcoded TUI list

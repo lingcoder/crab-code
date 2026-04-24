@@ -1,7 +1,7 @@
 //! System prompt construction for the agent.
 //!
 //! Assembles the system prompt from:
-//! - CRAB.md project instructions
+//! - AGENTS.md project instructions
 //! - Tool descriptions (from `ToolRegistry`)
 //! - Environment info (OS, shell, cwd, git status)
 //! - Current date/time
@@ -9,7 +9,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use crab_config::crab_md;
+use crab_config::agents_md;
 use crab_memory::MemoryFile;
 use crab_tools::registry::ToolRegistry;
 
@@ -50,8 +50,8 @@ pub fn build_system_prompt_with_memories(
     // Tool descriptions
     append_tool_descriptions(&mut prompt, registry);
 
-    // CRAB.md instructions
-    append_crab_md_instructions(&mut prompt, project_dir);
+    // AGENTS.md instructions
+    append_agents_md_instructions(&mut prompt, project_dir);
 
     // Memory context
     append_memory_context(&mut prompt, memories);
@@ -161,19 +161,19 @@ fn append_memory_context(prompt: &mut String, memories: &[MemoryFile]) {
     }
 }
 
-/// Append CRAB.md project instructions.
-fn append_crab_md_instructions(prompt: &mut String, project_dir: &Path) {
-    let crab_mds = crab_md::collect_crab_md(project_dir);
-    if crab_mds.is_empty() {
+/// Append AGENTS.md project instructions.
+fn append_agents_md_instructions(prompt: &mut String, project_dir: &Path) {
+    let agents_mds = agents_md::collect_agents_md(project_dir);
+    if agents_mds.is_empty() {
         return;
     }
 
-    let _ = writeln!(prompt, "# Project Instructions (CRAB.md)\n");
-    for md in &crab_mds {
+    let _ = writeln!(prompt, "# Project Instructions (AGENTS.md)\n");
+    for md in &agents_mds {
         let source = match md.source {
-            crab_md::CrabMdSource::Global => "global",
-            crab_md::CrabMdSource::User => "user",
-            crab_md::CrabMdSource::Project => "project",
+            agents_md::AgentsMdSource::Global => "global",
+            agents_md::AgentsMdSource::User => "user",
+            agents_md::AgentsMdSource::Project => "project",
         };
         let _ = writeln!(prompt, "<!-- source: {source} -->");
         let _ = writeln!(prompt, "{}", md.content);
@@ -384,10 +384,10 @@ mod tests {
     }
 
     #[test]
-    fn build_system_prompt_with_crab_md() {
+    fn build_system_prompt_with_agents_md() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("CRAB.md"),
+            dir.path().join("AGENTS.md"),
             "# Custom Project Rules\nBe helpful.",
         )
         .unwrap();

@@ -56,7 +56,7 @@ pub enum SlashAction {
     SwitchModel(String),
     /// Toggle plan mode.
     TogglePlanMode,
-    /// Generate a CRAB.md template in the working directory.
+    /// Generate a AGENTS.md template in the working directory.
     Init,
     /// Export conversation to a file.
     Export(String),
@@ -116,7 +116,7 @@ impl SlashCommandRegistry {
         reg.register("memory", "List memory files", cmd_memory);
         reg.register(
             "init",
-            "Generate a CRAB.md template in current directory",
+            "Generate a AGENTS.md template in current directory",
             cmd_init,
         );
         reg.register("model", "Switch model (/model <name-or-alias>)", cmd_model);
