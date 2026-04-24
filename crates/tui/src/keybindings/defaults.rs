@@ -206,6 +206,14 @@ fn register_chat(r: &mut Resolver) {
         ),
         Action::OpenTeamBrowser,
     );
+    r.bind(
+        KeyContext::Chat,
+        chord_seq(
+            KeyChord::ctrl(KeyCode::Char('k')),
+            KeyChord::ctrl(KeyCode::Char('d')),
+        ),
+        Action::OpenDiffViewer,
+    );
 }
 
 fn register_input(r: &mut Resolver) {

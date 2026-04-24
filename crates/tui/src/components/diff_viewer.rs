@@ -1,8 +1,3 @@
-// TODO(ccb-align): wire up. `AppEvent::OpenDiffViewer { diff_text }` is
-// defined in app_event.rs but currently has no emitter. Expected trigger:
-// tool output containing unified-diff text → parse_unified_diff → push
-// DiffViewerOverlay onto overlay_stack.
-
 //! Interactive diff viewer overlay — browse file diffs with two-level navigation.
 //!
 //! Activated from the permission card's `(d) view full diff` hint or a

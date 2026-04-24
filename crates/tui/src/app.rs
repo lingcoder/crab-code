@@ -372,6 +372,23 @@ impl App {
         self.session_id = id.into();
     }
 
+    /// Scan recent messages for the most recent tool result whose output
+    /// contains unified-diff markers (`--- ` / `+++ ` / `@@`). Returns the
+    /// matching output text for `DiffViewerOverlay::from_unified_diff`.
+    #[must_use]
+    fn latest_diff_text(&self) -> Option<String> {
+        for msg in self.messages.iter().rev() {
+            if let ChatMessage::ToolResult { output, .. } = msg
+                && output.contains("\n--- ")
+                && output.contains("\n+++ ")
+                && output.contains("\n@@")
+            {
+                return Some(output.clone());
+            }
+        }
+        None
+    }
+
     /// Reset app state for a new session (clear messages, input, counters).
     ///
     /// Preserves any `Welcome` cell at the front — it's ambient context,
@@ -726,6 +743,19 @@ impl App {
                     let servers = crate::components::mcp_browser::load_mcp_servers(registry);
                     let overlay =
                         crate::components::mcp_browser::McpBrowserOverlay::new(servers);
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
+                Action::OpenDiffViewer if self.state != AppState::Confirming => {
+                    let Some(diff_text) = self.latest_diff_text() else {
+                        self.notifications
+                            .warn("No diff in recent tool output".to_string());
+                        return AppAction::None;
+                    };
+                    let overlay =
+                        crate::components::diff_viewer::DiffViewerOverlay::from_unified_diff(
+                            &diff_text,
+                        );
                     self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }
