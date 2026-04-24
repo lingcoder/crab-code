@@ -69,8 +69,9 @@ async fn bash_ls_via_executor() {
 
     let ctx = make_ctx(tmp.path(), PermissionMode::Dangerously);
 
-    let cmd = if cfg!(windows) { "dir /b" } else { "ls" };
-    let input = serde_json::json!({ "command": cmd });
+    // BashTool is POSIX-only — even on Windows it runs Git Bash, so `ls`
+    // works everywhere.
+    let input = serde_json::json!({ "command": "ls" });
     let output = executor.execute(BASH_TOOL_NAME, input, &ctx).await.unwrap();
     assert!(!output.is_error, "output: {}", output.text());
     assert!(
@@ -86,12 +87,8 @@ async fn bash_nonzero_exit_is_error_via_executor() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = make_ctx(tmp.path(), PermissionMode::Dangerously);
 
-    let cmd = if cfg!(windows) {
-        "exit /b 42"
-    } else {
-        "exit 42"
-    };
-    let input = serde_json::json!({ "command": cmd });
+    // `exit 42` is the same in bash regardless of host platform.
+    let input = serde_json::json!({ "command": "exit 42" });
     let output = executor.execute(BASH_TOOL_NAME, input, &ctx).await.unwrap();
     assert!(output.is_error);
 }
@@ -102,17 +99,22 @@ async fn bash_working_dir_is_respected() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = make_ctx(tmp.path(), PermissionMode::Dangerously);
 
-    let cmd = if cfg!(windows) { "cd" } else { "pwd" };
-    let input = serde_json::json!({ "command": cmd });
+    // `pwd` is POSIX, Bash-compatible on all platforms we target.
+    let input = serde_json::json!({ "command": "pwd" });
     let output = executor.execute(BASH_TOOL_NAME, input, &ctx).await.unwrap();
     assert!(!output.is_error);
-    // The output should contain the temp dir path
+    // On Windows the bash prints the MSYS-style `/c/...` form, on Unix it
+    // prints the canonical path. Match either by checking the last path
+    // segment (which is a random tempdir name).
     let text = output.text();
-    let tmp_canonical = tmp.path().canonicalize().unwrap();
+    let tmp_name = tmp
+        .path()
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("tempdir has a unicode file name");
     assert!(
-        text.contains(tmp_canonical.to_str().unwrap())
-            || text.contains(tmp.path().to_str().unwrap()),
-        "expected working dir in output: {text}"
+        text.contains(tmp_name),
+        "expected tempdir name {tmp_name:?} in pwd output: {text}"
     );
 }
 
@@ -553,8 +555,18 @@ async fn execute_unchecked_skips_permission() {
 #[test]
 fn register_all_builtins_produces_expected_tools() {
     let registry = create_default_registry();
-    let expected = if cfg!(target_os = "windows") { 46 } else { 45 };
+    let expected = expected_builtin_count();
     assert_eq!(registry.len(), expected);
+}
+
+/// Expected total tool count. On Windows the PowerShell tool is opt-in via
+/// `CRAB_USE_POWERSHELL_TOOL`, so the registry is 45 unless the env var is
+/// truthy; on other platforms the count is always 45.
+fn expected_builtin_count() -> usize {
+    let ps_enabled = cfg!(windows)
+        && std::env::var("CRAB_USE_POWERSHELL_TOOL")
+            .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
+    if ps_enabled { 46 } else { 45 }
 }
 
 #[test]
@@ -618,7 +630,7 @@ fn all_expected_tools_registered() {
 fn all_tools_have_valid_schemas() {
     let registry = create_default_registry();
     let schemas = registry.tool_schemas();
-    let expected = if cfg!(target_os = "windows") { 46 } else { 45 };
+    let expected = expected_builtin_count();
     assert_eq!(schemas.len(), expected);
     for schema in &schemas {
         let name = schema["name"].as_str().unwrap();
