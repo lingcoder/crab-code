@@ -589,12 +589,13 @@ fn classify_permission_kind(tool_name: &str, input_summary: &str) -> PermissionK
 
 /// Build the option list for a permission kind.
 ///
-/// CC options per tool type:
-/// - `Bash`: Yes (y) / Yes, don't ask again (a) / No (n)
+/// Options per tool type (wording matches the "Yes, and don't ask again…"
+/// phrasing used throughout the upstream permission dialogs):
+/// - `Bash`: Yes (y) / Yes, and don't ask again (a) / No (n)
 /// - `FileEdit`: Yes (y) / No (n)
 /// - `FileWrite`: Yes (y) / No (n)
-/// - `WebFetch`: Yes (y) / Yes, don't ask again for domain (a) / No (n)
-/// - `Generic`: Yes (y) / Yes, don't ask again (a) / No (n)
+/// - `WebFetch`: Yes (y) / Yes, and don't ask again for `{domain}` (a) / No (n)
+/// - `Generic`: Yes (y) / Yes, and don't ask again for `{tool_name}` (a) / No (n)
 fn build_options(kind: &PermissionKind) -> Vec<PermissionOption> {
     match kind {
         PermissionKind::Bash { .. } => vec![
@@ -638,7 +639,7 @@ fn build_options(kind: &PermissionKind) -> Vec<PermissionOption> {
                     response: PermissionResponse::Allow,
                 },
                 PermissionOption {
-                    label: format!("Yes, don't ask again for {domain}"),
+                    label: format!("Yes, and don't ask again for {domain}"),
                     hint: Some('a'),
                     response: PermissionResponse::AllowAlways,
                 },
@@ -656,7 +657,7 @@ fn build_options(kind: &PermissionKind) -> Vec<PermissionOption> {
                 response: PermissionResponse::Allow,
             },
             PermissionOption {
-                label: format!("Yes, don't ask again for {tool_name}"),
+                label: format!("Yes, and don't ask again for {tool_name}"),
                 hint: Some('a'),
                 response: PermissionResponse::AllowAlways,
             },
@@ -1036,6 +1037,33 @@ mod tests {
             .collect();
         assert!(all_text.contains("-old line"));
         assert!(all_text.contains("+new line"));
+    }
+
+    #[test]
+    fn always_allow_labels_use_yes_and_form() {
+        // All "always allow" option labels must use the canonical
+        // "Yes, and don't ask again…" phrasing so the wording is
+        // consistent across Bash / WebFetch / Generic cards.
+        let bash = bash_card();
+        let bash_always = &bash.options[1].label;
+        assert!(
+            bash_always.starts_with("Yes, and don't ask again"),
+            "bash always-allow label: {bash_always}"
+        );
+
+        let web = PermissionCard::from_event("web_fetch", "https://api.example.com", "r".into());
+        let web_always = &web.options[1].label;
+        assert_eq!(
+            web_always, "Yes, and don't ask again for api.example.com",
+            "web-fetch always-allow label should include domain scope"
+        );
+
+        let generic = generic_card();
+        let generic_always = &generic.options[1].label;
+        assert_eq!(
+            generic_always, "Yes, and don't ask again for mcp_tool",
+            "generic always-allow label should include tool name scope"
+        );
     }
 
     #[test]
