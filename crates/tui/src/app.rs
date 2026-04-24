@@ -185,19 +185,20 @@ pub enum ChatMessage {
     },
     /// Welcome panel — ambient info shown at startup when there are
     /// release notes the user hasn't seen, or on a new project, or when
-    /// forced via `CRAB_FORCE_FULL_LOGO`. Three columns: recent activity,
-    /// what's new, project hint. Not cleared by `/clear`; not included in
-    /// transcript overlay.
+    /// forced via `CRAB_FORCE_FULL_LOGO`. Compact single-column layout
+    /// (≤ 6 lines) that always fits any reasonable viewport so the panel
+    /// isn't clipped by the bottom-anchored message-list scroller. Not
+    /// cleared by `/clear`; not included in the transcript overlay.
+    ///
+    /// Recent activity lives in the session sidebar, not here — duplicating
+    /// it made the old three-column layout overflow on short terminals.
     Welcome {
         /// Binary version this welcome was generated for — shown in the header.
         version: String,
-        /// Up to 3 most recent sessions (other than the current one),
-        /// ordered newest-first. Each tuple is `(name_or_id, relative_time)`.
-        recent_sessions: Vec<(String, String)>,
         /// Release-note bullets pulled from the CHANGELOG for the current
-        /// version. Empty until Phase 2 wires it up.
+        /// version. Up to 3 are rendered.
         whats_new: Vec<String>,
-        /// When true, the project panel suggests creating `CRAB.md`.
+        /// When true, the hint row suggests creating `CRAB.md`.
         show_project_hint: bool,
     },
 }
@@ -3010,7 +3011,6 @@ mod tests {
         let mut app = App::new("test");
         app.messages.push(ChatMessage::Welcome {
             version: "0.1.0".into(),
-            recent_sessions: Vec::new(),
             whats_new: Vec::new(),
             show_project_hint: false,
         });

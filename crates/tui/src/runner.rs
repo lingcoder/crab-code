@@ -267,23 +267,6 @@ fn builtin_slash_commands() -> Vec<CommandInfo> {
     ]
 }
 
-/// Build a relative-time label like "2h ago" from a `SystemTime`.
-fn relative_time(ts: std::time::SystemTime) -> String {
-    let Ok(elapsed) = ts.elapsed() else {
-        return "just now".into();
-    };
-    let s = elapsed.as_secs();
-    if s < 60 {
-        "just now".into()
-    } else if s < 3_600 {
-        format!("{}m ago", s / 60)
-    } else if s < 86_400 {
-        format!("{}h ago", s / 3_600)
-    } else {
-        format!("{}d ago", s / 86_400)
-    }
-}
-
 /// Decide whether the welcome panel should display on this start.
 ///
 /// Three independent triggers (mirroring CCB's LogoV2):
@@ -306,7 +289,11 @@ fn welcome_triggers(
 /// Push a `ChatMessage::Welcome` at the front of the transcript when
 /// conditions warrant. Also updates `last_welcome_version` so subsequent
 /// starts on the same version stay quiet.
-fn push_welcome_if_needed(app: &mut App, sessions: &[crab_agent::SessionMetadata]) {
+///
+/// Recent activity lives in the sidebar, so this helper takes no session
+/// arguments — the welcome cell only shows the banner + release notes +
+/// a one-line action hint.
+fn push_welcome_if_needed(app: &mut App) {
     let mut state = crab_config::global_state::load();
     let project_dir = std::path::PathBuf::from(&app.working_dir);
     let (should_show, show_project_hint) = welcome_triggers(&state, &project_dir);
@@ -314,22 +301,11 @@ fn push_welcome_if_needed(app: &mut App, sessions: &[crab_agent::SessionMetadata
         return;
     }
 
-    let recent_sessions: Vec<(String, String)> = sessions
-        .iter()
-        .take(3)
-        .map(|m| {
-            let name = m.name.clone().unwrap_or_else(|| m.session_id.clone());
-            let ago = m.modified.map_or_else(|| "unknown".into(), relative_time);
-            (name, ago)
-        })
-        .collect();
-
     // What's new — top bullets from docs/CHANGELOG.md's most recent entry.
     let whats_new = crate::changelog::whats_new(3);
 
     let msg = crate::app::ChatMessage::Welcome {
         version: env!("CARGO_PKG_VERSION").to_owned(),
-        recent_sessions,
         whats_new,
         show_project_hint,
     };
@@ -485,7 +461,7 @@ async fn run_loop(
                     }
                     app.state = crate::app::AppState::Idle;
 
-                    push_welcome_if_needed(app, &meta.sidebar_entries);
+                    push_welcome_if_needed(app);
                     push_startup_overlays(app);
 
                     cancel = runtime.cancellation_token().clone();
