@@ -1,18 +1,20 @@
-// TODO(ccb-align): wire up. `Action::OpenHelp` is bound to Ctrl+K Ctrl+H
-// in keybindings/defaults.rs but no handler pushes this bar as an
-// overlay. Expected wiring: App action loop intercepts Action::OpenHelp
-// → construct ShortcutHintBar::from_keybindings() → push overlay.
-
 //! Shortcut hint bar — displays context-sensitive keyboard shortcuts
 //! at the bottom or side of the TUI.
+//!
+//! Also exposes [`HelpOverlay`], a modal wrapper that shows the full
+//! expanded binding list on `Action::OpenHelp` (Ctrl+K Ctrl+H).
 
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
-use crate::theme::Theme;
+use crate::keybindings::KeyContext;
+use crate::overlay::{Overlay, OverlayAction};
+use crate::theme::{self, Theme};
+use crate::traits::Renderable;
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -355,6 +357,97 @@ impl Widget for &ShortcutHintBar {
                 }
             }
         }
+    }
+}
+
+// ─── HelpOverlay ─────────────────────────────────────────────────────────
+
+/// Centered modal that renders the full binding list in expanded form.
+///
+/// Pushed onto the overlay stack when the user triggers `Action::OpenHelp`
+/// (default: Ctrl+K Ctrl+H). Dismissed via Esc / q / Enter.
+pub struct HelpOverlay {
+    bar: ShortcutHintBar,
+    scroll: usize,
+}
+
+impl HelpOverlay {
+    #[must_use]
+    pub fn new() -> Self {
+        let mut bar = ShortcutHintBar::new();
+        bar.set_style(HintStyle::Expanded);
+        Self { bar, scroll: 0 }
+    }
+
+    /// Set the mode shown in the help overlay. Defaults to `Normal`.
+    #[must_use]
+    pub fn with_mode(mut self, mode: HintMode) -> Self {
+        self.bar.set_mode(mode);
+        self
+    }
+}
+
+impl Default for HelpOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Renderable for HelpOverlay {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        // Center a help card sized ~70% wide, up to 24 rows tall.
+        let card_w = area.width.saturating_mul(7) / 10;
+        let lines = self.bar.render_expanded(&theme::current());
+        let visible = lines.len().min(22);
+        let card_h = u16::try_from(visible + 2).unwrap_or(u16::MAX);
+        let card_x = area.x + area.width.saturating_sub(card_w) / 2;
+        let card_y = area.y + area.height.saturating_sub(card_h) / 2;
+        let card = Rect::new(card_x, card_y, card_w, card_h);
+
+        Widget::render(Clear, card, buf);
+        let title = format!(" Help — {} mode (Esc to close) ", self.bar.mode());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(card);
+        Widget::render(block, card, buf);
+
+        let start = self.scroll.min(lines.len().saturating_sub(1));
+        let end = (start + inner.height as usize).min(lines.len());
+        for (i, line) in lines[start..end].iter().enumerate() {
+            let y = inner.y + i as u16;
+            Widget::render(line.clone(), Rect::new(inner.x, y, inner.width, 1), buf);
+        }
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
+    }
+}
+
+impl Overlay for HelpOverlay {
+    fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => OverlayAction::Dismiss,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll = self.scroll.saturating_sub(1);
+                OverlayAction::Consumed
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll = self.scroll.saturating_add(1);
+                OverlayAction::Consumed
+            }
+            _ => OverlayAction::Passthrough,
+        }
+    }
+
+    fn contexts(&self) -> Vec<KeyContext> {
+        vec![KeyContext::Help]
+    }
+
+    fn name(&self) -> &'static str {
+        "help"
     }
 }
 

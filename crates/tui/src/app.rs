@@ -691,6 +691,11 @@ impl App {
                     }
                     return AppAction::None;
                 }
+                Action::OpenHelp if self.state != AppState::Confirming => {
+                    let overlay = crate::components::shortcut_hint::HelpOverlay::new();
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
                 Action::ModelPicker if self.state != AppState::Confirming => {
                     let models = vec![
                         "claude-opus-4-6".to_string(),
