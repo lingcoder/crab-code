@@ -1,0 +1,63 @@
+#:schema https://raw.githubusercontent.com/lingcoder/crab-code/main/crates/config/assets/config.schema.json
+
+# Full coverage: every documented Config field present at least once so the
+# fixture exercises as much of the schema as possible. The rust_defaults
+# drift guard does NOT consume this file; it consumes Config::default().
+
+apiProvider = "anthropic"
+apiBaseUrl = "https://api.anthropic.com"
+apiKeyHelper = "/usr/local/bin/anthropic-key.sh"
+
+model = "claude-opus-4-7"
+smallModel = "claude-haiku-4-5"
+advisorModel = "claude-haiku-4-5"
+availableModels = ["claude-opus-4-7", "claude-haiku-4-5"]
+modelOverrides = { fast = "claude-haiku-4-5", deep = "claude-opus-4-7" }
+maxTokens = 8192
+
+permissionMode = "default"
+
+systemPrompt = "Be precise."
+includeGitInstructions = true
+customInstructions = "Always use Rust idioms."
+
+enableAllProjectMcpServers = false
+disableAllHooks = false
+
+defaultShell = "/bin/bash"
+theme = "dark"
+language = "en-US"
+outputStyle = "concise"
+respectGitignore = true
+
+autoMemoryEnabled = true
+autoMemoryDirectory = "memory"
+
+cleanupPeriodDays = 30
+
+[permissions]
+allow = ["Bash(git:*)", "Edit", "Read"]
+deny = ["Bash(rm:*)"]
+defaultMode = "default"
+additionalDirectories = ["/workspace"]
+
+[mcpServers.github]
+url = "https://mcp.github.com"
+
+[mcpServers.local]
+command = "npx"
+
+[hooks]
+PreToolUse = [{ command = "echo pre" }]
+
+[env]
+HTTP_PROXY = "http://proxy:8080"
+ANTHROPIC_BASE_URL = "https://proxy.corp.internal/api"
+
+[gitContext]
+enabled = true
+maxDiffLines = 200
+
+[enabledPlugins]
+"superpowers@official" = true
+"foo@bar" = [">=1.0", "<2.0"]

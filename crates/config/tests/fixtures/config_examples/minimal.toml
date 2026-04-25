@@ -1,0 +1,5 @@
+#:schema https://raw.githubusercontent.com/lingcoder/crab-code/main/crates/config/assets/config.schema.json
+
+# Minimal Crab config: just provider + model.
+apiProvider = "anthropic"
+model = "claude-opus-4-7"

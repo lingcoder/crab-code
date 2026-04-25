@@ -1,0 +1,21 @@
+#:schema https://raw.githubusercontent.com/lingcoder/crab-code/main/crates/config/assets/config.schema.json
+
+# Multi-provider setup: list every model the user has access to and map
+# friendly aliases onto concrete ids. The active provider/model is chosen
+# at runtime via `--model` or `-c model=<alias>`.
+
+apiProvider = "custom"
+
+availableModels = [
+  "claude-opus-4-7",
+  "claude-haiku-4-5",
+  "gpt-4o",
+  "deepseek-chat",
+]
+
+[modelOverrides]
+opus = "claude-opus-4-7"
+haiku = "claude-haiku-4-5"
+fast = "deepseek-chat"
+
+model = "claude-opus-4-7"
