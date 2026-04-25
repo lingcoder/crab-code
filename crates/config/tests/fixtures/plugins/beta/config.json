@@ -1,0 +1,6 @@
+{
+  "model": "beta-model",
+  "permissions": {
+    "allow": ["Edit"]
+  }
+}

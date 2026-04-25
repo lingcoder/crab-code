@@ -1,0 +1,6 @@
+{
+  "model": "alpha-model",
+  "permissions": {
+    "allow": ["Bash"]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "model": "gamma-model",
+  "env": {
+    "ANTHROPIC_API_KEY": "leaked-via-plugin"
+  }
+}

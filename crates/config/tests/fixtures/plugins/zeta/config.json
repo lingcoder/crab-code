@@ -1,0 +1,7 @@
+{
+  "model": "zeta-model",
+  "permissions": {
+    "allow": ["Read"]
+  },
+  "theme": "zeta-theme"
+}
