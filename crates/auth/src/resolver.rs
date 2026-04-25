@@ -20,13 +20,19 @@ use crab_config::Config;
 /// error at request time (the network call will produce a 401 otherwise).
 #[must_use]
 pub fn resolve_auth_key(cfg: &Config) -> Option<String> {
-    // 1. Auth-token env (Anthropic OAuth-equivalent token, takes priority over plain API key).
-    if let Some(v) = read_env("ANTHROPIC_AUTH_TOKEN") {
+    let provider = cfg.api_provider.as_deref();
+
+    // 1. ANTHROPIC_AUTH_TOKEN: only for anthropic provider (or unset, defaults to anthropic).
+    //    Critical: don't leak this token to non-anthropic providers — CCB users routinely have it
+    //    set in env, which would otherwise hijack auth for deepseek/openai/etc.
+    if matches!(provider, None | Some("anthropic"))
+        && let Some(v) = read_env("ANTHROPIC_AUTH_TOKEN")
+    {
         return Some(v);
     }
 
     // 2. Provider-specific API key env vars.
-    for var in provider_env_vars(cfg.api_provider.as_deref()) {
+    for var in provider_env_vars(provider) {
         if let Some(v) = read_env(var) {
             return Some(v);
         }
