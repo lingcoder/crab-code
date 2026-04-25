@@ -277,8 +277,10 @@ $PWD/.crab/
   config.local.toml              # local layer (chain position 5, gitignored)
 
 $PWD/
-  AGENTS.md                      # project-level memory (CLAUDE.md also
-                                 #   recognized for CC migrators)
+  AGENTS.md                      # project-level memory (committed; CLAUDE.md
+                                 #   also recognized for CC migrators)
+  AGENTS.local.md                # per-checkout private memory (gitignored;
+                                 #   appended after AGENTS.md when present)
 ```
 
 Caches live in the OS-standard per-user cache directory (Linux: `$XDG_CACHE_HOME/crab/` or `~/.cache/crab/`; macOS: `~/Library/Caches/crab/`; Windows: `%LOCALAPPDATA%\crab\cache\`). They are not under `$CRAB_CONFIG_DIR` because the cache is safe to delete and configuration is not.
@@ -350,12 +352,19 @@ Rationale: cross-platform consistency. Users migrating between machines or OSes 
 
 ### 10.4 `.gitignore` Auto-Maintenance
 
-When Crab writes to `config.local.toml` for the first time, it attempts to register the file in `.gitignore`. The check is two-layered (aligned with CCB `gitignore.ts:62-83`):
+Two project-local files are intentionally per-checkout and must never be committed. Crab keeps them out of git automatically:
+
+| File | Trigger |
+|------|---------|
+| `.crab/config.local.toml` | First write via `crab config set --local` |
+| `AGENTS.local.md` | First time the file is observed during memory loading |
+
+The check is two-layered for both (aligned with CCB `gitignore.ts:62-83`):
 
 1. Run `git check-ignore <path>` — if Git already ignores the file (via any `.gitignore` in the repo, or via a global `~/.config/git/ignore` rule), skip.
-2. Inspect the global gitignore for a matching `**/.crab/config.local.toml` entry; if present, skip.
+2. Inspect the global gitignore for a matching entry (`**/config.local.toml` or `**/AGENTS.local.md`); if present, skip.
 
-Only when both checks pass does Crab append an entry to the project's `.gitignore`. This makes repeated writes idempotent and avoids duplicating rules for users who already have global rules set up.
+Only when both checks pass does Crab append `/.crab/config.local.toml` or `/AGENTS.local.md` to the project's `.gitignore`. Repeated triggers are idempotent.
 
 ---
 

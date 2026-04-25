@@ -45,6 +45,18 @@ pub fn collect_agents_md(project_dir: &Path) -> Vec<AgentsMd> {
         results.push(md);
     }
 
+    // 3b. Project-local: <project_dir>/AGENTS.local.md (gitignored, per-checkout
+    //     private memory). When present, append after AGENTS.md and ensure the
+    //     file is covered by .gitignore so users don't accidentally commit it.
+    let local_md = project_dir.join("AGENTS.local.md");
+    if local_md.exists() {
+        if let Some(md) = read_agents_md(&local_md, AgentsMdSource::Project) {
+            results.push(md);
+        }
+        // Best-effort gitignore maintenance — failures are non-fatal.
+        let _ = crate::gitignore::ensure_local_agents_md_ignored(&local_md);
+    }
+
     // 4. Also check <project_dir>/.crab/AGENTS.md (nested project config)
     let nested = project_dir.join(".crab").join("AGENTS.md");
     if nested.exists()
