@@ -33,11 +33,7 @@ fn fixtures_dir() -> PathBuf {
 #[test]
 fn example_configs_conform_to_schema() {
     let dir = fixtures_dir();
-    assert!(
-        dir.is_dir(),
-        "fixtures dir is missing: {}",
-        dir.display(),
-    );
+    assert!(dir.is_dir(), "fixtures dir is missing: {}", dir.display(),);
 
     let mut checked = 0usize;
     for entry in fs::read_dir(&dir).expect("read fixtures dir") {
@@ -49,9 +45,8 @@ fn example_configs_conform_to_schema() {
         let text = fs::read_to_string(&path).expect("read fixture");
         let value: toml::Value = toml::from_str(&text)
             .unwrap_or_else(|e| panic!("{} parse failed: {e}", path.display()));
-        let errors = crab_config::validate_config(
-            &serde_json::to_value(&value).expect("toml→json"),
-        );
+        let errors =
+            crab_config::validate_config(&serde_json::to_value(&value).expect("toml→json"));
         assert!(
             errors.is_empty(),
             "{} violates schema:\n{}",

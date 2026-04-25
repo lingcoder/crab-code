@@ -44,8 +44,14 @@ fn preserves_top_and_inline_comments() {
     });
 
     let after = std::fs::read_to_string(&config).unwrap();
-    assert!(after.contains("# my main comment"), "top comment dropped: {after}");
-    assert!(after.contains("# inline comment"), "inline comment dropped: {after}");
+    assert!(
+        after.contains("# my main comment"),
+        "top comment dropped: {after}"
+    );
+    assert!(
+        after.contains("# inline comment"),
+        "inline comment dropped: {after}"
+    );
     assert!(after.contains("\"sonnet\""), "value not updated: {after}");
 }
 

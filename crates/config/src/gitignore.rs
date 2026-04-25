@@ -144,12 +144,8 @@ fn append_to_project_gitignore(gitignore_path: &Path) -> Result<()> {
     content.push_str(GITIGNORE_ENTRY);
     content.push('\n');
 
-    std::fs::write(gitignore_path, content).map_err(|e| {
-        Error::Config(format!(
-            "failed to write {}: {e}",
-            gitignore_path.display()
-        ))
-    })
+    std::fs::write(gitignore_path, content)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", gitignore_path.display())))
 }
 
 #[cfg(test)]

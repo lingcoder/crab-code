@@ -55,9 +55,7 @@ pub fn load_enabled_plugin_configs(ctx: &ResolveContext) -> crab_core::Result<Ve
             Ok(Some(value)) => configs.push(value),
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "[config] warning: plugin '{name}' config.json invalid: {e}; skipping"
-                );
+                eprintln!("[config] warning: plugin '{name}' config.json invalid: {e}; skipping");
             }
         }
     }

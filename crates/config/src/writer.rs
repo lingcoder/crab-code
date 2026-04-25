@@ -89,9 +89,8 @@ pub fn set_value(target: WriteTarget, key_path: &str, raw_value: &str) -> Result
 
     let existed_before = path.exists();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
     std::fs::write(&path, rendered)
         .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
@@ -154,15 +153,15 @@ fn insert_at_path(doc: &mut DocumentMut, key_path: &str, new_value: toml::Value)
 
     let mut cursor: &mut Table = doc.as_table_mut();
     for seg in parents {
-        let entry = cursor.entry(seg).or_insert_with(|| Item::Table(Table::new()));
+        let entry = cursor
+            .entry(seg)
+            .or_insert_with(|| Item::Table(Table::new()));
         if !entry.is_table() {
             return Err(Error::Config(format!(
                 "cannot descend into '{seg}' at path '{key_path}': not a table"
             )));
         }
-        cursor = entry
-            .as_table_mut()
-            .expect("verified is_table() above");
+        cursor = entry.as_table_mut().expect("verified is_table() above");
     }
 
     let new_edit = toml_value_to_edit(&new_value);
@@ -319,8 +318,8 @@ mod tests {
     #[test]
     fn insert_at_path_rejects_empty_segment() {
         let mut doc: DocumentMut = "".parse().unwrap();
-        let err = insert_at_path(&mut doc, "permissions..allow", toml::Value::Boolean(true))
-            .unwrap_err();
+        let err =
+            insert_at_path(&mut doc, "permissions..allow", toml::Value::Boolean(true)).unwrap_err();
         assert!(err.to_string().contains("empty segment"));
     }
 }

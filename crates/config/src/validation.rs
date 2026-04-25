@@ -384,8 +384,7 @@ allow = ["Bash(git:*)", "Edit", "*"]
 
     #[test]
     fn prune_invalid_field_removes_leaf() {
-        let mut value: toml::Value =
-            toml::from_str(r#"model = "x""#).unwrap();
+        let mut value: toml::Value = toml::from_str(r#"model = "x""#).unwrap();
         let removed = prune_invalid_field(&mut value, "/model");
         assert!(removed);
         assert!(value.get("model").is_none());
@@ -457,10 +456,7 @@ allow = ["Bash garbage with spaces", "Edit", "Read"]
         .unwrap();
 
         let errors = validate_config_value(&value);
-        assert!(
-            !errors.is_empty(),
-            "schema must reject the malformed rule"
-        );
+        assert!(!errors.is_empty(), "schema must reject the malformed rule");
 
         // Drop every element the schema flagged. Walk in reverse so that
         // earlier indices stay valid as later ones are removed (matches the
@@ -475,10 +471,7 @@ allow = ["Bash garbage with spaces", "Edit", "Read"]
         indices.sort_unstable();
         indices.dedup();
         for idx in indices.into_iter().rev() {
-            let removed = prune_invalid_field(
-                &mut value,
-                &format!("/permissions/allow/{idx}"),
-            );
+            let removed = prune_invalid_field(&mut value, &format!("/permissions/allow/{idx}"));
             assert!(removed, "expected to prune /permissions/allow/{idx}");
         }
 

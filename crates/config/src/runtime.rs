@@ -183,8 +183,8 @@ mod tests {
 
     #[test]
     fn cli_overrides_later_wins_for_same_key() {
-        let v = cli_overrides_to_value(&["model=haiku".to_string(), "model=opus".to_string()])
-            .unwrap();
+        let v =
+            cli_overrides_to_value(&["model=haiku".to_string(), "model=opus".to_string()]).unwrap();
         assert_eq!(v["model"].as_str(), Some("opus"));
     }
 
@@ -213,8 +213,8 @@ mod tests {
     fn cli_overrides_value_with_equals_sign_is_preserved() {
         // Only the *first* `=` separates key from value; everything after
         // is the raw RHS, including more `=` signs.
-        let v = cli_overrides_to_value(&["env.PATH=\"/usr/bin:/usr/local/bin\"".to_string()])
-            .unwrap();
+        let v =
+            cli_overrides_to_value(&["env.PATH=\"/usr/bin:/usr/local/bin\"".to_string()]).unwrap();
         let env_tbl = v["env"].as_table().unwrap();
         assert_eq!(env_tbl["PATH"].as_str(), Some("/usr/bin:/usr/local/bin"));
     }

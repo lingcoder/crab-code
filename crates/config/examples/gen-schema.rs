@@ -18,8 +18,8 @@
 #[cfg(feature = "gen-schema")]
 fn main() {
     let schema = schemars::schema_for!(crab_config::Config);
-    let json = serde_json::to_string_pretty(&schema)
-        .expect("schemars output should serialize as JSON");
+    let json =
+        serde_json::to_string_pretty(&schema).expect("schemars output should serialize as JSON");
     println!("{json}");
 }
 

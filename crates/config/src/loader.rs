@@ -584,9 +584,7 @@ mod tests {
         let env: HashMap<String, String> = [("CRAB_CONFIG_DIR".to_string(), "/x".to_string())]
             .into_iter()
             .collect();
-        let ctx = ResolveContext::new()
-            .with_env(env)
-            .resolve_config_dir(None);
+        let ctx = ResolveContext::new().with_env(env).resolve_config_dir(None);
         assert_eq!(ctx.config_dir, PathBuf::from("/x"));
 
         let cli = PathBuf::from("/y");
