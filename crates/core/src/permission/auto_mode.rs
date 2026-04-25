@@ -98,8 +98,7 @@ pub fn auto_mode_decision(
 ) -> PermissionDecision {
     // SECURITY BOUNDARY: deny is checked first. Auto-mode does not lower
     // the deny-first invariant — a user-supplied deny rule still wins over
-    // every classifier verdict and every allow entry. See `docs/config.md`
-    // §8.4.
+    // every classifier verdict and every allow entry.
     if policy.is_denied_by_filter(tool_name, input) {
         return PermissionDecision::Deny(format!("tool '{tool_name}' is denied by policy"));
     }

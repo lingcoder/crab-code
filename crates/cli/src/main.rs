@@ -1941,7 +1941,10 @@ mod tests {
         // --settings was removed in favor of --config (file overlay) and the
         // -c override flag. clap surfaces the unknown argument instead of
         // silently dropping it.
-        let err = Cli::try_parse_from(["crab", "--settings", "{}", "hello"]).unwrap_err();
+        let result = Cli::try_parse_from(["crab", "--settings", "{}", "hello"]);
+        let Err(err) = result else {
+            panic!("expected legacy --settings flag to be rejected");
+        };
         assert!(
             err.kind() == clap::error::ErrorKind::UnknownArgument,
             "expected UnknownArgument, got {:?}",

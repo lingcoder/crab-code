@@ -23,11 +23,12 @@ use toml::Value;
 use crate::config::{EnabledPluginValue, config_file_name};
 use crate::loader::ResolveContext;
 
-/// Scan the plugin directory under `ctx.config_dir` and return every enabled
-/// plugin's `config.json` contribution as a `toml::Value`, sorted by plugin
-/// name. Missing directories yield an empty list. Individual plugin failures
-/// are logged to stderr and skipped — the overall resolve never fails because
-/// of a single bad plugin.
+/// Scan the plugin directory and return enabled plugin contributions.
+///
+/// Returns every enabled plugin's `config.json` as a `toml::Value`, sorted
+/// by plugin name. Missing directories yield an empty list. Individual plugin
+/// failures are logged to stderr and skipped — the overall resolve never
+/// fails because of a single bad plugin.
 pub fn load_enabled_plugin_configs(ctx: &ResolveContext) -> crab_core::Result<Vec<Value>> {
     let plugins_dir = ctx.config_dir.join("plugins");
     let user_config = ctx.config_dir.join(config_file_name());
@@ -47,7 +48,7 @@ pub fn load_enabled_plugin_configs(ctx: &ResolveContext) -> crab_core::Result<Ve
 
     let mut configs = Vec::new();
     for name in plugin_names {
-        if !is_enabled(&enabled, &name) {
+        if !is_enabled(enabled.as_ref(), &name) {
             continue;
         }
         let cfg_path = plugins_dir.join(&name).join("config.json");
@@ -67,14 +68,13 @@ pub fn load_enabled_plugin_configs(ctx: &ResolveContext) -> crab_core::Result<Ve
 /// A missing or unparseable file yields `None`, which downstream treats as
 /// "no plugins enabled".
 fn peek_enabled_plugins(path: &Path) -> Option<HashMap<String, EnabledPluginValue>> {
-    let text = std::fs::read_to_string(path).ok()?;
-
     #[derive(Deserialize)]
     struct Peek {
         #[serde(rename = "enabledPlugins")]
         enabled_plugins: Option<HashMap<String, EnabledPluginValue>>,
     }
 
+    let text = std::fs::read_to_string(path).ok()?;
     toml::from_str::<Peek>(&text).ok()?.enabled_plugins
 }
 
@@ -94,9 +94,8 @@ fn list_plugin_dirs(plugins_dir: &Path) -> std::io::Result<Vec<String>> {
 
 /// A plugin is considered enabled when its name appears in the map with an
 /// enabling value. With no map at all, no plugins are enabled (opt-in model).
-fn is_enabled(enabled: &Option<HashMap<String, EnabledPluginValue>>, name: &str) -> bool {
+fn is_enabled(enabled: Option<&HashMap<String, EnabledPluginValue>>, name: &str) -> bool {
     enabled
-        .as_ref()
         .and_then(|map| map.get(name))
         .is_some_and(EnabledPluginValue::is_enabled)
 }
@@ -217,10 +216,10 @@ mod tests {
             EnabledPluginValue::VersionConstraints(vec![">=1.0".into()]),
         );
         let some = Some(map);
-        assert!(is_enabled(&some, "on"));
-        assert!(!is_enabled(&some, "off"));
-        assert!(is_enabled(&some, "constrained"));
-        assert!(!is_enabled(&some, "missing"));
-        assert!(!is_enabled(&None, "anything"));
+        assert!(is_enabled(some.as_ref(), "on"));
+        assert!(!is_enabled(some.as_ref(), "off"));
+        assert!(is_enabled(some.as_ref(), "constrained"));
+        assert!(!is_enabled(some.as_ref(), "missing"));
+        assert!(!is_enabled(None, "anything"));
     }
 }

@@ -34,6 +34,7 @@ use toml::value::Table;
 /// flow through the `auth` module so they never round-trip through
 /// `Config`.
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn env_to_value(env: &HashMap<String, String>) -> Value {
     let mut root = Table::new();
 

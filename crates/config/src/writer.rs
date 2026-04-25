@@ -52,7 +52,7 @@ pub enum WriteTarget {
 /// - `key_path` is empty or names a known secret-adjacent field.
 /// - The file exists but cannot be parsed as a `DocumentMut`.
 /// - Schema validation fails after the write — the file on disk is left
-///   untouched (rollback is "don't ever fs::write").
+///   untouched (rollback is "don't ever `fs::write`").
 pub fn set_value(target: WriteTarget, key_path: &str, raw_value: &str) -> Result<()> {
     if key_path.is_empty() {
         return Err(Error::Config("empty key_path".into()));
@@ -68,7 +68,7 @@ pub fn set_value(target: WriteTarget, key_path: &str, raw_value: &str) -> Result
 
     let mut doc = read_document(&path)?;
     let parsed = parse_toml_value(raw_value);
-    insert_at_path(&mut doc, key_path, parsed)?;
+    insert_at_path(&mut doc, key_path, &parsed)?;
 
     let rendered = doc.to_string();
     let as_value: toml::Value = toml::from_str(&rendered)
@@ -140,7 +140,7 @@ fn read_document(path: &Path) -> Result<DocumentMut> {
 /// tables are reused so their comments/order survive. An intermediate
 /// segment that resolves to a non-table value is an error — refusing to
 /// silently overwrite scalars with tables avoids data loss.
-fn insert_at_path(doc: &mut DocumentMut, key_path: &str, new_value: toml::Value) -> Result<()> {
+fn insert_at_path(doc: &mut DocumentMut, key_path: &str, new_value: &toml::Value) -> Result<()> {
     let segments: Vec<&str> = key_path.split('.').collect();
     if segments.iter().any(|s| s.is_empty()) {
         return Err(Error::Config(format!(
@@ -164,7 +164,7 @@ fn insert_at_path(doc: &mut DocumentMut, key_path: &str, new_value: toml::Value)
         cursor = entry.as_table_mut().expect("verified is_table() above");
     }
 
-    let new_edit = toml_value_to_edit(&new_value);
+    let new_edit = toml_value_to_edit(new_value);
     if let Some(existing) = cursor.get_mut(last)
         && let Item::Value(existing_value) = existing
     {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn insert_at_path_top_level() {
         let mut doc: DocumentMut = "".parse().unwrap();
-        insert_at_path(&mut doc, "model", toml::Value::String("opus".into())).unwrap();
+        insert_at_path(&mut doc, "model", &toml::Value::String("opus".into())).unwrap();
         let rendered = doc.to_string();
         assert!(rendered.contains("model = \"opus\""));
     }
@@ -298,7 +298,7 @@ mod tests {
         insert_at_path(
             &mut doc,
             "permissions.allow",
-            toml::Value::Array(vec![toml::Value::String("Bash".into())]),
+            &toml::Value::Array(vec![toml::Value::String("Bash".into())]),
         )
         .unwrap();
         let rendered = doc.to_string();
@@ -311,7 +311,7 @@ mod tests {
     fn insert_at_path_rejects_descent_into_scalar() {
         let mut doc: DocumentMut = "model = \"opus\"\n".parse().unwrap();
         let err =
-            insert_at_path(&mut doc, "model.sub", toml::Value::String("x".into())).unwrap_err();
+            insert_at_path(&mut doc, "model.sub", &toml::Value::String("x".into())).unwrap_err();
         assert!(err.to_string().contains("not a table"));
     }
 
@@ -319,7 +319,8 @@ mod tests {
     fn insert_at_path_rejects_empty_segment() {
         let mut doc: DocumentMut = "".parse().unwrap();
         let err =
-            insert_at_path(&mut doc, "permissions..allow", toml::Value::Boolean(true)).unwrap_err();
+            insert_at_path(&mut doc, "permissions..allow", &toml::Value::Boolean(true))
+                .unwrap_err();
         assert!(err.to_string().contains("empty segment"));
     }
 }

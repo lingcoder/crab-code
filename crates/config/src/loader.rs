@@ -35,6 +35,7 @@ use crate::merge::merge_toml_values;
 /// reading `std::env::var` here) keeps the function pure and lets tests
 /// simulate any combination of overrides.
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn config_dir(cli_config_dir: Option<&Path>, env: &HashMap<String, String>) -> PathBuf {
     if let Some(path) = cli_config_dir {
         return path.to_path_buf();
