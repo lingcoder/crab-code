@@ -182,47 +182,22 @@ impl Default for CredentialChainBuilder {
 
 /// Build the default credential chain for a given provider.
 ///
-/// Resolution order:
-/// 1. Explicit API key from settings
-/// 2. Environment variable API key
-/// 3. System keychain
-/// 4. Cloud-specific auth (Bedrock `SigV4` / Vertex `OAuth2` / Workload Identity)
+/// Resolves a credential via the out-of-chain auth pipeline
+/// (`resolve_auth_key`: env → `apiKeyHelper` → keychain → tokens.json) and,
+/// when present, registers it as a single-source provider. Cloud-specific
+/// providers (Bedrock `SigV4` / Vertex `OAuth2`) are intended to layer on
+/// top by extending the returned chain.
 #[must_use]
 pub fn build_default_chain(settings: &crab_config::Config) -> CredentialChain {
-    let provider_name = settings.api_provider.as_deref().unwrap_or("anthropic");
-
     let mut builder = CredentialChainBuilder::new();
 
-    // 1. Explicit API key from settings
-    if let Some(ref key) = settings.api_key
+    if let Some(key) = crate::resolver::resolve_auth_key(settings)
         && !key.is_empty()
     {
-        builder = builder.with(
-            "settings-api-key",
-            Box::new(crate::ApiKeyProvider::new(key.clone())),
-        );
-    }
-
-    // 2. Environment variable API key
-    if let Ok(key) = crate::api_key::resolve_api_key(None, Some(provider_name))
-        && !key.is_empty()
-    {
-        builder = builder.with("env-api-key", Box::new(crate::ApiKeyProvider::new(key)));
-    }
-
-    // 3. Keychain (if available)
-    if let Some(key) = try_keychain_key(provider_name) {
-        builder = builder.with("keychain", Box::new(crate::ApiKeyProvider::new(key)));
+        builder = builder.with("resolved-key", Box::new(crate::ApiKeyProvider::new(key)));
     }
 
     builder.build()
-}
-
-/// Try to load an API key from the system keychain.
-fn try_keychain_key(provider: &str) -> Option<String> {
-    let service = format!("crab-code-{provider}");
-    let entry = keyring::Entry::new(&service, "api-key").ok()?;
-    entry.get_password().ok().filter(|k| !k.is_empty())
 }
 
 #[cfg(test)]
@@ -407,32 +382,10 @@ mod tests {
     }
 
     #[test]
-    fn build_default_chain_with_explicit_key() {
-        let settings = crab_config::Config {
-            api_key: Some("explicit-key".into()),
-            api_provider: Some("anthropic".into()),
-            ..Default::default()
-        };
-        let chain = build_default_chain(&settings);
-        assert!(!chain.is_empty());
-        assert!(chain.provider_names().contains(&"settings-api-key"));
-    }
-
-    #[test]
-    fn build_default_chain_empty_key_skipped() {
-        let settings = crab_config::Config {
-            api_key: Some(String::new()),
-            ..Default::default()
-        };
-        let chain = build_default_chain(&settings);
-        assert!(!chain.provider_names().contains(&"settings-api-key"));
-    }
-
-    #[test]
     fn build_default_chain_no_settings() {
         let settings = crab_config::Config::default();
         let chain = build_default_chain(&settings);
-        // May or may not have providers depending on env/keychain
+        // May or may not have providers depending on env/keychain/tokens.json
         let _ = chain.len();
     }
 

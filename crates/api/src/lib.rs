@@ -166,10 +166,7 @@ pub fn create_backend(settings: &crab_config::Config) -> LlmBackend {
                 .api_base_url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1");
-            let api_key = settings
-                .api_key
-                .clone()
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+            let api_key = crab_auth::resolve_auth_key(settings);
             LlmBackend::OpenAi(openai::OpenAiClient::new(base_url, api_key))
         }
         #[cfg(feature = "bedrock")]

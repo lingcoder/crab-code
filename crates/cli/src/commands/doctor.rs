@@ -67,18 +67,27 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 fn check_api_key(settings: &crab_config::Config) -> Check {
-    let has_settings_key = settings.api_key.as_ref().is_some_and(|k| !k.is_empty());
+    let has_auth_token_env = std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok_and(|v| !v.is_empty());
     let has_anthropic_env = std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.is_empty());
     let has_openai_env = std::env::var("OPENAI_API_KEY").is_ok_and(|v| !v.is_empty());
+    let has_helper = settings
+        .api_key_helper
+        .as_ref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let resolved = crab_auth::resolve_auth_key(settings).is_some();
 
-    let passed = has_settings_key || has_anthropic_env || has_openai_env;
+    let passed = resolved || has_auth_token_env || has_anthropic_env || has_openai_env;
 
-    let detail = if has_settings_key {
-        "configured in settings".into()
+    let detail = if has_auth_token_env {
+        "ANTHROPIC_AUTH_TOKEN set".into()
     } else if has_anthropic_env {
         "ANTHROPIC_API_KEY set".into()
     } else if has_openai_env {
         "OPENAI_API_KEY set".into()
+    } else if has_helper {
+        "apiKeyHelper configured".into()
+    } else if resolved {
+        "credential resolved (keychain or auth/tokens.json)".into()
     } else {
         "no API key found (set ANTHROPIC_API_KEY or run 'crab auth setup-token')".into()
     };
@@ -393,14 +402,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_api_key_with_settings() {
+    fn check_api_key_with_helper() {
         let settings = crab_config::Config {
-            api_key: Some("sk-test".into()),
+            api_key_helper: Some("/usr/local/bin/get-key.sh".into()),
             ..Default::default()
         };
         let result = check_api_key(&settings);
-        assert!(result.passed);
-        assert!(result.detail.contains("settings"));
+        // The helper does not actually run during this check (we only look at
+        // whether it is configured and whether resolve_auth_key returns Some);
+        // env vars may dominate in CI, so just verify it produces a sensible result.
+        assert_eq!(result.name, "API key");
+        // Detail should mention helper when no env vars beat it.
+        if !std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok_and(|v| !v.is_empty())
+            && !std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.is_empty())
+            && !std::env::var("OPENAI_API_KEY").is_ok_and(|v| !v.is_empty())
+        {
+            assert!(result.passed);
+            assert!(result.detail.contains("apiKeyHelper"));
+        }
     }
 
     #[test]

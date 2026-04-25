@@ -1,4 +1,3 @@
-pub mod api_key;
 pub mod aws_iam;
 #[cfg(feature = "bedrock")]
 pub mod bedrock_auth;
@@ -7,11 +6,13 @@ pub mod error;
 pub mod gcp_identity;
 pub mod keychain;
 pub mod oauth;
+pub mod resolver;
 #[cfg(feature = "vertex")]
 pub mod vertex_auth;
 
 pub use credential_chain::{CredentialChain, CredentialChainBuilder, build_default_chain};
 pub use error::AuthError;
+pub use resolver::resolve_auth_key;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -72,20 +73,14 @@ impl AuthProvider for ApiKeyProvider {
 
 /// Create an auth provider from application settings.
 ///
-/// Resolution priority:
-/// 1. `settings.api_key` (explicit config)
-/// 2. Provider-specific environment variable (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`)
-/// 3. System keychain
+/// Resolves the credential via the out-of-chain auth pipeline
+/// (`resolve_auth_key`): env vars → `apiKeyHelper` script → keychain →
+/// OAuth tokens. Secrets never round-trip through `Config`.
 ///
 /// Falls back to an empty key if resolution fails (the API call will error with 401).
 #[must_use]
 pub fn create_auth_provider(settings: &crab_config::Config) -> Box<dyn AuthProvider> {
-    let key = api_key::resolve_api_key(
-        settings.api_key.as_deref(),
-        settings.api_provider.as_deref(),
-    )
-    .unwrap_or_default();
-
+    let key = resolve_auth_key(settings).unwrap_or_default();
     Box::new(ApiKeyProvider::new(key))
 }
 
@@ -149,29 +144,13 @@ mod tests {
     }
 
     #[test]
-    fn create_auth_provider_with_explicit_key() {
-        let settings = crab_config::Config {
-            api_key: Some("explicit-key".into()),
-            ..Default::default()
-        };
-        let provider = create_auth_provider(&settings);
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(provider.get_auth()).unwrap();
-        match result {
-            AuthMethod::ApiKey(k) => assert_eq!(k, "explicit-key"),
-            AuthMethod::OAuth(_) => panic!("expected ApiKey"),
-        }
-    }
-
-    #[test]
     fn create_auth_provider_with_default_settings() {
-        // With default settings (no api_key), create_auth_provider returns a provider
-        // that resolves to whatever the env/keychain yields (or empty fallback).
+        // Default settings have no api_key_helper; the provider resolves to
+        // whatever env/keychain/tokens.json yields (or empty fallback).
         let settings = crab_config::Config::default();
         let provider = create_auth_provider(&settings);
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(provider.get_auth()).unwrap();
-        // Should be an ApiKey variant regardless of value
         assert!(matches!(result, AuthMethod::ApiKey(_)));
     }
 }
