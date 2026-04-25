@@ -443,6 +443,56 @@ allow = ["Bash", "Edit", "Read"]
     }
 
     #[test]
+    fn permission_rule_pruning_is_element_wise() {
+        // End-to-end: schema must emit element-level errors and prune must
+        // drop only the bad element, leaving valid siblings intact.
+        // Per `docs/config.md` §10.1, one bad rule cannot poison the whole
+        // `permissions.allow` array.
+        let mut value: toml::Value = toml::from_str(
+            r#"
+[permissions]
+allow = ["Bash garbage with spaces", "Edit", "Read"]
+"#,
+        )
+        .unwrap();
+
+        let errors = validate_config_value(&value);
+        assert!(
+            !errors.is_empty(),
+            "schema must reject the malformed rule"
+        );
+
+        // Drop every element the schema flagged. Walk in reverse so that
+        // earlier indices stay valid as later ones are removed (matches the
+        // descending-index strategy `loader::resolve` uses for arrays).
+        let mut indices: Vec<usize> = errors
+            .iter()
+            .filter_map(|e| {
+                let s = e.field.strip_prefix("/permissions/allow/")?;
+                s.parse::<usize>().ok()
+            })
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        for idx in indices.into_iter().rev() {
+            let removed = prune_invalid_field(
+                &mut value,
+                &format!("/permissions/allow/{idx}"),
+            );
+            assert!(removed, "expected to prune /permissions/allow/{idx}");
+        }
+
+        // Valid rules survive; bad rule is gone.
+        let allow: Vec<&str> = value["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(allow, vec!["Edit", "Read"]);
+    }
+
+    #[test]
     fn validate_raw_file_missing_is_empty() {
         let warnings = validate_raw_file(
             std::path::Path::new("/definitely/does/not/exist.toml"),

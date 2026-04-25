@@ -215,7 +215,13 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     // graceful: the offending leaf is pruned and a warning is logged so the
     // surrounding config keeps working. Whole-file parse / deserialization
     // failures are still hard errors.
-    let errors = crate::validation::validate_config_value(&value);
+    let mut errors = crate::validation::validate_config_value(&value);
+    // Sort so that array indices are pruned in descending order within each
+    // parent path. Without this, removing `/permissions/allow/0` would shift
+    // `/permissions/allow/1` down to index 0 and the subsequent prune would
+    // delete the wrong (valid) element. Descending-order within a longer
+    // path also keeps deeper paths from invalidating shallower ones.
+    errors.sort_by(|a, b| b.field.cmp(&a.field));
     for err in &errors {
         eprintln!(
             "[config] warning: schema violation at '{}': {}",
@@ -276,21 +282,38 @@ fn defaults_as_value() -> crab_core::Result<Value> {
         .map_err(|e| crab_core::Error::Config(format!("default config not serializable: {e}")))
 }
 
-/// Read a TOML file into a `toml::Value`. Returns `Ok(None)` when the file
-/// does not exist; surfaces parse and IO errors otherwise.
+/// Read a TOML file into a `toml::Value`.
+///
+/// Graceful-degradation contract (per `docs/config.md` §10.1): every failure
+/// mode here returns `Ok(None)` so the surrounding `resolve` keeps working
+/// with the remaining layers. The runtime never crashes because one source
+/// is missing, unreadable, or malformed.
+///
+/// - File not found → silent `None` (first-run / unset layer).
+/// - Read error (permissions, IO) → warn + `None`.
+/// - TOML parse error → warn + `None`. The user's other layers and the
+///   compiled-in defaults still apply.
 fn load_toml_file(path: &Path) -> crab_core::Result<Option<Value>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            let value: Value = toml::from_str(&text).map_err(|e| {
-                crab_core::Error::Config(format!("failed to parse {}: {e}", path.display()))
-            })?;
-            Ok(Some(value))
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            eprintln!(
+                "[config] warning: cannot read '{}': {e}. Skipping this layer.",
+                path.display()
+            );
+            return Ok(None);
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(crab_core::Error::Config(format!(
-            "failed to read {}: {e}",
-            path.display()
-        ))),
+    };
+    match toml::from_str::<Value>(&text) {
+        Ok(value) => Ok(Some(value)),
+        Err(e) => {
+            eprintln!(
+                "[config] warning: '{}' parse failed: {e}. Using empty layer.",
+                path.display()
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -445,18 +468,76 @@ mod tests {
     }
 
     #[test]
-    fn malformed_toml_surfaces_error() {
+    fn malformed_toml_degrades_to_empty_layer() {
+        // Per `docs/config.md` §10.1 — a malformed file must not crash
+        // resolve. The bad layer is dropped (warning printed) and the rest
+        // of the chain (here: just the compiled-in defaults) still applies.
         let root = std::env::temp_dir().join("crab-loader-test-malformed");
         let user_dir = root.join("user");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&user_dir).unwrap();
         write(&user_dir.join("config.toml"), "not = valid = toml");
 
-        let ctx = ResolveContext::new().with_config_dir(user_dir);
-        let result = resolve(&ctx);
-        assert!(result.is_err());
+        let ctx = ResolveContext::new()
+            .with_config_dir(user_dir)
+            .with_project_dir(None);
+        let cfg = resolve(&ctx).expect("malformed file must not crash resolve");
+        assert_eq!(cfg, Config::default());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_bad_layer_does_not_taint_others() {
+        // Mixed-fate scenario: user config is malformed (warn + skip), but
+        // the project layer parses cleanly and must still take effect.
+        let root = std::env::temp_dir().join("crab-loader-test-mixed-bad");
+        let user_dir = root.join("user");
+        let project_dir = root.join("project");
+        let project_crab = project_dir.join(".crab");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::create_dir_all(&project_crab).unwrap();
+
+        write(&user_dir.join("config.toml"), "key = ");
+        write(&project_crab.join("config.toml"), "model = \"good\"\n");
+
+        let ctx = ResolveContext::new()
+            .with_config_dir(user_dir)
+            .with_project_dir(Some(project_dir));
+        let cfg = resolve(&ctx).unwrap();
+        assert_eq!(cfg.model.as_deref(), Some("good"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_with_zero_files_creates_no_disk_state() {
+        // First-run invariant (`docs/config.md` §10.2): pure defaults can
+        // resolve without any file on disk and without creating anything.
+        let root = std::env::temp_dir().join("crab-loader-test-zero-side-effects");
+        let _ = std::fs::remove_dir_all(&root);
+        // Use a path that does NOT exist; resolve must not create it.
+        let ghost_user_dir = root.join("ghost-user");
+        let ghost_project_dir = root.join("ghost-project");
+        assert!(!ghost_user_dir.exists());
+        assert!(!ghost_project_dir.exists());
+
+        let ctx = ResolveContext::new()
+            .with_config_dir(ghost_user_dir.clone())
+            .with_project_dir(Some(ghost_project_dir.clone()));
+        let cfg = resolve(&ctx).unwrap();
+        assert_eq!(cfg, Config::default());
+
+        // Resolve must be side-effect-free on disk.
+        assert!(
+            !ghost_user_dir.exists(),
+            "resolve must not create user config dir"
+        );
+        assert!(
+            !ghost_project_dir.exists(),
+            "resolve must not create project dir"
+        );
     }
 
     #[test]
@@ -511,6 +592,33 @@ mod tests {
         let cli = PathBuf::from("/y");
         let ctx2 = ResolveContext::new().resolve_config_dir(Some(&cli));
         assert_eq!(ctx2.config_dir, PathBuf::from("/y"));
+    }
+
+    #[test]
+    fn resolve_drops_only_bad_permission_rules_element_wise() {
+        // Per `docs/config.md` §10.1 — one malformed entry must not poison
+        // the whole `permissions.allow` array. The bad rule is dropped, the
+        // valid siblings survive into the resolved `Config`.
+        let root = std::env::temp_dir().join("crab-loader-test-prune-perms");
+        let user_dir = root.join("user");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        write(
+            &user_dir.join("config.toml"),
+            r#"
+[permissions]
+allow = ["Bash garbage with spaces", "Edit", "Read"]
+"#,
+        );
+
+        let ctx = ResolveContext::new()
+            .with_config_dir(user_dir)
+            .with_project_dir(None);
+        let cfg = resolve(&ctx).unwrap();
+        let allow = cfg.permissions.expect("permissions present").allow;
+        assert_eq!(allow, vec!["Edit".to_string(), "Read".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
