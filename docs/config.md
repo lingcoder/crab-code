@@ -72,13 +72,19 @@ The following values never participate in the file/runtime merge chain, never ap
 
 ### Authentication Resolution Order
 
+The chain is **provider-aware** — only env vars semantically tied to the active provider are consulted:
+
 ```
-ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY env
-    → apiKeyHelper script
+[provider = anthropic | unset]   ANTHROPIC_AUTH_TOKEN → ANTHROPIC_API_KEY
+[provider = openai/ollama/vllm]  OPENAI_API_KEY
+[provider = deepseek]            DEEPSEEK_API_KEY → OPENAI_API_KEY
+    → apiKeyHelper script (config-declared path; stdout consumed)
     → system keychain
-    → auth/tokens.json (OAuth)
+    → auth/tokens.json (OAuth, per provider)
     → error
 ```
+
+Critical invariant: **`ANTHROPIC_AUTH_TOKEN` never flows to non-anthropic providers**. CCB users routinely have it set in their shell environment; without provider gating, configuring `provider = "deepseek"` in `config.toml` would silently leak the Anthropic token to deepseek's endpoint and produce a 401.
 
 This chain is orthogonal to the file-layer merge chain. A user may configure `apiKeyHelper` in `config.toml`, but the secret it returns never round-trips through `Config`.
 
