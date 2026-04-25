@@ -13,6 +13,7 @@ pub mod migration;
 pub mod permissions;
 pub mod plugin_loader;
 pub mod policy;
+pub mod runtime;
 pub mod settings_cache;
 pub mod validation;
 

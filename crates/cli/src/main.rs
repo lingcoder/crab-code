@@ -107,6 +107,12 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
+    /// Override a single config field via dotted path. Repeatable.
+    /// Example: `-c model=opus`, `-c permissions.allow='["Bash(git:*)"]'`.
+    /// Values are parsed as TOML, falling back to a string.
+    #[arg(short = 'c', long = "config-override", value_name = "KEY.PATH=VALUE")]
+    config_override: Vec<String>,
+
     /// Override the user-level config directory (otherwise `CRAB_CONFIG_DIR`
     /// or `~/.crab/`). Useful for containers, integration tests, and
     /// multi-identity setups.
@@ -123,7 +129,7 @@ struct Cli {
     print: bool,
 
     /// Continue the most recent session for the current directory.
-    #[arg(short = 'c', long = "continue")]
+    #[arg(long = "continue")]
     continue_session: bool,
 
     /// Permission mode: "default", "acceptEdits", "dontAsk", "bypassPermissions", "plan",
@@ -672,6 +678,7 @@ async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result<()>
         .resolve_config_dir(cli.config_dir.as_deref())
         .with_project_dir(Some(working_dir.clone()))
         .with_cli_config_file(cli.config.clone())
+        .with_cli_overrides(cli.config_override.clone())
         .with_sources_filter(sources);
     let mut settings = crab_config::resolve(&resolve_ctx)?;
     let validation_warnings = crab_config::validate_all_config_files(Some(&working_dir));
@@ -1801,11 +1808,8 @@ mod tests {
 
     #[test]
     fn cli_parses_continue_flag() {
-        let cli = Cli::try_parse_from(["crab", "-c"]).unwrap();
+        let cli = Cli::try_parse_from(["crab", "--continue"]).unwrap();
         assert!(cli.continue_session);
-
-        let cli2 = Cli::try_parse_from(["crab", "--continue"]).unwrap();
-        assert!(cli2.continue_session);
     }
 
     #[test]
@@ -1942,6 +1946,32 @@ mod tests {
             err.kind() == clap::error::ErrorKind::UnknownArgument,
             "expected UnknownArgument, got {:?}",
             err.kind(),
+        );
+    }
+
+    #[test]
+    fn cli_parses_config_override_short() {
+        let cli = Cli::try_parse_from(["crab", "-c", "model=opus", "hello"]).unwrap();
+        assert_eq!(cli.config_override, vec!["model=opus".to_string()]);
+    }
+
+    #[test]
+    fn cli_parses_config_override_long_repeatable() {
+        let cli = Cli::try_parse_from([
+            "crab",
+            "--config-override",
+            "model=opus",
+            "-c",
+            "permissions.defaultMode=plan",
+            "hello",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.config_override,
+            vec![
+                "model=opus".to_string(),
+                "permissions.defaultMode=plan".to_string(),
+            ],
         );
     }
 

@@ -6,10 +6,10 @@
 //! runtime layer (env, CLI flags) at the [`toml::Value`] level using
 //! [`crate::merge::merge_toml_values`], then deserializes the result once.
 //!
-//! Phases later than 3 fill in the currently-empty extension points:
-//! - Phase 5 fills [`env_to_value`] and [`cli_flags_to_value`].
-//! - The plugin slot is filled by [`crate::plugin_loader`].
-//! - Phase 7 inserts schema validation between merge and deserialization.
+//! The plugin slot is filled by [`crate::plugin_loader`]. Schema
+//! validation between merge and deserialization is added in a follow-up
+//! phase; today the resolver trusts the deserializer to surface type
+//! errors.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -70,13 +70,21 @@ pub struct ResolveContext {
     pub sources_filter: Option<Vec<ConfigSource>>,
 }
 
-/// Placeholder for parsed CLI flag overrides.
+/// Parsed CLI flag overrides that participate in the runtime layer.
 ///
-/// Phase 5 expands this into a typed struct (model, `permission_mode`,
-/// `-c key.path=value` accumulator, etc.); Phase 3 needs only an opaque
-/// "no overrides yet" carrier.
+/// Carries the `-c key.path=value` accumulator. Typed flags (`--model`,
+/// `--permission-mode`, …) keep being applied directly against the
+/// resolved [`Config`] in `crates/cli/src/main.rs` because they interact
+/// with non-config concerns (provider fallbacks, the
+/// `--dangerously-skip-permissions` shortcut). Centralizing them here
+/// would require routing those side-effects through the loader, which is
+/// out of scope for the config refactor.
 #[derive(Debug, Clone, Default)]
-pub struct CliFlags;
+pub struct CliFlags {
+    /// Raw `KEY.PATH=VALUE` strings collected from `-c / --config-override`.
+    /// Each entry is parsed by [`crate::runtime::cli_overrides_to_value`].
+    pub overrides: Vec<String>,
+}
 
 impl ResolveContext {
     /// Build a context with a default config dir (`~/.crab/`) and no
@@ -88,7 +96,7 @@ impl ResolveContext {
             project_dir: None,
             cli_config_file: None,
             env: HashMap::new(),
-            flags: CliFlags,
+            flags: CliFlags::default(),
             sources_filter: None,
         }
     }
@@ -144,6 +152,13 @@ impl ResolveContext {
         self
     }
 
+    /// Replace the accumulated `-c / --config-override` specs.
+    #[must_use]
+    pub fn with_cli_overrides(mut self, overrides: Vec<String>) -> Self {
+        self.flags.overrides = overrides;
+        self
+    }
+
     #[must_use]
     pub fn with_sources_filter(mut self, sources: Option<Vec<ConfigSource>>) -> Self {
         self.sources_filter = sources;
@@ -195,6 +210,24 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     merge_toml_values(&mut runtime, env_to_value(&ctx.env)?);
     merge_toml_values(&mut runtime, cli_flags_to_value(&ctx.flags)?);
     merge_toml_values(&mut value, runtime);
+
+    // Schema validation. Per `docs/config.md` §10.1, schema violations are
+    // graceful: the offending leaf is pruned and a warning is logged so the
+    // surrounding config keeps working. Whole-file parse / deserialization
+    // failures are still hard errors.
+    let errors = crate::validation::validate_config_value(&value);
+    for err in &errors {
+        eprintln!(
+            "[config] warning: schema violation at '{}': {}",
+            if err.field.is_empty() {
+                "<root>"
+            } else {
+                &err.field
+            },
+            err.message
+        );
+        crate::validation::prune_invalid_field(&mut value, &err.field);
+    }
 
     value.try_into().map_err(|e: toml::de::Error| {
         crab_core::Error::Config(format!("config deserialization error: {e}"))
@@ -270,22 +303,21 @@ fn load_enabled_plugin_configs(ctx: &ResolveContext) -> crab_core::Result<Vec<Va
     crate::plugin_loader::load_enabled_plugin_configs(ctx)
 }
 
-/// Stub: project process environment into a partial `toml::Value`.
+/// Project the captured environment into a partial `toml::Value`.
 ///
-/// Phase 5 maps `CRAB_MODEL`, `CRAB_API_PROVIDER`, etc. Phase 3 returns an
-/// empty table so callers can already pass through the runtime slot.
+/// Wraps [`crate::runtime::env_to_value`] so the loader keeps a uniform
+/// `Result`-returning surface across all runtime sources.
 #[allow(clippy::unnecessary_wraps)]
-fn env_to_value(_env: &HashMap<String, String>) -> crab_core::Result<Value> {
-    Ok(Value::Table(Table::new()))
+fn env_to_value(env: &HashMap<String, String>) -> crab_core::Result<Value> {
+    Ok(crate::runtime::env_to_value(env))
 }
 
-/// Stub: project parsed CLI flags into a partial `toml::Value`.
+/// Project parsed CLI flags into a partial `toml::Value`.
 ///
-/// Phase 5 introduces `--model`, `--permission-mode`, and the
-/// `-c key.path=value` accumulator. Phase 3 returns an empty table.
-#[allow(clippy::unnecessary_wraps)]
-fn cli_flags_to_value(_flags: &CliFlags) -> crab_core::Result<Value> {
-    Ok(Value::Table(Table::new()))
+/// Today this just forwards the `-c / --config-override` accumulator to
+/// [`crate::runtime::cli_overrides_to_value`].
+fn cli_flags_to_value(flags: &CliFlags) -> crab_core::Result<Value> {
+    crate::runtime::cli_overrides_to_value(&flags.overrides)
 }
 
 /// Merge `overlay` into `base` at the value layer.
