@@ -232,9 +232,9 @@ zeta = true
     let cfg = crab_config::loader::resolve(&ctx).expect("resolve ok");
 
     // zeta is alphabetically last and sets `model = "zeta-model"` and
-    // `theme = "zeta-theme"`; later contributions win for scalars.
+    // `theme = "dark"`; later contributions win for scalars.
     assert_eq!(cfg.model.as_deref(), Some("zeta-model"));
-    assert_eq!(cfg.theme.as_deref(), Some("zeta-theme"));
+    assert_eq!(cfg.theme.as_deref(), Some("dark"));
 
     let allow = cfg.permissions.expect("permissions present").allow;
     assert_eq!(allow, vec!["Bash", "Edit", "Read"]);

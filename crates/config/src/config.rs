@@ -18,6 +18,7 @@ const LOCAL_CONFIG_FILE: &str = "config.local.toml";
 /// local → CLI overrides. Uses `camelCase` for compatibility with the existing
 /// JSON-shaped tooling and CCB ecosystem.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "gen-schema", derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     // ── Provider / auth ──
@@ -90,6 +91,7 @@ pub struct Config {
 /// Value variants accepted under `enabledPlugins.<key>`.
 /// Aligned with CCB `types.ts:566-574`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "gen-schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum EnabledPluginValue {
     Bool(bool),
@@ -111,6 +113,7 @@ impl EnabledPluginValue {
 
 /// Structured permission rules: `{allow, deny, defaultMode}`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "gen-schema", derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "camelCase")]
 pub struct PermissionsConfig {
     #[serde(default)]
@@ -123,6 +126,7 @@ pub struct PermissionsConfig {
 
 /// Configuration for git context injection into system prompts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "gen-schema", derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "camelCase")]
 pub struct GitContextConfig {
     /// Whether to inject git context into the system prompt (default: true).

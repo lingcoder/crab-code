@@ -18,6 +18,22 @@ jsonschema.workspace = true
 directories.workspace = true
 chrono.workspace = true
 
+# Optional: only used by the `gen-schema` example. Production binaries
+# never link schemars because the feature is disabled by default.
+schemars = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enables `cargo run --example gen-schema --features gen-schema` to dump a
+# scaffold JSON Schema for `Config`. The output is meant as a starting
+# point for hand-edits to `assets/config.schema.json` — it is NOT
+# committed and CI never runs it.
+gen-schema = ["dep:schemars"]
+
+[[example]]
+name = "gen-schema"
+required-features = ["gen-schema"]
+
 [dev-dependencies]
 tempfile.workspace = true
 

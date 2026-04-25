@@ -3,5 +3,5 @@
   "permissions": {
     "allow": ["Read"]
   },
-  "theme": "zeta-theme"
+  "theme": "dark"
 }
