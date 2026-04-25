@@ -89,6 +89,14 @@ fn cmd_get(key: &str) -> anyhow::Result<()> {
 
 /// `crab config set <key> <value>` — write a setting to the chosen config file.
 fn cmd_set(key: &str, value: &str, global: bool) -> anyhow::Result<()> {
+    // Reject secret fields. Secrets must go through the auth chain, never
+    // through a persisted Config field.
+    if is_secret_field(key) {
+        anyhow::bail!(
+            "refusing to write secret field '{key}' via config set; use `crab auth setup-token` instead"
+        );
+    }
+
     // Validate key
     let known_keys = known_config_keys();
     if !known_keys.contains(&key) {
@@ -194,7 +202,7 @@ fn known_config_keys() -> Vec<&'static str> {
     vec![
         "apiProvider",
         "apiBaseUrl",
-        "apiKey",
+        "apiKeyHelper",
         "model",
         "smallModel",
         "maxTokens",
@@ -204,6 +212,16 @@ fn known_config_keys() -> Vec<&'static str> {
         "hooks",
         "theme",
     ]
+}
+
+/// Top-level config keys that are blacklisted from `crab config set`.
+///
+/// Match is case-insensitive so that `apikey`, `APIKEY`, and `apiKey` are
+/// all rejected — secret material must never reach the persisted `Config`.
+fn is_secret_field(key: &str) -> bool {
+    const SECRET_KEYS: &[&str] = &["apikey"];
+    let lower = key.to_ascii_lowercase();
+    SECRET_KEYS.contains(&lower.as_str())
 }
 
 /// Resolve the target `config.toml` path.
@@ -360,6 +378,40 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("unknown configuration key"));
+    }
+
+    #[test]
+    fn cmd_set_rejects_api_key_lowercase() {
+        let result = cmd_set("apikey", "sk-test", true);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("refusing to write secret field"));
+    }
+
+    #[test]
+    fn cmd_set_rejects_api_key_camelcase() {
+        let result = cmd_set("apiKey", "sk-test", true);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("refusing to write secret field"));
+        assert!(msg.contains("setup-token"));
+    }
+
+    #[test]
+    fn cmd_set_rejects_api_key_uppercase() {
+        let result = cmd_set("APIKEY", "sk-test", true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_secret_field_classifies_apikey() {
+        assert!(is_secret_field("apiKey"));
+        assert!(is_secret_field("apikey"));
+        assert!(is_secret_field("APIKEY"));
+        assert!(is_secret_field("ApiKey"));
+        assert!(!is_secret_field("apiKeyHelper"));
+        assert!(!is_secret_field("apiProvider"));
+        assert!(!is_secret_field("model"));
     }
 
     #[test]

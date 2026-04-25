@@ -13,9 +13,9 @@ pub enum AuthAction {
         #[arg(long)]
         json: bool,
     },
-    /// Remove API key from settings file
+    /// Remove the stored OAuth token for the active provider
     Logout,
-    /// Interactively set an API key and save to ~/.crab/settings.json
+    /// Interactively store an API key in `~/.crab/auth/tokens.json`
     SetupToken,
 }
 
@@ -25,12 +25,12 @@ struct ProviderStatus {
     provider: &'static str,
     env_var: &'static str,
     has_env: bool,
-    has_settings: bool,
+    has_token_file: bool,
 }
 
 impl ProviderStatus {
     fn is_configured(&self) -> bool {
-        self.has_env || self.has_settings
+        self.has_env || self.has_token_file
     }
 }
 
@@ -41,20 +41,26 @@ fn check_providers(settings: &crab_config::Config) -> Vec<ProviderStatus> {
         ("openai", "OPENAI_API_KEY"),
     ];
 
-    let settings_key = settings.api_key.as_deref().unwrap_or("");
-    let settings_provider = settings.api_provider.as_deref().unwrap_or("anthropic");
+    let token_path = crab_auth::oauth::default_token_path();
+    let store = crab_auth::oauth::load_token_store(&token_path).unwrap_or_default();
+    let active_provider = settings.api_provider.as_deref().unwrap_or("anthropic");
 
     checks
         .iter()
         .map(|&(provider, env_var)| {
             let has_env = std::env::var(env_var).is_ok_and(|v| !v.is_empty());
-            let has_settings = !settings_key.is_empty() && settings_provider == provider;
+            // The token file is only meaningful for the active provider —
+            // an anthropic OAuth token does not authenticate openai requests.
+            let has_token_file = active_provider == provider
+                && store
+                    .get(provider)
+                    .is_some_and(|t| !t.access_token.is_empty());
 
             ProviderStatus {
                 provider,
                 env_var,
                 has_env,
-                has_settings,
+                has_token_file,
             }
         })
         .collect()
@@ -70,8 +76,8 @@ pub fn run(action: &AuthAction) -> anyhow::Result<()> {
     match action {
         AuthAction::Login => run_login(&settings),
         AuthAction::Status { json } => run_status(&settings, *json),
-        AuthAction::Logout => run_logout(),
-        AuthAction::SetupToken => run_setup_token(),
+        AuthAction::Logout => run_logout(&settings),
+        AuthAction::SetupToken => run_setup_token(&settings),
     }
 }
 
@@ -83,8 +89,8 @@ fn run_login(settings: &crab_config::Config) -> anyhow::Result<()> {
         eprintln!("API key(s) already configured:");
         for p in &providers {
             if p.is_configured() {
-                let source = if p.has_settings {
-                    "settings"
+                let source = if p.has_token_file {
+                    "auth/tokens.json"
                 } else {
                     "env var"
                 };
@@ -100,11 +106,12 @@ fn run_login(settings: &crab_config::Config) -> anyhow::Result<()> {
     eprintln!("     export ANTHROPIC_API_KEY=sk-ant-...");
     eprintln!("     export OPENAI_API_KEY=sk-...");
     eprintln!();
-    eprintln!("  2. Config file (~/.crab/config.toml):");
-    eprintln!("     crab config set apiKey sk-ant-...");
-    eprintln!();
-    eprintln!("  3. Interactive setup:");
+    eprintln!("  2. Interactive setup (writes ~/.crab/auth/tokens.json):");
     eprintln!("     crab auth setup-token");
+    eprintln!();
+    eprintln!(
+        "  3. apiKeyHelper script in ~/.crab/config.toml (set the path; the script's stdout is used as the key)."
+    );
     eprintln!();
 
     Ok(())
@@ -120,7 +127,7 @@ fn run_status(settings: &crab_config::Config, json_output: bool) -> anyhow::Resu
                 serde_json::json!({
                     "provider": p.provider,
                     "configured": p.is_configured(),
-                    "source": if p.has_settings { "settings" }
+                    "source": if p.has_token_file { "tokens.json" }
                               else if p.has_env { "env" }
                               else { "none" },
                 })
@@ -130,8 +137,11 @@ fn run_status(settings: &crab_config::Config, json_output: bool) -> anyhow::Resu
     } else {
         eprintln!("Authentication status:");
         for p in &providers {
-            let (icon, detail) = if p.has_settings {
-                ("ok", format!("configured (settings, env={})", p.env_var))
+            let (icon, detail) = if p.has_token_file {
+                (
+                    "ok",
+                    format!("configured (auth/tokens.json, env={})", p.env_var),
+                )
             } else if p.has_env {
                 ("ok", format!("configured (env={})", p.env_var))
             } else {
@@ -144,30 +154,37 @@ fn run_status(settings: &crab_config::Config, json_output: bool) -> anyhow::Resu
     Ok(())
 }
 
-fn run_logout() -> anyhow::Result<()> {
-    let global_dir = crab_config::config::global_config_dir();
-    let config_path = global_dir.join(crab_config::config::config_file_name());
+fn run_logout(settings: &crab_config::Config) -> anyhow::Result<()> {
+    let provider = settings.api_provider.as_deref().unwrap_or("anthropic");
+    let env_var = match provider {
+        "openai" | "ollama" | "vllm" => "OPENAI_API_KEY",
+        "deepseek" => "DEEPSEEK_API_KEY",
+        _ => "ANTHROPIC_API_KEY",
+    };
 
-    if !config_path.exists() {
-        eprintln!("No config file found. Nothing to do.");
-        return Ok(());
+    let token_path = crab_auth::oauth::default_token_path();
+    let mut store = crab_auth::oauth::load_token_store(&token_path)
+        .map_err(|e| anyhow::anyhow!("failed to load token store: {e}"))?;
+
+    let removed = store.remove(provider);
+    if removed {
+        crab_auth::oauth::save_token_store(&token_path, &store)
+            .map_err(|e| anyhow::anyhow!("failed to write token store: {e}"))?;
+        eprintln!("Removed '{provider}' token from {}", token_path.display());
+    } else {
+        eprintln!("No stored token for provider '{provider}'.");
     }
 
-    let content = std::fs::read_to_string(&config_path)?;
-    let mut doc: toml::Table = toml::from_str(&content).unwrap_or_default();
-
-    if doc.remove("apiKey").is_some() {
-        let updated = toml::to_string_pretty(&doc)?;
-        std::fs::write(&config_path, updated)?;
-        eprintln!("API key removed from {}", config_path.display());
-    } else {
-        eprintln!("No API key found in config file.");
+    if std::env::var(env_var).is_ok_and(|v| !v.is_empty()) {
+        eprintln!(
+            "Note: {env_var} is still set in the environment and will continue to authenticate '{provider}' requests. Unset it in your shell to fully log out."
+        );
     }
 
     Ok(())
 }
 
-fn run_setup_token() -> anyhow::Result<()> {
+fn run_setup_token(settings: &crab_config::Config) -> anyhow::Result<()> {
     eprint!("Enter your API key: ");
     std::io::stderr().flush()?;
 
@@ -180,23 +197,48 @@ fn run_setup_token() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let global_dir = crab_config::config::global_config_dir();
-    std::fs::create_dir_all(&global_dir)?;
-    let config_path = global_dir.join(crab_config::config::config_file_name());
+    let provider = settings
+        .api_provider
+        .clone()
+        .unwrap_or_else(|| "anthropic".to_string());
 
-    let mut doc: toml::Table = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        toml::from_str(&content).unwrap_or_default()
-    } else {
-        toml::Table::new()
-    };
+    let token_path = crab_auth::oauth::default_token_path();
+    let mut store = crab_auth::oauth::load_token_store(&token_path)
+        .map_err(|e| anyhow::anyhow!("failed to load token store: {e}"))?;
 
-    doc.insert("apiKey".into(), toml::Value::String(key.to_string()));
+    store.upsert(crab_auth::oauth::StoredToken {
+        provider: provider.clone(),
+        access_token: key.to_string(),
+        refresh_token: None,
+        expires_at: None,
+        token_type: "ApiKey".into(),
+    });
 
-    let updated = toml::to_string_pretty(&doc)?;
-    std::fs::write(&config_path, updated)?;
-    eprintln!("API key saved to {}", config_path.display());
+    crab_auth::oauth::save_token_store(&token_path, &store)
+        .map_err(|e| anyhow::anyhow!("failed to write token store: {e}"))?;
 
+    set_owner_only_perms(&token_path)?;
+
+    eprintln!(
+        "API key for provider '{provider}' saved to {}",
+        token_path.display()
+    );
+    Ok(())
+}
+
+/// Restrict the token file to the current user (`0600` on Unix; default ACL on Windows).
+#[cfg(unix)]
+fn set_owner_only_perms(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o600);
+    std::fs::set_permissions(path, perms)
+        .map_err(|e| anyhow::anyhow!("failed to set permissions on {}: {e}", path.display()))
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn set_owner_only_perms(_path: &std::path::Path) -> anyhow::Result<()> {
+    // Windows: rely on default per-user ACL inherited from %USERPROFILE%\.crab\auth\.
     Ok(())
 }
 
@@ -214,35 +256,17 @@ mod tests {
     }
 
     #[test]
-    fn provider_status_with_settings_key() {
-        let settings = crab_config::Config {
-            api_key: Some("sk-test".into()),
-            api_provider: Some("anthropic".into()),
-            ..Default::default()
-        };
-        let providers = check_providers(&settings);
-        let anthropic = &providers[0];
-        assert!(anthropic.has_settings);
-        assert!(anthropic.is_configured());
-    }
-
-    #[test]
     fn provider_status_no_key() {
         let settings = crab_config::Config::default();
         let providers = check_providers(&settings);
-        // Without env vars set, both should show not configured via settings
-        assert!(!providers[0].has_settings);
-        assert!(!providers[1].has_settings);
+        // Without env vars set, neither should show configured via tokens.json
+        // (assuming no leftover tokens from a previous run).
+        assert!(!providers[0].has_token_file || !providers[1].has_token_file);
     }
 
     #[test]
     fn run_status_json_output() {
-        let settings = crab_config::Config {
-            api_key: Some("sk-test".into()),
-            api_provider: Some("anthropic".into()),
-            ..Default::default()
-        };
-        // Just verify it doesn't panic — actual output goes to stdout
+        let settings = crab_config::Config::default();
         let result = run_status(&settings, true);
         assert!(result.is_ok());
     }
