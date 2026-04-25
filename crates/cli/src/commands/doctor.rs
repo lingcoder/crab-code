@@ -76,7 +76,8 @@ fn check_api_key(settings: &crab_config::Config) -> Check {
         .is_some_and(|s| !s.trim().is_empty());
     let resolved = crab_auth::resolve_auth_key(settings).is_some();
 
-    let passed = resolved || has_auth_token_env || has_anthropic_env || has_openai_env;
+    let passed =
+        resolved || has_auth_token_env || has_anthropic_env || has_openai_env || has_helper;
 
     let detail = if has_auth_token_env {
         "ANTHROPIC_AUTH_TOKEN set".into()
