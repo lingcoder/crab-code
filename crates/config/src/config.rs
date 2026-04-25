@@ -23,8 +23,9 @@ pub struct Config {
     // ── Provider / auth ──
     pub api_provider: Option<String>,
     pub api_base_url: Option<String>,
-    pub api_key: Option<String>,
     /// Shell command that prints an API key to stdout.
+    /// The path is configuration; the secret value the script returns
+    /// never enters `Config` (resolved by the auth module at request time).
     pub api_key_helper: Option<String>,
 
     // ── Model ──
@@ -257,7 +258,7 @@ mod tests {
     fn default_config_all_none() {
         let s = Config::default();
         assert!(s.api_provider.is_none());
-        assert!(s.api_key.is_none());
+        assert!(s.api_key_helper.is_none());
         assert!(s.model.is_none());
         assert!(s.max_tokens.is_none());
     }
@@ -388,7 +389,7 @@ model = "deepseek-chat"
         let s = Config {
             api_provider: Some("anthropic".into()),
             api_base_url: Some("http://localhost:8080".into()),
-            api_key: Some("sk-test".into()),
+            api_key_helper: Some("/usr/local/bin/get-key.sh".into()),
             model: Some("claude-3".into()),
             small_model: Some("haiku".into()),
             max_tokens: Some(8192),
@@ -436,12 +437,12 @@ model = "deepseek-chat"
         let _ = std::fs::create_dir_all(&crab_dir);
         std::fs::write(
             crab_dir.join("config.local.toml"),
-            r#"apiKey = "local-secret""#,
+            r#"model = "local-model""#,
         )
         .unwrap();
 
         let s = load_local(&dir).unwrap();
-        assert_eq!(s.api_key.as_deref(), Some("local-secret"));
+        assert_eq!(s.model.as_deref(), Some("local-model"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -39,7 +39,6 @@ const KNOWN_FIELDS: &[(&str, &str)] = &[
     // ── Provider / auth ──
     ("apiProvider", "string"),
     ("apiBaseUrl", "string"),
-    ("apiKey", "string"),
     ("apiKeyHelper", "string"),
     // ── Model ──
     ("model", "string"),
@@ -504,7 +503,7 @@ mod tests {
     #[test]
     fn validate_null_values_are_valid() {
         let settings = serde_json::json!({
-            "apiKey": null,
+            "apiKeyHelper": null,
             "smallModel": null,
             "maxTokens": null
         });
@@ -513,12 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_api_key_is_known_field() {
+    fn validate_api_key_is_unknown_field() {
         let settings = serde_json::json!({"apiKey": "sk-test"});
         let errors = validate_config(&settings);
         assert!(
-            errors.is_empty(),
-            "apiKey should be a known field: {errors:?}"
+            !errors.is_empty(),
+            "apiKey is no longer a Config field; secrets must go through the auth chain"
         );
     }
 

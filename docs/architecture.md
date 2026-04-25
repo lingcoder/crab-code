@@ -257,9 +257,9 @@ crab-code/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── oauth.rs               # OAuth2 PKCE flow
+│   │       ├── oauth.rs               # OAuth2 PKCE flow + tokens.json store
 │   │       ├── keychain.rs            # System Keychain (macOS/Win/Linux)
-│   │       ├── api_key.rs             # API key management
+│   │       ├── resolver.rs            # env → apiKeyHelper → keychain → tokens.json chain
 │   │       ├── bedrock_auth.rs        # AWS SigV4 signing (feature)
 │   │       ├── vertex_auth.rs         # GCP Vertex authentication
 │   │       ├── aws_iam.rs             # AWS IAM Roles + IRSA
@@ -1287,7 +1287,7 @@ src/
 
 **Core Types**
 
-The `Settings` struct covers: `api_provider`, `api_base_url`, `api_key`, `model`, `small_model`, `permission_mode`, `system_prompt`, `mcp_servers`, `hooks`, `theme`, and more. The three configuration levels are merged via `load_merged_settings()` (global -> user -> project), with higher-priority fields overriding lower-priority ones.
+The `Config` struct covers: `api_provider`, `api_base_url`, `api_key_helper`, `model`, `small_model`, `permission_mode`, `system_prompt`, `mcp_servers`, `hooks`, `theme`, and more. Secrets do **not** live on `Config` — the resolved API key flows through an independent chain in `crab-auth` (see 6.4). The configuration sources are merged at the `toml::Value` layer by `loader::resolve()` (defaults -> plugin -> user -> project -> local -> --config -> env -> CLI flags), with higher-priority sources overriding lower-priority ones.
 
 ```rust
 // agents_md.rs -- AGENTS.md parsing
@@ -1324,14 +1324,14 @@ pub fn collect_agents_md(project_dir: &std::path::Path) -> Vec<AgentsMd> {
 ```
 src/
 ├── lib.rs
-├── oauth.rs              // OAuth2 PKCE flow
+├── oauth.rs              // OAuth2 PKCE flow + tokens.json store
 ├── keychain.rs           // System Keychain (macOS/Windows/Linux)
-├── api_key.rs            // API key management (environment variable / file)
+├── resolver.rs           // resolve_auth_key: env -> apiKeyHelper -> keychain -> tokens.json
 ├── bedrock_auth.rs       // AWS SigV4 signing (feature = "bedrock")
 ├── vertex_auth.rs        // GCP Vertex AI authentication
 ├── aws_iam.rs            // AWS IAM Roles + IRSA (pod-level)
 ├── gcp_identity.rs       // GCP Workload Identity Federation
-└── credential_chain.rs   // Credential chain (priority-ordered probing: env -> keychain -> file -> IAM)
+└── credential_chain.rs   // Credential chain wrapper (delegates to resolver)
 ```
 
 **Core Interface**
@@ -1356,12 +1356,14 @@ pub trait AuthProvider: Send + Sync {
     fn refresh(&self) -> Pin<Box<dyn Future<Output = crab_common::Result<()>> + Send + '_>>;
 }
 
-// api_key.rs
-pub fn resolve_api_key() -> Option<String> {
-    // Priority: environment variable -> keychain -> config file
-    std::env::var("ANTHROPIC_API_KEY")
-        .ok()
-        .or_else(|| keychain::get("crab-code", "api-key").ok())
+// resolver.rs -- secrets do not live on Config; the chain is orthogonal to file-layer config.
+pub fn resolve_auth_key(cfg: &crab_config::Config) -> Option<String> {
+    // 1. ANTHROPIC_AUTH_TOKEN env
+    // 2. provider-specific API-key env (ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY)
+    // 3. apiKeyHelper script (path declared in config; stdout consumed as the key)
+    // 4. system keychain (crab-auth::keychain)
+    // 5. ~/.crab/auth/tokens.json (OAuth access token)
+    // ...
 }
 
 // keychain.rs -- Uses the auth crate's local AuthError, not crab_common::Error
@@ -1525,13 +1527,12 @@ impl LlmBackend {
 }
 
 /// Construct backend from configuration
-pub fn create_backend(settings: &crab_config::Settings) -> LlmBackend {
+pub fn create_backend(settings: &crab_config::Config) -> LlmBackend {
     match settings.api_provider.as_deref() {
-        Some("openai") | Some("ollama") | Some("deepseek") => {
+        Some("openai" | "ollama" | "deepseek" | "vllm") => {
             let base_url = settings.api_base_url.as_deref()
                 .unwrap_or("https://api.openai.com/v1");
-            let api_key = std::env::var("OPENAI_API_KEY").ok()
-                .or_else(|| settings.api_key.clone());
+            let api_key = crab_auth::resolve_auth_key(settings);
             LlmBackend::OpenAi(openai::OpenAiClient::new(base_url, api_key))
         }
         _ => {
@@ -3475,10 +3476,11 @@ async fn main() -> anyhow::Result<()> {
     crab_telemetry::init("crab-code", None)?;
 
     // 2. Load configuration
-    let config = crab_config::load_merged_settings(None)?;
+    let ctx = crab_config::ResolveContext::new().with_process_env();
+    let config = crab_config::resolve(&ctx)?;
 
-    // 3. Initialize authentication
-    let auth = crab_auth::resolve_api_key()
+    // 3. Initialize authentication (out-of-chain; never reads Config secrets)
+    let auth = crab_auth::resolve_auth_key(&config)
         .ok_or_else(|| anyhow::anyhow!("no API key found"))?;
 
     // 4. Dispatch commands
