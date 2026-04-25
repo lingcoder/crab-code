@@ -253,31 +253,27 @@ This asymmetry is deliberate. TOML's ergonomics are valuable for files users edi
 
 ## 8. Directory Layout
 
+Real today (consumed by current code):
+
 ```
 $CRAB_CONFIG_DIR/                (default: ~/.crab/)
   config.toml                    # user layer (chain position 3)
   auth/
-    tokens.json                  # OAuth token (independent, 0600;
-                                 #   future: split per provider)
-  sessions/                      # conversation history
-  commands/                      # user-level slash commands
-  agents/                        # user-level subagent definitions
-  hooks/                         # user-level hooks
-  plugins/                       # installed plugins (first version mirrors Anthropic layout)
+    tokens.json                  # OAuth token (independent, 0600)
+  sessions/                      # conversation history (used by session crate)
+  agents/                        # user-level subagent definitions (used by agent crate)
+  logs/                          # local-only telemetry (used by telemetry crate)
+  plugins/                       # installed plugins (Anthropic-compatible layout)
     <plugin-name>/
       plugin.json                # plugin manifest (identity, version, capabilities)
       config.json                # plugin's contributed defaults (optional, chain position 2, JSON)
       skills/                    # plugin-provided skills (markdown)
       commands/                  # plugin-provided slash commands
       agents/                    # plugin-provided subagents
-  logs/                          # local-only telemetry
 
 $PWD/.crab/
   config.toml                    # project layer (chain position 4, committed)
   config.local.toml              # local layer (chain position 5, gitignored)
-  commands/
-  agents/
-  hooks/
 
 $PWD/
   AGENTS.md                      # project-level memory (CLAUDE.md also
