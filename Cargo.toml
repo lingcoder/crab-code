@@ -115,7 +115,7 @@ semver = "1"
 # ─── 杂项 ───
 uuid = { version = "1", features = ["v4"] }
 ulid = "1"
-lru = "0.17"
+lru = "0.18"
 unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
 jsonschema = "0.46"
