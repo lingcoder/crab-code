@@ -12,7 +12,6 @@ crab-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 # tokio for std process Command + async tests on every backend
 tokio.workspace = true
 # sysinfo only needed by the Linux landlock backend for kernel-version sniff;

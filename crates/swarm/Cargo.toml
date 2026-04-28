@@ -13,10 +13,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-futures.workspace = true
 tracing.workspace = true
 fd-lock.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -21,8 +21,6 @@ futures.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 jsonwebtoken.workspace = true
-# client side
-reqwest.workspace = true
 # shared
 tokio.workspace = true
 thiserror.workspace = true

@@ -29,16 +29,13 @@ crab-tools.workspace = true
 crab-api.workspace = true
 crab-mcp.workspace = true
 crab-plugin.workspace = true
-crab-process.workspace = true
 crab-swarm.workspace = true
 crab-skill.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-futures.workspace = true
 tracing.workspace = true
-fd-lock.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
