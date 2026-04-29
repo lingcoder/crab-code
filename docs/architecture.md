@@ -2103,7 +2103,11 @@ src/
 ├── history.rs         // Session persistence, recovery, search, export
 ├── memory.rs          // Re-exports from crab-memory (MemoryStore, MemoryFile, etc.)
 ├── memory_extract.rs  // Conversation → memory extraction
-├── cost.rs            // Token counting, cost tracking
+├── cost.rs            // Token counting, cost tracking, cost persistence
+├── telemetry/
+│   ├── traces.rs     // Span instrumentation (placeholder)
+│   ├── metrics.rs    // Counters and gauges (placeholder)
+│   └── logs.rs       // Session transcript recording (local JSONL)
 ├── template.rs        // Session template + quick recovery
 └── migration.rs       // Data migration system
 ```
@@ -2964,10 +2968,8 @@ mem-ranker = ["dep:crab-api", "dep:tokio"]                   # LLM-driven memory
 src/
 ├── lib.rs
 ├── tracer.rs         // OpenTelemetry tracer initialization
-├── metrics.rs        // Custom metrics (API latency, tool execution time, etc.)
-├── cost.rs           // Cost tracking
-├── export.rs         // OTLP export
-└── session_recorder.rs // Session recording (local transcript)
+├── metrics.rs        // Structured spans, timing, and metrics collection
+└── export.rs         // Local NDJSON export (spans + metrics)
 ```
 
 **Core Interface**

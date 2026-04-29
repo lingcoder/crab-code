@@ -58,29 +58,6 @@ impl std::ops::AddAssign for TokenUsage {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct CostTracker {
-    pub total_input_tokens: u64,
-    pub total_output_tokens: u64,
-    pub total_cache_read_tokens: u64,
-    pub total_cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-}
-
-impl CostTracker {
-    pub fn record(&mut self, usage: &TokenUsage, cost: f64) {
-        self.total_input_tokens += usage.input_tokens;
-        self.total_output_tokens += usage.output_tokens;
-        self.total_cache_read_tokens += usage.cache_read_tokens;
-        self.total_cache_creation_tokens += usage.cache_creation_tokens;
-        self.total_cost_usd += cost;
-    }
-
-    pub fn total_tokens(&self) -> u64 {
-        self.total_input_tokens + self.total_output_tokens
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,26 +116,6 @@ mod tests {
     }
 
     #[test]
-    fn cost_tracker_record() {
-        let mut tracker = CostTracker::default();
-        let usage = TokenUsage {
-            input_tokens: 1000,
-            output_tokens: 500,
-            cache_read_tokens: 200,
-            cache_creation_tokens: 100,
-        };
-        tracker.record(&usage, 0.015);
-        assert_eq!(tracker.total_input_tokens, 1000);
-        assert_eq!(tracker.total_output_tokens, 500);
-        assert_eq!(tracker.total_tokens(), 1500);
-        assert!((tracker.total_cost_usd - 0.015).abs() < f64::EPSILON);
-
-        tracker.record(&usage, 0.010);
-        assert_eq!(tracker.total_input_tokens, 2000);
-        assert!((tracker.total_cost_usd - 0.025).abs() < f64::EPSILON);
-    }
-
-    #[test]
     fn token_usage_serde_roundtrip() {
         let usage = TokenUsage {
             input_tokens: 42,
@@ -212,37 +169,6 @@ mod tests {
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 20);
         assert!(!usage.is_empty());
-    }
-
-    #[test]
-    fn cost_tracker_default_is_zero() {
-        let tracker = CostTracker::default();
-        assert_eq!(tracker.total_tokens(), 0);
-        assert_eq!(tracker.total_input_tokens, 0);
-        assert_eq!(tracker.total_output_tokens, 0);
-        assert!((tracker.total_cost_usd - 0.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn cost_tracker_multiple_records() {
-        let mut tracker = CostTracker::default();
-        for _ in 0..5 {
-            tracker.record(
-                &TokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 50,
-                    cache_read_tokens: 10,
-                    cache_creation_tokens: 5,
-                },
-                0.01,
-            );
-        }
-        assert_eq!(tracker.total_input_tokens, 500);
-        assert_eq!(tracker.total_output_tokens, 250);
-        assert_eq!(tracker.total_cache_read_tokens, 50);
-        assert_eq!(tracker.total_cache_creation_tokens, 25);
-        assert_eq!(tracker.total_tokens(), 750);
-        assert!((tracker.total_cost_usd - 0.05).abs() < f64::EPSILON);
     }
 
     #[test]

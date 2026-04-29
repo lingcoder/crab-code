@@ -649,4 +649,3 @@ impl PermissionHandler for ChannelPermissionHandler {
         })
     }
 }
-

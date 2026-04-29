@@ -10,30 +10,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Record types
 // ---------------------------------------------------------------------------
-
-/// A completed span record ready for export.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpanRecord {
-    /// Span name (e.g., `"tool_execute"`, `"llm_request"`).
-    pub name: String,
-    /// Duration in milliseconds.
-    pub duration_ms: u64,
-    /// Start timestamp (milliseconds since Unix epoch).
-    pub start_time_ms: u64,
-    /// Arbitrary key-value attributes.
-    pub attributes: HashMap<String, String>,
-    /// Optional parent span ID for hierarchical tracing.
-    pub parent_id: Option<String>,
-    /// Unique span ID.
-    pub span_id: String,
-}
 
 /// A metric data point ready for export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,8 +47,8 @@ impl LocalExporter {
         Self { output_dir }
     }
 
-    /// Export a batch of span records to the spans file.
-    pub fn export_spans(&self, spans: &[SpanRecord]) -> crab_core::Result<()> {
+    /// Export a batch of span timings to the spans file.
+    pub fn export_spans(&self, spans: &[crate::metrics::SpanTiming]) -> crab_core::Result<()> {
         if spans.is_empty() {
             return Ok(());
         }
@@ -153,23 +136,7 @@ impl LocalExporter {
 
 /// Get today's date as YYYY-MM-DD for file naming.
 fn today_str() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let days = secs / 86400;
-    // Reuse the Hinnant civil date algorithm
-    let z = days.cast_signed() + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 impl std::fmt::Debug for LocalExporter {
@@ -183,21 +150,23 @@ impl std::fmt::Debug for LocalExporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::SpanTiming;
 
     #[test]
-    fn span_record_serde_roundtrip() {
-        let span = SpanRecord {
+    fn span_timing_serde_roundtrip() {
+        let span = SpanTiming {
             name: "test_span".into(),
-            duration_ms: 42,
+            span_id: "0000000000000001".into(),
             start_time_ms: 1_700_000_000_000,
-            attributes: HashMap::from([("key".into(), "value".into())]),
-            parent_id: None,
-            span_id: "span-001".into(),
+            duration_ms: 42.0,
+            success: true,
+            metadata: HashMap::from([("key".into(), serde_json::Value::String("value".into()))]),
         };
         let json = serde_json::to_string(&span).unwrap();
-        let parsed: SpanRecord = serde_json::from_str(&json).unwrap();
+        let parsed: SpanTiming = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "test_span");
-        assert_eq!(parsed.duration_ms, 42);
+        assert!((parsed.duration_ms - 42.0).abs() < f64::EPSILON);
+        assert_eq!(parsed.span_id, "0000000000000001");
     }
 
     #[test]
@@ -235,13 +204,13 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let exporter = LocalExporter::new(tmp.clone());
 
-        let span = SpanRecord {
+        let span = SpanTiming {
             name: "test".into(),
-            duration_ms: 10,
+            span_id: "000000000000000a".into(),
             start_time_ms: 0,
-            attributes: HashMap::new(),
-            parent_id: None,
-            span_id: "s1".into(),
+            duration_ms: 10.0,
+            success: true,
+            metadata: HashMap::new(),
         };
         exporter.export_spans(&[span]).unwrap();
 

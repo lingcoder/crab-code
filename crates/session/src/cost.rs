@@ -1,4 +1,7 @@
 use std::fmt;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use crab_core::model::TokenUsage;
 
@@ -196,7 +199,7 @@ pub fn lookup_pricing(model_id: &str) -> ModelPricing {
 }
 
 /// Summary of accumulated costs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostSummary {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -294,6 +297,51 @@ impl CostAccumulator {
 impl fmt::Display for CostAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.summary_line())
+    }
+}
+
+// ── Persistence ───────────────────────────────────────────────────────
+
+/// Default on-disk path for the persisted cost summary:
+/// `~/.crab/sessions/costs.json`.
+#[must_use]
+pub fn default_cost_path() -> PathBuf {
+    crab_common::utils::path::home_dir()
+        .join(".crab")
+        .join("sessions")
+        .join("costs.json")
+}
+
+/// Persist a `CostSummary` to disk as pretty-printed JSON.
+///
+/// Creates parent directories as needed.
+pub fn save_cost_summary(path: &Path, summary: &CostSummary) -> crab_core::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            crab_core::Error::Other(format!("failed to create {}: {e}", parent.display()))
+        })?;
+    }
+    let json = serde_json::to_string_pretty(summary)
+        .map_err(|e| crab_core::Error::Other(format!("failed to serialize cost summary: {e}")))?;
+    std::fs::write(path, json)
+        .map_err(|e| crab_core::Error::Other(format!("failed to write {}: {e}", path.display())))
+}
+
+/// Load a `CostSummary` from disk. Returns `Ok(None)` if the file
+/// does not exist.
+pub fn load_cost_summary(path: &Path) -> crab_core::Result<Option<CostSummary>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let parsed: CostSummary = serde_json::from_str(&content).map_err(|e| {
+                crab_core::Error::Other(format!("failed to parse {}: {e}", path.display()))
+            })?;
+            Ok(Some(parsed))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(crab_core::Error::Other(format!(
+            "failed to read {}: {e}",
+            path.display()
+        ))),
     }
 }
 
@@ -580,5 +628,69 @@ mod tests {
         let full = lookup_pricing("gpt-4o");
         // mini should be cheaper
         assert!(mini.input_per_mtok < full.input_per_mtok);
+    }
+
+    // ── Persistence ────────────────────────────────────────────────────
+
+    fn sample_summary() -> CostSummary {
+        CostSummary {
+            input_tokens: 1234,
+            output_tokens: 567,
+            cache_read_tokens: 89,
+            cache_creation_tokens: 42,
+            total_cost_usd: 0.0153,
+            api_calls: 7,
+        }
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("costs.json");
+        let original = sample_summary();
+        save_cost_summary(&path, &original).expect("save");
+        let loaded = load_cost_summary(&path)
+            .expect("load")
+            .expect("file exists");
+        assert_eq!(loaded.input_tokens, original.input_tokens);
+        assert_eq!(loaded.output_tokens, original.output_tokens);
+        assert_eq!(loaded.cache_read_tokens, original.cache_read_tokens);
+        assert_eq!(loaded.cache_creation_tokens, original.cache_creation_tokens);
+        assert_eq!(loaded.api_calls, original.api_calls);
+        assert!((loaded.total_cost_usd - original.total_cost_usd).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn load_nonexistent_returns_none() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("missing.json");
+        let loaded = load_cost_summary(&path).expect("load");
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn save_creates_parent_dirs() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("nested").join("deeper").join("costs.json");
+        save_cost_summary(&path, &sample_summary()).expect("save");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn default_cost_path_under_crab_sessions() {
+        let path = default_cost_path();
+        assert!(path.ends_with("costs.json"));
+        let s = path.to_string_lossy();
+        assert!(s.contains(".crab"));
+        assert!(s.contains("sessions"));
+    }
+
+    #[test]
+    fn cost_summary_serde_roundtrip() {
+        let summary = sample_summary();
+        let json = serde_json::to_string(&summary).expect("serialize");
+        let parsed: CostSummary = serde_json::from_str(&json).expect("parse");
+        assert_eq!(parsed.input_tokens, summary.input_tokens);
+        assert_eq!(parsed.api_calls, summary.api_calls);
     }
 }

@@ -40,6 +40,7 @@ pub async fn query_loop(
     event_tx: mpsc::Sender<Event>,
     cancel: CancellationToken,
 ) -> crab_core::Result<()> {
+    let metrics = crab_telemetry::MetricsCollector::new();
     let mut turn_index: usize = 0;
     let mut plan_mode = false;
     let context_mgr = ContextManager::default();
@@ -74,6 +75,7 @@ pub async fn query_loop(
 
         // Emit turn start
         let _ = event_tx.send(Event::TurnStart { turn_index }).await;
+        let iter_span = crab_telemetry::metrics::agent_loop_span(turn_index as u32);
         turn_index += 1;
 
         // Build cache breakpoints
@@ -235,9 +237,11 @@ pub async fn query_loop(
                     if let Some(msg) = hr.message {
                         conversation.push(Message::user(msg));
                     }
+                    metrics.record(iter_span.finish(true));
                     continue;
                 }
             }
+            metrics.record(iter_span.finish(true));
             return Ok(());
         }
 
@@ -271,6 +275,7 @@ pub async fn query_loop(
             persister.persist_message(&result_msg);
         }
         conversation.push(result_msg);
+        metrics.record(iter_span.finish(true));
     }
 }
 

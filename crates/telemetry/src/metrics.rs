@@ -6,7 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // ── Structured log event ──────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ impl StructuredEvent {
     #[must_use]
     pub fn new(level: LogLevel, category: &str, message: &str) -> Self {
         Self {
-            timestamp: crate::cost::now_iso8601_pub(),
+            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             level,
             category: category.to_string(),
             message: message.to_string(),
@@ -79,11 +80,29 @@ impl StructuredEvent {
 
 // ── Performance span timing ───────────────────────────────────────────
 
+/// Process-wide monotonically increasing span ID counter.
+static SPAN_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_span_id() -> String {
+    let n = SPAN_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{n:016x}")
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// A completed timing measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpanTiming {
     /// Span name (e.g. `"tool.bash"`, `"api.anthropic"`).
     pub name: String,
+    /// Unique span identifier (hex-encoded counter).
+    pub span_id: String,
+    /// Start timestamp (milliseconds since Unix epoch).
+    pub start_time_ms: u64,
     /// Duration in milliseconds.
     pub duration_ms: f64,
     /// Whether the operation succeeded.
@@ -96,7 +115,9 @@ pub struct SpanTiming {
 /// An active span that measures elapsed time until dropped or finished.
 pub struct ActiveSpan {
     name: String,
+    span_id: String,
     start: Instant,
+    start_time_ms: u64,
     metadata: HashMap<String, serde_json::Value>,
     finished: bool,
 }
@@ -107,10 +128,26 @@ impl ActiveSpan {
     pub fn start(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            span_id: next_span_id(),
             start: Instant::now(),
+            start_time_ms: now_unix_ms(),
             metadata: HashMap::new(),
             finished: false,
         }
+    }
+
+    /// Span identifier.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn span_id(&self) -> &str {
+        &self.span_id
+    }
+
+    /// Start time in milliseconds since Unix epoch.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn start_time_ms(&self) -> u64 {
+        self.start_time_ms
     }
 
     /// Add metadata to the span.
@@ -124,6 +161,8 @@ impl ActiveSpan {
         self.finished = true;
         SpanTiming {
             name: self.name.clone(),
+            span_id: self.span_id.clone(),
+            start_time_ms: self.start_time_ms,
             duration_ms: self.start.elapsed().as_secs_f64() * 1000.0,
             success,
             metadata: self.metadata.clone(),
@@ -333,6 +372,9 @@ mod tests {
         assert_eq!(event.category, "tool");
         assert_eq!(event.message, "bash executed");
         assert!(event.fields.is_empty());
+        // chrono ISO 8601 timestamp: YYYY-MM-DDTHH:MM:SSZ → 20 chars
+        assert_eq!(event.timestamp.len(), 20);
+        assert!(event.timestamp.ends_with('Z'));
     }
 
     #[test]
@@ -379,6 +421,8 @@ mod tests {
         assert_eq!(timing.name, "test.span");
         assert!(timing.success);
         assert!(timing.duration_ms >= 1.0); // at least 1ms
+        assert!(!timing.span_id.is_empty());
+        assert!(timing.start_time_ms > 0);
     }
 
     #[test]
@@ -399,12 +443,23 @@ mod tests {
         let _ = span.finish(true);
     }
 
+    #[test]
+    fn active_span_unique_ids() {
+        let a = ActiveSpan::start("a").finish(true);
+        let b = ActiveSpan::start("b").finish(true);
+        assert_ne!(a.span_id, b.span_id);
+        // Hex-encoded counter is 16 chars wide.
+        assert_eq!(a.span_id.len(), 16);
+    }
+
     // ── SpanTiming serde ──────────────────────────────────────────────
 
     #[test]
     fn span_timing_serde_roundtrip() {
         let timing = SpanTiming {
             name: "tool.bash".to_string(),
+            span_id: "0000000000000001".to_string(),
+            start_time_ms: 1_700_000_000_000,
             duration_ms: 42.5,
             success: true,
             metadata: HashMap::new(),
@@ -416,27 +471,23 @@ mod tests {
 
     // ── MetricsCollector ──────────────────────────────────────────────
 
+    fn timing(name: &str, duration_ms: f64, success: bool) -> SpanTiming {
+        SpanTiming {
+            name: name.to_string(),
+            span_id: next_span_id(),
+            start_time_ms: now_unix_ms(),
+            duration_ms,
+            success,
+            metadata: HashMap::new(),
+        }
+    }
+
     #[test]
     fn collector_record_and_query() {
         let collector = MetricsCollector::new();
-        collector.record(SpanTiming {
-            name: "tool.bash".to_string(),
-            duration_ms: 100.0,
-            success: true,
-            metadata: HashMap::new(),
-        });
-        collector.record(SpanTiming {
-            name: "tool.read".to_string(),
-            duration_ms: 5.0,
-            success: true,
-            metadata: HashMap::new(),
-        });
-        collector.record(SpanTiming {
-            name: "api.anthropic".to_string(),
-            duration_ms: 500.0,
-            success: false,
-            metadata: HashMap::new(),
-        });
+        collector.record(timing("tool.bash", 100.0, true));
+        collector.record(timing("tool.read", 5.0, true));
+        collector.record(timing("api.anthropic", 500.0, false));
 
         assert_eq!(collector.len(), 3);
         assert_eq!(collector.timings_by_prefix("tool.").len(), 2);
@@ -446,24 +497,9 @@ mod tests {
     #[test]
     fn collector_stats() {
         let collector = MetricsCollector::new();
-        collector.record(SpanTiming {
-            name: "tool.bash".to_string(),
-            duration_ms: 100.0,
-            success: true,
-            metadata: HashMap::new(),
-        });
-        collector.record(SpanTiming {
-            name: "tool.bash".to_string(),
-            duration_ms: 200.0,
-            success: true,
-            metadata: HashMap::new(),
-        });
-        collector.record(SpanTiming {
-            name: "tool.bash".to_string(),
-            duration_ms: 300.0,
-            success: false,
-            metadata: HashMap::new(),
-        });
+        collector.record(timing("tool.bash", 100.0, true));
+        collector.record(timing("tool.bash", 200.0, true));
+        collector.record(timing("tool.bash", 300.0, false));
 
         let stats = collector.stats("tool.bash").unwrap();
         assert_eq!(stats.count, 3);
@@ -483,12 +519,7 @@ mod tests {
     #[test]
     fn collector_clear() {
         let collector = MetricsCollector::new();
-        collector.record(SpanTiming {
-            name: "test".to_string(),
-            duration_ms: 1.0,
-            success: true,
-            metadata: HashMap::new(),
-        });
+        collector.record(timing("test", 1.0, true));
         assert!(!collector.is_empty());
         collector.clear();
         assert!(collector.is_empty());

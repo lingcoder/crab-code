@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Session management and context compaction for Crab Code"
 
 [dependencies]
+crab-common.workspace = true
 crab-core.workspace = true
 crab-memory.workspace = true
 tokio.workspace = true

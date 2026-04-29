@@ -11,6 +11,7 @@ description = "Raw query loop for Crab Code — extracted from crab-agent in v2.
 crab-core.workspace = true
 crab-api.workspace = true
 crab-session.workspace = true
+crab-telemetry.workspace = true
 crab-tools.workspace = true
 crab-plugin.workspace = true
 tokio.workspace = true

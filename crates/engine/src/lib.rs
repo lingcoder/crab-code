@@ -29,6 +29,7 @@ pub mod effort;
 pub mod query_loop;
 pub mod stop_hooks;
 pub mod streaming;
+pub mod telemetry;
 pub mod token_budget;
 pub mod tool_orchestration;
 

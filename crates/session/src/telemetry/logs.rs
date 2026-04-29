@@ -30,7 +30,7 @@ fn now_epoch_ms() -> u64 {
 /// # Example
 ///
 /// ```rust,no_run
-/// use crab_telemetry::session_recorder::SessionRecorder;
+/// use crab_session::recorder::SessionRecorder;
 ///
 /// let mut recorder = SessionRecorder::new("sess_abc123");
 /// recorder.record_message("user", "Hello!").unwrap();

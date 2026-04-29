@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Observability and telemetry for Crab Code"
 
 [dependencies]
-crab-common.workspace = true
 crab-core.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
