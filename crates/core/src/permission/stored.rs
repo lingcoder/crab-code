@@ -202,10 +202,9 @@ impl PermissionRuleSet {
             return Some(rule);
         }
         // Glob match
-        self.rules.iter().find(|r| {
-            r.tool_pattern.contains('*')
-                && super::glob_match(&r.tool_pattern, tool_name)
-        })
+        self.rules
+            .iter()
+            .find(|r| r.tool_pattern.contains('*') && super::glob_match(&r.tool_pattern, tool_name))
     }
 
     // ── Audit log ─────────────────────────────────────────────────────
@@ -287,9 +286,8 @@ impl PermissionRuleSet {
 /// Returns `Ok(default)` if the file does not exist.
 pub fn load_permission_store(path: &Path) -> crate::Result<PermissionStore> {
     match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).map_err(|e| {
-            crate::Error::Config(format!("failed to parse {}: {e}", path.display()))
-        }),
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|e| crate::Error::Config(format!("failed to parse {}: {e}", path.display()))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PermissionStore::default()),
         Err(e) => Err(crate::Error::Config(format!(
             "failed to read {}: {e}",
