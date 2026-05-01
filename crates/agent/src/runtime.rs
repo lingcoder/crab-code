@@ -459,14 +459,14 @@ impl AgentRuntime {
     /// Fire a lifecycle hook in the background (fire-and-forget).
     pub fn fire_lifecycle_hook(
         &self,
-        trigger: crab_plugin::hook::HookTrigger,
+        trigger: crab_hooks::HookTrigger,
         session_id: Option<&str>,
         working_dir: Option<&Path>,
     ) {
         let Some(hooks) = self.loop_config.hook_executor.clone() else {
             return;
         };
-        let ctx = crab_plugin::hook::HookContext {
+        let ctx = crab_hooks::HookContext {
             tool_name: String::new(),
             tool_input: String::new(),
             working_dir: working_dir.map(PathBuf::from),
@@ -492,7 +492,7 @@ impl AgentRuntime {
         let Some(hooks) = self.loop_config.hook_executor.clone() else {
             return;
         };
-        let ctx = crab_plugin::hook::HookContext {
+        let ctx = crab_hooks::HookContext {
             tool_name: String::new(),
             tool_input: path.to_string_lossy().into_owned(),
             working_dir: working_dir.map(PathBuf::from),
@@ -502,7 +502,7 @@ impl AgentRuntime {
         };
         tokio::spawn(async move {
             if let Err(e) = hooks
-                .run(crab_plugin::hook::HookTrigger::FileChanged, &ctx)
+                .run(crab_hooks::HookTrigger::FileChanged, &ctx)
                 .await
             {
                 tracing::warn!(error = %e, "file_changed hook failed");
@@ -531,7 +531,7 @@ impl AgentRuntime {
             let message = msg.to_string();
             let session_id = session_id.clone();
             tokio::spawn(async move {
-                let ctx = crab_plugin::hook::HookContext {
+                let ctx = crab_hooks::HookContext {
                     tool_name: String::new(),
                     tool_input: message,
                     working_dir: None,
@@ -540,7 +540,7 @@ impl AgentRuntime {
                     session_id,
                 };
                 if let Err(e) = hooks
-                    .run(crab_plugin::hook::HookTrigger::Notification, &ctx)
+                    .run(crab_hooks::HookTrigger::Notification, &ctx)
                     .await
                 {
                     tracing::warn!(error = %e, "notification hook failed");

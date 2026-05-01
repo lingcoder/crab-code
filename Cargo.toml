@@ -170,6 +170,7 @@ crab-plugin = { path = "crates/plugin" }
 crab-skills = { path = "crates/skills" }
 crab-memory = { path = "crates/memory" }
 crab-telemetry = { path = "crates/telemetry" }
+crab-hooks = { path = "crates/hooks" }
 crab-engine = { path = "crates/engine" }
 crab-remote = { path = "crates/remote" }
 crab-sandbox = { path = "crates/sandbox" }

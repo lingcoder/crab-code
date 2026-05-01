@@ -1155,6 +1155,7 @@ dependencies = [
  "crab-config",
  "crab-core",
  "crab-engine",
+ "crab-hooks",
  "crab-mcp",
  "crab-memory",
  "crab-plugin",
@@ -1335,6 +1336,7 @@ version = "0.1.0"
 dependencies = [
  "crab-api",
  "crab-core",
+ "crab-hooks",
  "crab-plugin",
  "crab-session",
  "crab-telemetry",
@@ -1367,6 +1369,18 @@ dependencies = [
  "similar",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
+name = "crab-hooks"
+version = "0.1.0"
+dependencies = [
+ "crab-core",
+ "crab-process",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1431,7 +1445,6 @@ dependencies = [
  "crab-config",
  "crab-core",
  "crab-mcp",
- "crab-process",
  "crab-skills",
  "serde",
  "serde_json",

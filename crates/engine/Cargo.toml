@@ -13,6 +13,7 @@ crab-api.workspace = true
 crab-session.workspace = true
 crab-telemetry.workspace = true
 crab-tools.workspace = true
+crab-hooks.workspace = true
 crab-plugin.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

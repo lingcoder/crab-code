@@ -6,7 +6,7 @@
 use crab_core::event::Event;
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::tool::{ToolContext, ToolOutput};
-use crab_plugin::hook::{HookAction, HookContext, HookExecutor, HookTrigger};
+use crab_hooks::{HookAction, HookContext, HookExecutor, HookTrigger};
 use crab_tools::builtin::bash::BASH_TOOL_NAME;
 use crab_tools::builtin::plan_mode::EXIT_PLAN_MODE_TOOL_NAME;
 use crab_tools::executor::{StreamingOutput, ToolExecutor};

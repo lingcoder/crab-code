@@ -3,8 +3,6 @@
 //! Monitors filesystem paths for modifications and invokes a callback when
 //! changes are detected. This allows the hook and skill systems to
 //! automatically reload when skill files or configuration are edited.
-//!
-//! Maps to CCB `hooks/fileChangedWatcher.ts`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -16,7 +16,7 @@ use crab_core::event::Event;
 use crab_core::model::ModelId;
 use crab_core::query::QuerySource;
 use crab_core::tool::ToolContext;
-use crab_plugin::hook::HookExecutor;
+use crab_hooks::HookExecutor;
 use crab_session::{
     CompactionClient, CompactionConfig, Conversation, CostAccumulator, SessionPersister,
 };

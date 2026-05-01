@@ -2,12 +2,10 @@
 //!
 //! Skills can declare hooks in their YAML frontmatter that should be registered
 //! when the skill is loaded. This module extracts those hook definitions and
-//! registers them with the [`HookRegistry`](super::hook_registry::HookRegistry).
-//!
-//! Maps to CCB `hooks/registerFrontmatterHooks.ts` + `hooks/registerSkillHooks.ts`.
+//! registers them with the [`HookRegistry`](crate::registry::HookRegistry).
 
-use super::hook_registry::{HookEventType, HookRegistry, HookSource, RegisteredHook};
-use super::hook_types::{CommandHook, HookType, PromptHook};
+use crate::registry::{HookEventType, HookRegistry, HookSource, RegisteredHook};
+use crate::types::{CommandHook, HookType, PromptHook};
 
 // ─── Frontmatter hook definition ───────────────────────────────────────
 

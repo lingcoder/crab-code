@@ -1,34 +1,15 @@
 //! Async hook registry with event broadcasting.
 //!
 //! Provides a centralized registry for lifecycle hooks that can be registered
-//! from multiple sources (settings, plugins, frontmatter, session). Events
-//! are broadcast to all subscribers via `tokio::sync::broadcast`.
-//!
-//! Maps to Claude Code's `AsyncHookRegistry.ts` + `hookEvents.ts`.
-//!
-//! # Architecture
-//!
-//! The [`HookRegistry`] holds registered hooks behind an `RwLock` and a
-//! `broadcast::Sender` for event distribution. Hooks are matched by event
-//! type and executed when `emit()` is called. Subscribers can also receive
-//! raw events via `subscribe()` for monitoring or logging.
-//!
-//! # Relationship to `hook.rs`
-//!
-//! The existing `hook.rs` module provides the `HookExecutor` which runs
-//! shell-command hooks around tool invocations. This module extends that
-//! system with:
-//! - A registry that tracks hooks from multiple sources
-//! - A richer event model (beyond just pre/post tool use)
-//! - Broadcast-based event distribution for subscribers
-//! - Multiple hook types (not just shell commands)
+//! from multiple sources (settings, plugins, frontmatter, builtin, session).
+//! Events are broadcast to all subscribers via `tokio::sync::broadcast`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{RwLock, broadcast};
 
-use crate::hook_types::HookType;
+use crate::types::HookType;
 
 // ─── Events ─────────────────────────────────────────────────────────────
 
@@ -119,6 +100,8 @@ pub enum HookSource {
     Plugin(String),
     /// Registered from skill/prompt frontmatter.
     Frontmatter,
+    /// Built-in hooks shipped with the crate.
+    Builtin,
     /// Registered dynamically during the session.
     Session,
 }
@@ -129,6 +112,7 @@ impl std::fmt::Display for HookSource {
             Self::Settings => f.write_str("settings"),
             Self::Plugin(name) => write!(f, "plugin:{name}"),
             Self::Frontmatter => f.write_str("frontmatter"),
+            Self::Builtin => f.write_str("builtin"),
             Self::Session => f.write_str("session"),
         }
     }
@@ -327,7 +311,7 @@ impl Default for HookRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_types::CommandHook;
+    use crate::types::CommandHook;
 
     fn make_hook(event_filter: Vec<HookEventType>, source: HookSource) -> RegisteredHook {
         RegisteredHook {

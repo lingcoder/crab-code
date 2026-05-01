@@ -281,7 +281,7 @@ impl AgentSession {
         let Some(hooks) = self.config.hook_executor.as_deref() else {
             return Ok(None);
         };
-        let hook_ctx = crab_plugin::hook::HookContext {
+        let hook_ctx = crab_hooks::HookContext {
             tool_name: String::new(),
             tool_input: input.to_string(),
             working_dir: Some(self.tool_ctx.working_dir.clone()),
@@ -290,10 +290,10 @@ impl AgentSession {
             session_id: self.config.session_id.clone(),
         };
         match hooks
-            .run(crab_plugin::hook::HookTrigger::UserPromptSubmit, &hook_ctx)
+            .run(crab_hooks::HookTrigger::UserPromptSubmit, &hook_ctx)
             .await
         {
-            Ok(hr) if hr.action == crab_plugin::hook::HookAction::Deny => {
+            Ok(hr) if hr.action == crab_hooks::HookAction::Deny => {
                 Err(crab_core::Error::Other(hr.message.unwrap_or_else(|| {
                     "user prompt denied by UserPromptSubmit hook".to_string()
                 })))
@@ -877,7 +877,7 @@ mod tests {
         // An accepting hook whose stdout is plain text falls back to
         // exit-code semantics (0 = Allow, message=None). The helper
         // returns Ok(None) so no additional context is injected.
-        use crab_plugin::hook::{HookDef, HookExecutor, HookTrigger};
+        use crab_hooks::{HookDef, HookExecutor, HookTrigger};
         let config = base_config("accept-hook");
         let mut session = AgentSession::new(config, test_backend(), ToolRegistry::new());
         let hook = HookDef {

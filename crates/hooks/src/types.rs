@@ -8,8 +8,6 @@
 //!
 //! Also includes an SSRF guard for HTTP hooks to prevent requests to
 //! private/internal network addresses.
-//!
-//! Maps to Claude Code's `execAgentHook.ts` + `execHttpHook.ts` + `ssrfGuard.ts`.
 
 use std::collections::HashMap;
 use std::fmt;

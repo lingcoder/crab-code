@@ -9,7 +9,7 @@ use crab_core::event::Event;
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
 use crab_core::tool::{ToolContext, ToolOutput};
-use crab_plugin::hook::{HookAction, HookContext, HookExecutor, HookTrigger};
+use crab_hooks::{HookAction, HookContext, HookExecutor, HookTrigger};
 use crab_session::{
     AutoCompactState, CompactionClient, CompactionConfig, CompactionMode, CompactionStrategy,
     ContextAction, ContextManager, Conversation, CostAccumulator, compact_with_config,
@@ -206,7 +206,7 @@ pub async fn query_loop(
                 session_id: config.session_id.clone(),
             };
             if let Ok(hr) = hooks.run(HookTrigger::PostSampling, &hook_ctx).await
-                && hr.action == crab_plugin::hook::HookAction::Modify
+                && hr.action == HookAction::Modify
                 && let Some(new_text) = hr.message
             {
                 rewrite_assistant_text(&mut assistant_msg, &new_text);

@@ -35,7 +35,7 @@ pub use crab_api::LlmBackend;
 pub use crab_api::openai;
 pub use crab_engine::{EffortLevel, QueryConfig};
 pub use crab_mcp::McpManager;
-pub use crab_plugin::hook::{HookExecutor, HookTrigger};
+pub use crab_hooks::{HookExecutor, HookTrigger};
 pub use crab_session::{Conversation, CostAccumulator, SessionHistory, SessionMetadata};
 pub use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 pub use crab_tools::executor::{PermissionHandler, ToolExecutor};
