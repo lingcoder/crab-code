@@ -14,7 +14,7 @@
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `cli` `daemon` | CLI entry point (clap), background daemon |
 | **Layer 3** Engine Layer | `agent` `engine` `session` `tui` `remote` | Query loop, multi-agent orchestration, session state, terminal UI, remote-control WebSocket server + client |
-| **Layer 2** Service Layer | `api` `tools` `mcp` `acp` `fs` `process` `sandbox` `ide` `skill` `plugin` `memory` `swarm` `telemetry` `job` | Tool system, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
+| **Layer 2** Service Layer | `api` `tools` `commands` `mcp` `acp` `fs` `process` `sandbox` `ide` `skill` `plugin` `memory` `swarm` `telemetry` `job` | Tool system, slash command system, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
 | **Layer 1** Foundation Layer | `core` `common` `config` `auth` | Domain model, layered config, authentication |
 
 > Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agent`. See §5.3 for inner-layer rules (aggregator vs leaf service; Layer 3 Event-only control flow).
@@ -199,7 +199,7 @@ crab-code/
 ├── rust-toolchain.toml                # pinned toolchain
 ├── rustfmt.toml / clippy.toml         # lint config
 │
-├── crates/                            # 25 crates (details: §6.x)
+├── crates/                            # 26 crates (details: §6.x)
 │   │
 │   │  # ── Layer 1: Foundation ──
 │   ├── common/                        # shared utils (path/text/id/debug)
@@ -223,12 +223,13 @@ crab-code/
 │   │
 │   │  # ── Layer 2: Service (aggregators) ──
 │   ├── tools/                         # tool registry + executor + builtin/ (45+ tools + computer_use/)
+│   ├── commands/                      # slash command trait + registry + builtin/ (34 commands)
 │   ├── plugin/                        # hook system + WASM runtime + MCP↔skill bridge
 │   │
 │   │  # ── Layer 3: Engine ──
 │   ├── engine/                        # raw query loop + streaming + tool orchestration
 │   ├── session/                       # conversation state + compaction + history + cost
-│   ├── agent/                         # orchestrator (teams/ + coordinator/ + system_prompt/ + slash_commands/)
+│   ├── agent/                         # orchestrator (teams/ + coordinator/ + system_prompt/)
 │   ├── tui/                           # ratatui terminal UI (components/ + keybindings/ + vim/ + theme/)
 │   ├── remote/                        # crab-proto WS (protocol/ + auth/ + client/ + server/)
 │   │
@@ -245,12 +246,12 @@ crab-code/
 
 | Type | Count | Notes |
 |------|-------|-------|
-| Library crate | 23 | `crates/*` — includes `swarm`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `job` |
+| Library crate | 24 | `crates/*` — includes `commands`, `swarm`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `job` |
 | Lib+Bin crate | 1 | `crates/daemon` (lib.rs + main.rs) |
 | Binary crate | 1 | `crates/cli` |
 | Helper crate | 1 | `xtask` |
-| **Total** | **26** | -- |
-| Total modules | ~300 | Across 24 library crates |
+| **Total** | **27** | -- |
+| Total modules | ~310 | Across 25 library crates |
 | Total tests | ~2700 | `cargo test --workspace` |
 
 
@@ -332,13 +333,14 @@ Legend: `sb` = sandbox, `rem` = remote, `skil` = skill, `proc` = process.
 | 16 | **memory** | core, common | Persistent memory store + ranking + AGENTS.md parsing |
 | 17 | **plugin** | core, config, mcp, process, skill | Hooks + WASM + skill↔mcp bridge |
 | 18 | **tools** | core, config, fs, process, sandbox, mcp | Layer 2 aggregator; 40+ built-in tools |
-| 19 | **swarm** | core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
-| 20 | **session** | core, memory | Session + context compaction |
-| 21 | **engine** | core, api, session, tools, plugin | Raw query loop (extracted from agent) |
-| 22 | **agent** | common, core, config, engine, memory, session, tools, api, mcp, plugin, swarm, skill | Orchestrator + coordinator + proactive |
-| 23 | **tui** | common, core, config, agent, memory | Terminal UI; receives tool state via `core::Event` |
-| 24 | **cli** (bin) | All crates | Thin entry point (interactive) |
-| 25 | **daemon** (lib+bin) | common, core | Headless composition root — hosts server-side protocols for web/app/desktop |
+| 19 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
+| 20 | **swarm** | core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
+| 21 | **session** | core, memory | Session + context compaction |
+| 22 | **engine** | core, api, session, tools, plugin | Raw query loop (extracted from agent) |
+| 23 | **agent** | common, core, config, engine, memory, session, tools, api, mcp, plugin, swarm, skill | Orchestrator + coordinator + proactive |
+| 24 | **tui** | common, core, config, agent, commands, memory | Terminal UI; receives tool state via `core::Event` |
+| 25 | **cli** (bin) | All crates | Thin entry point (interactive) |
+| 26 | **daemon** (lib+bin) | common, core | Headless composition root — hosts server-side protocols for web/app/desktop |
 
 ### 5.3 Dependency Direction Principles
 
@@ -346,7 +348,7 @@ Legend: `sb` = sandbox, `rem` = remote, `skil` = skill, `proc` = process.
 Rule 1: Upper layer -> lower layer. Reverse dependencies are prohibited.
 
 Rule 2: Layer 2 is sub-layered into aggregators and leaves.
-  - Aggregators (tools, plugin) may depend on leaf services in the same layer.
+  - Aggregators (tools, commands, plugin) may depend on leaf services in the same layer.
   - Leaf services (fs, process, mcp, acp, api, sandbox, ide, job, skill,
     memory, swarm, telemetry) must NOT depend on each other.
   - Example: tools -> sandbox (OK); fs -> process (NOT OK).
@@ -2268,7 +2270,7 @@ src/
 
 ### 6.12 `crates/agent/` -- Orchestrator & Multi-Agent System
 
-**Responsibility**: wraps the raw query loop (`crates/engine`) and adds session-aware orchestration — system prompt assembly, context injection (git/PR), error recovery, multi-agent coordination, REPL slash commands, file-history snapshots, conversation compaction. Corresponds to CC `QueryEngine.ts` + `coordinator/` + `tasks/` + `services/compact/` + `utils/fileHistory.ts`. **Does not** contain the low-level message loop (that moved to `crates/engine`, see §6.21).
+**Responsibility**: wraps the raw query loop (`crates/engine`) and adds session-aware orchestration — system prompt assembly, context injection (git/PR), error recovery, multi-agent coordination, file-history snapshots, conversation compaction. Slash commands are in `crates/commands/` (see §6.27). Corresponds to CC `QueryEngine.ts` + `coordinator/` + `tasks/` + `services/compact/` + `utils/fileHistory.ts`. **Does not** contain the low-level message loop (that moved to `crates/engine`, see §6.21).
 
 **Directory Structure** 
 
@@ -2309,11 +2311,6 @@ src/
 │   ├── mod.rs
 │   ├── category.rs          //   ErrorCategory + ErrorClassifier
 │   └── strategy.rs          //   Retry / AskUser / Abort
-│
-├── slash_commands/          // 33 built-ins + registry (wired into REPL)
-│   ├── mod.rs
-│   ├── types.rs             //   Registry + Context + Result + SlashAction
-│   └── handlers.rs          //   cmd_* built-in handlers
 │
 ├── summarizer.rs            // Conversation compaction (/compact, auto at 80%)
 ├── repl_commands.rs         // ReplCommand enum + parser
@@ -2682,7 +2679,7 @@ CC uses React/Ink to render the terminal UI; Crab uses ratatui + crossterm to ac
 
 The TUI is organized into 9 top-level module directories plus core files. Modules are grouped by concern:
 
-- **Core loop**: `app/` (state machine + update + commands, split into `mod.rs` / `state.rs` / `update.rs` / `commands.rs`), `runner/` (terminal init + event loop + slash dispatch, split into `mod.rs` / `init.rs` / `event_loop.rs` / `slash.rs`), `event.rs` / `app_event.rs` / `event_broker.rs` (event pipeline), `layout.rs` (responsive panel allocation), `frame_requester.rs` (redraw coalescing)
+- **Core loop**: `app/` (state machine + update + commands, split into `mod.rs` / `state.rs` / `update.rs` / `commands.rs`), `runner/` (terminal init + REPL + slash dispatch, split into `mod.rs` / `init.rs` / `repl.rs` / `slash.rs`), `event.rs` / `app_event.rs` / `event_broker.rs` (event pipeline), `layout.rs` (responsive panel allocation), `frame_requester.rs` (redraw coalescing)
 - **Action dispatch**: `action.rs` (single `Action` enum with `serde::Serialize` + `schemars::JsonSchema` derives, used by keybinding resolver and potential multi-frontend JSON-RPC)
 - **Keybinding system** (`keybindings/`): chord-aware resolver with `KeySequenceParser`, 18 `KeyContext` variants, TOML user overrides at `~/.crab/keybindings.toml`
 - **Overlay system** (`overlay/`): `OverlayKind` enum dispatching `handle_key` / `render` / `contexts` / `name`
@@ -2716,7 +2713,7 @@ src/
 ├── runner/                    // TUI runner
 │   ├── mod.rs                 //   run() skeleton + ExitInfo + TuiConfig
 │   ├── init.rs                //   Terminal setup + App initialization
-│   ├── event_loop.rs          //   Main event loop + input polling
+│   ├── repl.rs                //   REPL — read-eval-print loop
 │   └── slash.rs               //   Slash command infrastructure
 ├── terminal_notify.rs         // Desktop notification bridge
 ├── traits.rs                  // Renderable trait
@@ -2844,7 +2841,7 @@ src/
 - The `Action` enum derives `schemars::JsonSchema` to support future multi-frontend (CLI / IDE / web) dispatch via JSON-RPC.
 - Keybinding config uses TOML at `~/.crab/keybindings.toml` with `Action` variant names that round-trip through serde.
 
-**External Dependencies**: `crab-common`, `crab-core`, `crab-config`, `crab-agent`, `crab-memory`, `ratatui`, `crossterm`, `syntect`, `pulldown-cmark`, `schemars`
+**External Dependencies**: `crab-common`, `crab-core`, `crab-config`, `crab-agent`, `crab-commands`, `crab-memory`, `ratatui`, `crossterm`, `syntect`, `pulldown-cmark`, `schemars`
 
 > tui does not directly depend on tools; it receives tool execution state via the `crab_core::Event` enum, with crates/cli responsible for assembling agent+tui.
 
@@ -3597,6 +3594,40 @@ src/
 **Internal dependencies**: `core`.
 
 **External dependencies**: `croner` (cron expression parsing, already in workspace), `tokio` (timers), `serde`, `thiserror`, `tracing`.
+
+### 6.27 `crates/commands/` -- Slash Command System
+
+**Responsibility**: Layer 2 aggregator. Defines the `SlashCommand` trait, `CommandRegistry`, and 34 built-in slash commands grouped into 7 domain modules. Mirrors the `crates/tools/` pattern (trait + registry + builtin/). Extracted from `crates/agent/src/slash_commands/` so both TUI and CLI can consume commands without depending on the full agent crate.
+
+**Directory Structure**
+
+```
+src/
+├── lib.rs                     // Module declarations + re-exports + test helpers
+├── types.rs                   // SlashCommand trait + CommandResult + CommandEffect + OverlayKind
+├── context.rs                 // CommandContext + CostSnapshot (decoupled from session)
+├── registry.rs                // CommandRegistry (HashMap + ordered listing + alias + prefix completions)
+└── builtin/
+    ├── mod.rs                 //   register_all() — 34 commands in display order
+    ├── status.rs              //   /cost, /status, /thinking, /doctor
+    ├── git.rs                 //   /branch, /commit, /review, /diff
+    ├── session.rs             //   /history, /export, /resume, /rename
+    ├── project.rs             //   /init, /add-dir, /files
+    ├── navigation.rs          //   /help, /clear, /exit (alias /quit), /compact, /copy, /rewind
+    ├── model.rs               //   /model, /effort, /fast, /plan
+    └── meta.rs                //   /config, /permissions, /keybindings, /theme, /plugin, /skills, /mcp, /team, /memory
+```
+
+**Key types**:
+
+- `SlashCommand` trait: `name() -> &'static str`, `description()`, `aliases()`, `execute(args, ctx) -> CommandResult`
+- `CommandResult`: `Message(String)` | `Effect(CommandEffect)` | `Silent`
+- `CommandEffect`: 14 variants — the TUI/CLI translates these into concrete state mutations
+- `CostSnapshot`: flat owned struct decoupling commands from `crab-session::CostAccumulator`
+
+**Internal dependencies**: `crab-core`.
+
+**External dependencies**: none beyond std.
 
 ---
 
