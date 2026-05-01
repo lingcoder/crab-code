@@ -167,7 +167,7 @@ crab-session = { path = "crates/session" }
 crab-agent = { path = "crates/agent" }
 crab-tui = { path = "crates/tui" }
 crab-plugin = { path = "crates/plugin" }
-crab-skill = { path = "crates/skill" }
+crab-skills = { path = "crates/skills" }
 crab-memory = { path = "crates/memory" }
 crab-telemetry = { path = "crates/telemetry" }
 crab-engine = { path = "crates/engine" }

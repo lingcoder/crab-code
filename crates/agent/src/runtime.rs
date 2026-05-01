@@ -16,7 +16,7 @@ use crab_session::{
     CompactionConfig, Conversation, CostAccumulator, MemoryStore, SessionHistory, SessionMetadata,
     expand_at_mentions,
 };
-use crab_skill::SkillRegistry;
+use crab_skills::SkillRegistry;
 use crab_tools::builtin::create_default_registry;
 use crab_tools::executor::{PermissionHandler, ToolExecutor};
 use crab_tools::registry::ToolRegistry;

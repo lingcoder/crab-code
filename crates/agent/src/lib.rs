@@ -37,6 +37,6 @@ pub use crab_engine::{EffortLevel, QueryConfig};
 pub use crab_mcp::McpManager;
 pub use crab_plugin::hook::{HookExecutor, HookTrigger};
 pub use crab_session::{Conversation, CostAccumulator, SessionHistory, SessionMetadata};
-pub use crab_skill::{Skill, SkillRegistry, SkillTrigger};
+pub use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 pub use crab_tools::executor::{PermissionHandler, ToolExecutor};
 pub use crab_tools::registry::ToolRegistry;

@@ -1,11 +1,11 @@
 //! MCP → skill bridge.
 //!
-//! Converts MCP server tool lists into native [`Skill`](crab_skill::Skill)
-//! instances. This module lives in `plugin` (not `skill`) because it bridges
-//! two independent subsystems: skill and MCP.
+//! Converts MCP server tool lists into native [`Skill`](crab_skills::Skill)
+//! instances. This module lives in `plugin` (not `skills`) because it bridges
+//! two independent subsystems: skills and MCP.
 
-use crab_skill::builder::SkillBuilder;
-use crab_skill::types::{Skill, SkillSource};
+use crab_skills::builder::SkillBuilder;
+use crab_skills::types::{Skill, SkillSource};
 
 // ─── MCP skill loading ────────────────────────────────────────────────
 

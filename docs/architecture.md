@@ -47,7 +47,7 @@
 │  ┌──▼┐┌▼─┐┌▼──────┐ ┌──────────┐ ┌────────┐ ┌───────┐ ┌──────┐ ┌───┐ │
 │  │fs ││pr││sandbox│ │  remote  │ │  ide   │ │ skill │ │memory│ │.. │ │
 │  │   ││oc││seat+  │ │claude.ai │ │IDE MCP │ │ reg + │ │store │ │   │ │
-│  │   ││  ││landlk+│ │trigger + │ │ client │ │bundled│ │ rank │ │   │ │
+│  │   ││  ││landlk+│ │trigger + │ │ client │ │builtin│ │ rank │ │   │ │
 │  │   ││  ││wsl    │ │ schedule │ │        │ │       │ │ age  │ │   │ │
 │  └───┘└──┘└───────┘ └──────────┘ └────────┘ └───────┘ └──────┘ └───┘ │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -215,7 +215,7 @@ crab-code/
 │   ├── process/                       # subprocess spawn, PTY, tree kill, signal
 │   ├── sandbox/                       # Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
 │   ├── ide/                           # IDE MCP client + quirks/ (vscode/jetbrains/wsl)
-│   ├── skill/                         # skill registry + bundled/ skills
+│   ├── skill/                         # skill registry + builtin/ skills
 │   ├── memory/                        # persistent memory store + ranking + AGENTS.md
 │   ├── swarm/                         # multi-agent infra (bus/mailbox/roster/task/backend/)
 │   ├── telemetry/                     # tracing + metrics + cost + OTLP export
@@ -329,7 +329,7 @@ Legend: `sb` = sandbox, `rem` = remote, `skil` = skill, `proc` = process.
 | 12 | **acp** | core | Agent Client Protocol server (editor → crab, Zed/Neovim/Helix) |
 | 13 | **ide** | core, mcp | Client to IDE-hosted MCP server (lockfile-based VSCode/JetBrains plugins) |
 | 14 | **job** | core | Unified scheduler — one-shot / interval / cron |
-| 15 | **skill** | core | Skill discovery + bundled definitions |
+| 15 | **skill** | core | Skill discovery + built-in definitions |
 | 16 | **memory** | core, common | Persistent memory store + ranking + AGENTS.md parsing |
 | 17 | **plugin** | core, config, mcp, process, skill | Hooks + WASM + skill↔mcp bridge |
 | 18 | **tools** | core, config, fs, process, sandbox, mcp | Layer 2 aggregator; 40+ built-in tools |
@@ -2863,8 +2863,8 @@ src/
 ├── registry.rs       // SkillRegistry (discover, register, find, match)
 ├── matcher.rs        // Skill matching logic
 ├── builder.rs        // SkillBuilder fluent API
-└── bundled/
-    ├── mod.rs         // bundled_skills() + BUNDLED_SKILL_NAMES
+└── builtin/
+    ├── mod.rs         // builtin_skills() + BUILTIN_SKILL_NAMES
     ├── commit.rs      // /commit
     ├── review_pr.rs   // /review-pr
     ├── debug.rs       // /debug

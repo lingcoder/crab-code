@@ -1159,7 +1159,7 @@ dependencies = [
  "crab-memory",
  "crab-plugin",
  "crab-session",
- "crab-skill",
+ "crab-skills",
  "crab-swarm",
  "crab-tools",
  "serde",
@@ -1228,7 +1228,7 @@ dependencies = [
  "crab-plugin",
  "crab-process",
  "crab-session",
- "crab-skill",
+ "crab-skills",
  "crab-telemetry",
  "crab-tools",
  "crab-tui",
@@ -1432,7 +1432,7 @@ dependencies = [
  "crab-core",
  "crab-mcp",
  "crab-process",
- "crab-skill",
+ "crab-skills",
  "serde",
  "serde_json",
  "tokio",
@@ -1500,7 +1500,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "crab-skill"
+name = "crab-skills"
 version = "0.1.0"
 dependencies = [
  "crab-core",

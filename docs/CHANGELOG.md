@@ -12,27 +12,6 @@ imperative.
 ## [Unreleased]
 
 ### Added
-- Welcome panel shown at startup on version change or new project
-- `reasoning_content` parsing for DeepSeek-reasoner / DeepSeek-R1
-- Collapsed display for parallel read-only tool runs (Read / Grep / Glob)
-- `CRAB_USE_POWERSHELL_TOOL` env var to opt-in PowerShell tool on Windows
-
-### Changed
-- Project instructions file renamed from `CRAB.md` to `AGENTS.md`
-  (aligns with the cross-tool AGENTS.md standard used by Codex and others)
-- Bash tool now strictly requires POSIX shell (bash/zsh); no cmd.exe fallback
-- Read-only tool classification now queried from `Tool::is_read_only()` trait
-  rather than a hardcoded TUI list
-- System prompt Shell line no longer reports `COMSPEC` on Windows
-- Environment variables consolidated under the `CRAB_` prefix
-  (was `CRAB_CODE_*` for new variables)
-- Header logo redesigned and moved to `crates/tui/assets/header-logo.txt`
-
-### Removed
-- Hardcoded read-only tool list in TUI layer
-- 3-step onboarding modal overlay; its guidance is now implicit — the welcome
-  cell's project hint plus the permanent "? for shortcuts" bottom bar cover
-  the same ground without interrupting the user
-- `has_completed_onboarding` field from `GlobalState` (no longer needed)
-- "First time? Press /help" hint from the welcome cell (duplicated the
-  permanent bottom bar)
+- Rust-native agentic coding CLI with multi-provider LLM support
+- Interactive TUI with slash commands and session management
+- Built-in tool system aligned with Claude Code toolset

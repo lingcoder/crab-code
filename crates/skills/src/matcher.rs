@@ -73,7 +73,7 @@ pub enum MatchField {
 /// # Examples
 ///
 /// ```no_run
-/// use crab_skill::{SkillRegistry, matcher::match_skills};
+/// use crab_skills::{SkillRegistry, matcher::match_skills};
 ///
 /// let reg = SkillRegistry::new();
 /// let hits = match_skills(&reg, "com");

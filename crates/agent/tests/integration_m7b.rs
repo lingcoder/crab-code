@@ -246,7 +246,7 @@ fn shared_task_list_cross_thread() {
 
 #[test]
 fn skill_registry_discover_and_match() {
-    use crab_skill::{Skill, SkillRegistry, SkillTrigger};
+    use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 
     let mut registry = SkillRegistry::new();
     registry.register(Skill {

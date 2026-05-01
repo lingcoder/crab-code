@@ -265,7 +265,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     for dir in &cli.plugin_dir {
         skill_dirs.push(dir.clone());
     }
-    let skill_registry = crab_skill::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
+    let skill_registry = crab_skills::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
     if !skill_registry.is_empty() {
         eprintln!("Loaded {} skill(s).", skill_registry.len());
     }
@@ -480,7 +480,7 @@ fn build_skill_dirs(working_dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// If input starts with `/`, try to match a skill command and return its content
 /// as the prompt. Otherwise return the original input.
-fn resolve_slash_command(input: &str, skill_registry: &crab_skill::SkillRegistry) -> String {
+fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillRegistry) -> String {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
         return input.to_string();
@@ -574,7 +574,7 @@ async fn run_single_shot(
 #[cfg(not(feature = "tui"))]
 async fn run_repl(
     session: &mut AgentSession,
-    skill_registry: &crab_skill::SkillRegistry,
+    skill_registry: &crab_skills::SkillRegistry,
 ) -> anyhow::Result<()> {
     use std::io::{BufRead, Write};
     let stdin = std::io::stdin();
@@ -645,7 +645,7 @@ enum SlashOutcome {
 #[cfg(not(feature = "tui"))]
 async fn dispatch_slash_command(
     session: &mut AgentSession,
-    skill_registry: &crab_skill::SkillRegistry,
+    skill_registry: &crab_skills::SkillRegistry,
     command_registry: &crab_commands::CommandRegistry,
     cmd_rest: &str,
 ) -> SlashOutcome {
@@ -778,7 +778,7 @@ fn take_event_rx(session: &mut AgentSession) -> mpsc::Receiver<Event> {
 mod tests {
     use super::*;
     use clap::Parser;
-    use crab_skill::{Skill, SkillRegistry, SkillTrigger};
+    use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 
     #[test]
     fn coordinator_gate_off_when_env_unset() {
