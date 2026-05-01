@@ -620,7 +620,7 @@ impl PermissionHandler for ChannelPermissionHandler {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
         let tool_name = tool_name.to_string();
         let prompt = prompt.to_string();
-        let request_id = crab_utils::utils::id::new_ulid();
+        let request_id = crab_utils::id::new_ulid();
         let event_tx = self.event_tx.clone();
         let response_rx = self.response_rx.clone();
 

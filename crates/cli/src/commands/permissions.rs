@@ -32,7 +32,7 @@ fn run_audit(limit: usize, project: bool) -> anyhow::Result<()> {
         let cwd = std::env::current_dir().unwrap_or_default();
         PermissionRuleSet::project_path(&cwd)
     } else {
-        PermissionRuleSet::global_path(&crab_utils::utils::path::home_dir())
+        PermissionRuleSet::global_path(&crab_utils::path::home_dir())
     };
 
     let mut ruleset = PermissionRuleSet::new(path.clone());

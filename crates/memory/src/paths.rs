@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crab_utils::utils::path::home_dir;
+use crab_utils::path::home_dir;
 
 /// Auto memory directory for a specific project.
 ///

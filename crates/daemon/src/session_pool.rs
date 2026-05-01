@@ -79,7 +79,7 @@ impl SessionPool {
             )));
         }
 
-        let id = crab_utils::utils::id::new_ulid();
+        let id = crab_utils::id::new_ulid();
         let now = Instant::now();
         self.sessions.insert(
             id.clone(),

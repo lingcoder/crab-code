@@ -71,7 +71,7 @@ struct AgentState {
 }
 
 fn new_session_id() -> String {
-    crab_utils::utils::id::new_ulid()
+    crab_utils::id::new_ulid()
 }
 
 /// Construct a fully-configured ACP agent builder.

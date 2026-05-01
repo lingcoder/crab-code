@@ -97,7 +97,7 @@ fn global_gitignore_path() -> PathBuf {
     if let Ok(path) = std::env::var("GIT_GLOBAL_IGNORE") {
         return PathBuf::from(path);
     }
-    crab_utils::utils::path::home_dir()
+    crab_utils::path::home_dir()
         .join(".config")
         .join("git")
         .join("ignore")

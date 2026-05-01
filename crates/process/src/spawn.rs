@@ -424,10 +424,10 @@ mod tests {
         // Both paths must be canonicalized to compare reliably on CI
         // (short vs long paths, symlinks, etc.)
         let actual_path = std::path::PathBuf::from(out.stdout.trim());
-        let actual_norm = crab_utils::utils::path::normalize(&actual_path)
+        let actual_norm = crab_utils::path::normalize(&actual_path)
             .to_string_lossy()
             .to_lowercase();
-        let expected_norm = crab_utils::utils::path::normalize(&tmp)
+        let expected_norm = crab_utils::path::normalize(&tmp)
             .to_string_lossy()
             .to_lowercase();
         assert!(

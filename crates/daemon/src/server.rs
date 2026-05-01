@@ -39,7 +39,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         let data_dir = directories::ProjectDirs::from("", "", "crab-code").map_or_else(
             || {
-                crab_utils::utils::path::home_dir()
+                crab_utils::path::home_dir()
                     .join(".local")
                     .join("share")
                     .join("crab-code")

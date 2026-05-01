@@ -134,7 +134,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
 
     // ── Phase 4c: Settings & skills filesystem watcher ─────────────────
 
-    let home = crab_utils::utils::path::home_dir();
+    let home = crab_utils::path::home_dir();
     let config_file = crab_config::config::config_file_name();
     let mut settings_watch_paths = vec![home.join(".crab").join(config_file)];
     if let Ok(cwd) = std::env::current_dir() {

@@ -172,7 +172,7 @@ pub fn global_config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("CRAB_CONFIG_DIR").filter(|s| !s.is_empty()) {
         return PathBuf::from(dir);
     }
-    crab_utils::utils::path::home_dir().join(CONFIG_DIR)
+    crab_utils::path::home_dir().join(CONFIG_DIR)
 }
 
 /// Return the project config directory: `<project_dir>/.crab/`.

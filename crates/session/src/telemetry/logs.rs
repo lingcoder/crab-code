@@ -50,7 +50,7 @@ impl SessionRecorder {
     /// `~/.crab/sessions/<session_id>/transcript.jsonl`.
     #[must_use]
     pub fn new(session_id: &str) -> Self {
-        let output_path = crab_utils::utils::path::home_dir()
+        let output_path = crab_utils::path::home_dir()
             .join(".crab")
             .join("sessions")
             .join(session_id)

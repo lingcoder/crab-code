@@ -5,11 +5,11 @@ pub mod definition;
 pub mod error_recovery;
 pub mod file_history;
 pub mod proactive;
+pub mod prompt;
 pub mod repl_commands;
 pub mod runtime;
 pub mod session;
 pub mod summarizer;
-pub mod prompt;
 pub mod teams;
 
 pub use builtin::builtin_agents;
@@ -17,6 +17,7 @@ pub use coordinator::{PermissionDecisionEvent, PermissionSyncManager};
 pub use definition::{AgentColor, AgentDefinition, AgentSource, ToolSet};
 pub use error_recovery::{ErrorCategory, ErrorClassifier, RecoveryAction, RecoveryStrategy};
 pub use file_history::{FileHistory, Snapshot, SnapshotError};
+pub use prompt::{build_system_prompt, build_system_prompt_with_memories};
 pub use repl_commands::{CommandResult, ReplCommand};
 pub use runtime::{
     AgentRuntime, NotificationHookSink, QueryTaskResult, RuntimeInitConfig, RuntimeInitMeta,
@@ -26,7 +27,6 @@ pub use session::{AgentSession, SessionConfig};
 pub use summarizer::{
     ConversationSummary, SummarizerConfig, SummaryItem, SummaryItemKind, summarize_conversation,
 };
-pub use prompt::{build_system_prompt, build_system_prompt_with_memories};
 pub use teams::{
     AgentHandle, AgentMessage, AgentStatus, AgentWorker, Capability, Envelope, InProcessBackend,
     MessageRouter, RetryDecision, RetryPolicy, RetryTracker, SharedTaskList, SwarmBackend, Task,
