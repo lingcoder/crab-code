@@ -1,13 +1,14 @@
 [advisories]
 ignore = [
-    # Unmaintained crates — transitive deps, will address when alternatives mature
-    { id = "RUSTSEC-2024-0320", reason = "yaml-rust unmaintained, transitive via syntect" },
-    { id = "RUSTSEC-2025-0141", reason = "transitive dep, no safe upgrade available yet" },
     # RSA Marvin Attack (timing sidechannel). Transitive via jsonwebtoken 10 →
     # rsa 0.9.10. No safe upgrade published yet. Threat model: the JWT signer
     # runs on loopback for the local session-attach server; there is no
     # network-observable timing signal for an attacker to exploit.
     { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken, loopback-only usage, no upgrade available" },
+    # Unmaintained. Transitive via pdf_oxide → crab-tools. No maintained
+    # alternative available for pdf_oxide's LZW decoder usage.
+    { id = "RUSTSEC-2020-0144", reason = "lzw unmaintained, transitive via pdf_oxide, no alternative available" },
+    { id = "RUSTSEC-2025-0141", reason = "transitive dep, no safe upgrade available yet" },
 ]
 
 [licenses]
