@@ -32,7 +32,7 @@ file layer (persisted, file-driven)
 | 4 | file | **project** | `$PWD/.crab/config.toml` (intended to be committed) | TOML |
 | 5 | file | **local** | `$PWD/.crab/config.local.toml` (auto-added to `.gitignore`) | TOML |
 | 6 | file | **`--config <path>`** | Whole-file injection from CLI | TOML |
-| 7 | runtime | **env (non-secret)** | `CRAB_MODEL`, `CRAB_API_PROVIDER`, `CRAB_BASE_URL` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `DEEPSEEK_BASE_URL` (mutually exclusive — highest wins) | OS env → partial `Value` |
+| 7 | runtime | **env (non-secret)** | `CRAB_MODEL`, `CRAB_API_PROVIDER`, `CRAB_DEFAULT_SHELL`, `CRAB_BASE_URL` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `DEEPSEEK_BASE_URL` (mutually exclusive — highest wins) | OS env → partial `Value` |
 | 8 | runtime | **CLI flag** | `--model`, `--permission-mode`, `-c key.path=value` | clap → partial `Value` |
 
 ### Notes on the Plugin Layer

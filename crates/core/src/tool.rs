@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::Result;
@@ -255,11 +256,17 @@ pub struct ToolContext {
     pub ext: ToolContextExt,
 }
 
+/// File-snapshot callback for Edit/Write tools.
+///
+/// Wired to the session-scoped file-history store by the agent runtime;
+/// receives the absolute file path and the current on-disk contents.
+pub type TrackEditFn = Arc<dyn Fn(&Path, &[u8]) + Send + Sync>;
+
 /// Extended tool context fields — populated by the agent loop when available.
 ///
 /// These fields are optional enrichment data. Tools that need them should
 /// check and degrade gracefully if they are empty.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ToolContextExt {
     /// Pre-rendered tool name+description pairs for `ToolSearch`.
     pub tool_descriptions: Vec<String>,
@@ -267,6 +274,20 @@ pub struct ToolContextExt {
     pub conversation_summary: Option<String>,
     /// Names of connected MCP servers for `McpAuth`/`McpResource`.
     pub mcp_server_names: Vec<String>,
+    /// Snapshot a file before editing. Called by Edit/Write tools with the
+    /// absolute path and current file contents; `None` disables tracking.
+    pub track_edit: Option<TrackEditFn>,
+}
+
+impl std::fmt::Debug for ToolContextExt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContextExt")
+            .field("tool_descriptions", &self.tool_descriptions)
+            .field("conversation_summary", &self.conversation_summary)
+            .field("mcp_server_names", &self.mcp_server_names)
+            .field("track_edit", &self.track_edit.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 /// A single content block within a tool output.

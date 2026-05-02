@@ -68,6 +68,10 @@ pub struct Config {
     pub disable_all_hooks: Option<bool>,
 
     // ── Shell / environment ──
+    /// Which shell tool the TUI's `!` prefix routes to: `"bash"` (default)
+    /// or `"powershell"`. Powershell requires the `PowerShell` tool to be
+    /// registered (Windows + `CRAB_USE_POWERSHELL_TOOL`); otherwise the
+    /// router falls back to Bash. Override with `CRAB_DEFAULT_SHELL`.
     pub default_shell: Option<String>,
     pub env: Option<HashMap<String, String>>,
 
@@ -159,6 +163,57 @@ impl Config {
         self.small_model
             .as_deref()
             .or(self.advisor_model.as_deref())
+    }
+
+    /// Resolve the configured default shell into a [`DefaultShell`] value.
+    ///
+    /// Unknown values fall back to [`DefaultShell::Bash`] so a typo in
+    /// `config.toml` never strands the user without a working `!` prefix.
+    #[must_use]
+    pub fn default_shell_kind(&self) -> DefaultShell {
+        self.default_shell
+            .as_deref()
+            .map_or(DefaultShell::Bash, DefaultShell::from_str_or_default)
+    }
+}
+
+/// Which shell tool the TUI's `!` prefix should route to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultShell {
+    /// Route to the `Bash` tool (POSIX shell). The platform-default.
+    Bash,
+    /// Route to the `PowerShell` tool. Requires the tool to be registered
+    /// in the runtime; routing falls back to `Bash` when it isn't.
+    PowerShell,
+}
+
+impl DefaultShell {
+    /// Parse a config string into a `DefaultShell`. Comparison is
+    /// case-insensitive; unrecognized strings fall back to `Bash`.
+    #[must_use]
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "powershell" | "pwsh" => Self::PowerShell,
+            _ => Self::Bash,
+        }
+    }
+
+    /// Canonical lowercase name (`"bash"` / `"powershell"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::PowerShell => "powershell",
+        }
+    }
+
+    /// Tool name registered in `ToolRegistry` for this shell.
+    #[must_use]
+    pub const fn tool_name(self) -> &'static str {
+        match self {
+            Self::Bash => "Bash",
+            Self::PowerShell => "PowerShell",
+        }
     }
 }
 
@@ -338,6 +393,59 @@ api_key = "sk-test"
         assert_eq!(s.base_url.as_deref(), Some("http://localhost:8080"));
         assert_eq!(s.max_tokens, Some(2048));
         assert_eq!(s.api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn default_shell_parses_bash() {
+        let s = parse_toml(r#"default_shell = "bash""#).unwrap();
+        assert_eq!(s.default_shell.as_deref(), Some("bash"));
+        assert_eq!(s.default_shell_kind(), DefaultShell::Bash);
+    }
+
+    #[test]
+    fn default_shell_parses_powershell() {
+        let s = parse_toml(r#"default_shell = "powershell""#).unwrap();
+        assert_eq!(s.default_shell_kind(), DefaultShell::PowerShell);
+    }
+
+    #[test]
+    fn default_shell_kind_defaults_to_bash() {
+        let s = Config::default();
+        assert!(s.default_shell.is_none());
+        assert_eq!(s.default_shell_kind(), DefaultShell::Bash);
+    }
+
+    #[test]
+    fn default_shell_unknown_value_falls_back_to_bash() {
+        let s = parse_toml(r#"default_shell = "fish""#).unwrap();
+        // The string is preserved (no migration), but the resolved kind
+        // falls back so the TUI never strands the user.
+        assert_eq!(s.default_shell.as_deref(), Some("fish"));
+        assert_eq!(s.default_shell_kind(), DefaultShell::Bash);
+    }
+
+    #[test]
+    fn default_shell_case_insensitive() {
+        assert_eq!(
+            DefaultShell::from_str_or_default("PowerShell"),
+            DefaultShell::PowerShell,
+        );
+        assert_eq!(
+            DefaultShell::from_str_or_default("PWSH"),
+            DefaultShell::PowerShell,
+        );
+        assert_eq!(
+            DefaultShell::from_str_or_default("BASH"),
+            DefaultShell::Bash,
+        );
+    }
+
+    #[test]
+    fn default_shell_tool_name_round_trip() {
+        assert_eq!(DefaultShell::Bash.tool_name(), "Bash");
+        assert_eq!(DefaultShell::PowerShell.tool_name(), "PowerShell");
+        assert_eq!(DefaultShell::Bash.as_str(), "bash");
+        assert_eq!(DefaultShell::PowerShell.as_str(), "powershell");
     }
 
     #[test]

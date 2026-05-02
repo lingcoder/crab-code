@@ -62,8 +62,9 @@ impl Tool for EditTool {
     fn execute(
         &self,
         input: Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let track_edit = ctx.ext.track_edit.clone();
         Box::pin(async move {
             let file_path = input
                 .get("file_path")
@@ -160,6 +161,11 @@ impl Tool for EditTool {
                 }
                 out.push_str(&diff);
                 return Ok(ToolOutput::success(out));
+            }
+
+            // Snapshot pre-edit contents before mutating the file.
+            if let Some(track) = track_edit.as_ref() {
+                track(path, content.as_bytes());
             }
 
             // Write the file back

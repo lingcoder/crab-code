@@ -56,6 +56,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode,
+            default_shell: "bash".into(),
         }
     }
 

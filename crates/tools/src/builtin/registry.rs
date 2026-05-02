@@ -8,10 +8,10 @@ use std::sync::Arc;
 use crate::registry::ToolRegistry;
 
 use super::{
-    agent, ask_user, bash, brief, config_tool, cron, edit, glob, grep, image_read, lsp, mcp_auth,
-    mcp_resource, monitor, notebook, plan_mode, read, remote_trigger, send_user_file, sleep, snip,
-    task, team, todo_write, tool_search, verify_plan, web_browser, web_fetch, web_search, workflow,
-    worktree, write,
+    agent, ask_user, bash, brief, config_tool, cron, edit, glob, grep, lsp, mcp_auth, mcp_resource,
+    monitor, notebook, plan_mode, read, remote_trigger, send_user_file, sleep, snip, task, team,
+    todo_write, tool_search, verify_plan, web_browser, web_fetch, web_search, workflow, worktree,
+    write,
 };
 
 #[cfg(target_os = "windows")]
@@ -51,7 +51,6 @@ pub fn register_all_builtins(
     registry.register(Arc::new(ask_user::AskUserQuestionTool));
     registry.register(Arc::new(plan_mode::EnterPlanModeTool));
     registry.register(Arc::new(plan_mode::ExitPlanModeTool));
-    registry.register(Arc::new(image_read::ImageReadTool));
     registry.register(Arc::new(task::TaskCreateTool::new(Arc::clone(&store))));
     registry.register(Arc::new(task::TaskListTool::new(Arc::clone(&store))));
     registry.register(Arc::new(task::TaskUpdateTool::new(Arc::clone(&store))));
@@ -131,7 +130,6 @@ mod tests {
         assert!(registry.get("AskUserQuestion").is_some());
         assert!(registry.get("EnterPlanMode").is_some());
         assert!(registry.get("ExitPlanMode").is_some());
-        assert!(registry.get("ImageRead").is_some());
         assert!(registry.get("TaskCreate").is_some());
         assert!(registry.get("TaskList").is_some());
         assert!(registry.get("TaskUpdate").is_some());
@@ -174,7 +172,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 46 } else { 45 };
+        let expected = if ps_enabled { 45 } else { 44 };
         assert_eq!(registry.len(), expected);
     }
 
@@ -186,7 +184,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 46 } else { 45 };
+        let expected = if ps_enabled { 45 } else { 44 };
         assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());

@@ -56,8 +56,9 @@ impl Tool for WriteTool {
     fn execute(
         &self,
         input: Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let track_edit = ctx.ext.track_edit.clone();
         Box::pin(async move {
             let file_path = input
                 .get("file_path")
@@ -97,6 +98,15 @@ impl Tool for WriteTool {
                         parent.display()
                     ))
                 })?;
+            }
+
+            // Snapshot pre-overwrite contents when the target already exists.
+            // New files are skipped — there is nothing to rewind to.
+            if path.exists()
+                && let Some(track) = track_edit.as_ref()
+                && let Ok(old_content) = tokio::fs::read(path).await
+            {
+                track(path, &old_content);
             }
 
             // Write the file

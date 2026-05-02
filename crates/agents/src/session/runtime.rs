@@ -11,7 +11,7 @@ use crab_core::event::Event;
 use crab_core::model::ModelId;
 use crab_core::tool::ToolContext;
 use crab_memory::MemoryStore;
-use crab_session::{Conversation, CostAccumulator, SessionHistory};
+use crab_session::{Conversation, CostAccumulator, FileHistory, SessionHistory};
 use crab_tools::executor::ToolExecutor;
 use crab_tools::registry::ToolRegistry;
 use tokio::sync::mpsc;
@@ -58,6 +58,8 @@ pub struct AgentSession {
     /// Tracks teams the model creates via `TeamCreateTool` and spawns
     /// teammates through the in-process backend.
     pub team_coordinator: crate::teams::coordinator::TeamCoordinator,
+    /// Session-scoped file-edit snapshot store backing `/rewind`.
+    pub file_history: Arc<std::sync::Mutex<FileHistory>>,
 }
 
 impl AgentSession {
@@ -103,7 +105,16 @@ impl AgentSession {
         }
 
         let memory_store = session_config.memory_dir.map(MemoryStore::new);
+        let file_history_base = session_config
+            .sessions_dir
+            .as_ref()
+            .and_then(|p| p.parent().map(|parent| parent.join("file-history")))
+            .unwrap_or_else(|| std::env::temp_dir().join("crab-file-history"));
         let session_history = session_config.sessions_dir.map(SessionHistory::new);
+        let file_history = Arc::new(std::sync::Mutex::new(FileHistory::new(
+            file_history_base,
+            &session_config.session_id,
+        )));
 
         // Load memories and inject into system prompt
         if let Some(store) = &memory_store
@@ -168,13 +179,26 @@ impl AgentSession {
         let executor = ToolExecutor::new(Arc::new(registry));
         let cancel = CancellationToken::new();
 
+        let track_edit: crab_core::tool::TrackEditFn = {
+            let fh = Arc::clone(&file_history);
+            Arc::new(move |path: &std::path::Path, contents: &[u8]| {
+                if let Ok(mut history) = fh.lock()
+                    && let Err(e) = history.track_edit(path, contents)
+                {
+                    tracing::warn!(error = %e, path = %path.display(), "file_history track_edit failed");
+                }
+            })
+        };
         let tool_ctx = ToolContext {
             working_dir: session_config.working_dir,
             permission_mode: session_config.permission_policy.mode,
             session_id: session_config.session_id.clone(),
             cancellation_token: cancel.clone(),
             permission_policy: session_config.permission_policy,
-            ext: crab_core::tool::ToolContextExt::default(),
+            ext: crab_core::tool::ToolContextExt {
+                track_edit: Some(track_edit),
+                ..Default::default()
+            },
         };
 
         let compaction_client: Arc<dyn crab_session::CompactionClient> =
@@ -222,7 +246,35 @@ impl AgentSession {
             engine: None,
             coordinator_ctx,
             team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
+            file_history,
         }
+    }
+
+    /// Restore tracked file(s) from this session's file-history.
+    ///
+    /// `path = Some` rewinds just that path to its latest snapshot;
+    /// `path = None` rewinds every tracked file. Returns the list of
+    /// successfully restored paths as display strings.
+    pub fn rewind(&self, path: Option<&str>) -> crab_core::Result<Vec<String>> {
+        let history = self
+            .file_history
+            .lock()
+            .map_err(|e| crab_core::Error::Other(format!("file history mutex poisoned: {e}")))?;
+        let mut restored = Vec::new();
+        if let Some(p) = path {
+            let abs = std::path::PathBuf::from(p);
+            history
+                .rewind_to_latest(&abs)
+                .map_err(|e| crab_core::Error::Other(e.to_string()))?;
+            restored.push(p.to_string());
+        } else {
+            for tracked in history.tracked_files() {
+                if history.rewind_to_latest(&tracked).is_ok() {
+                    restored.push(tracked.display().to_string());
+                }
+            }
+        }
+        Ok(restored)
     }
 
     /// Handle user input: add user message, run the query loop, and auto-save.
@@ -543,6 +595,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            default_shell: "bash".into(),
         }
     }
 

@@ -3,7 +3,6 @@ pub mod builtin;
 pub mod coordinator;
 pub mod definition;
 pub mod error_recovery;
-pub mod file_history;
 pub mod llm_compaction_client;
 pub mod mcp_skills;
 pub mod proactive;
@@ -18,7 +17,6 @@ pub use builtin::builtin_agents;
 pub use coordinator::{PermissionDecisionEvent, PermissionSyncManager};
 pub use definition::{AgentColor, AgentDefinition, AgentSource, ToolSet};
 pub use error_recovery::{ErrorCategory, ErrorClassifier, RecoveryAction, RecoveryStrategy};
-pub use file_history::{FileHistory, Snapshot, SnapshotError};
 pub use llm_compaction_client::LlmCompactionClient;
 pub use prompt::{build_system_prompt, build_system_prompt_with_memories};
 pub use repl_commands::{CommandResult, ReplCommand};
@@ -40,10 +38,14 @@ pub use teams::{
 // Re-exports: allow tui to depend only on crab-agents instead of individual L2 crates.
 pub use crab_api::LlmBackend;
 pub use crab_api::openai;
+pub use crab_config::DefaultShell;
 pub use crab_engine::{EffortLevel, QueryConfig};
 pub use crab_hooks::{HookExecutor, HookTrigger};
 pub use crab_mcp::McpManager;
-pub use crab_session::{Conversation, CostAccumulator, SessionHistory, SessionMetadata};
+pub use crab_session::{
+    Conversation, CostAccumulator, FileHistory, SessionHistory, SessionMetadata, Snapshot,
+    SnapshotError,
+};
 pub use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 pub use crab_tools::executor::{PermissionHandler, ToolExecutor};
 pub use crab_tools::registry::ToolRegistry;

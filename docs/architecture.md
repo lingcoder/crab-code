@@ -1637,7 +1637,7 @@ src/
 ├── executor.rs       // Unified executor, PermissionResult { allowed, feedback }
 ├── permission.rs     // Tool permission checking logic
 │
-├── builtin/              // Built-in tools (~45 files + computer_use/ subdir)
+├── builtin/              // Built-in tools
 │   ├── mod.rs            // register_all_builtins()
 │   ├── registry.rs       // Builtin tool registry helpers
 │   │
@@ -1646,13 +1646,11 @@ src/
 │   ├── bash_classifier.rs // classify_command() → risk badge (read-only / file-write / dangerous / …)
 │   ├── bash_security.rs  // Bash security checks
 │   ├── powershell.rs     // PowerShellTool -- Windows PowerShell execution
-│   ├── read.rs           // ReadTool -- file reading
-│   ├── read_enhanced.rs  // Enhanced file reading (PDF, images, notebooks)
+│   ├── read.rs           // ReadTool -- unified file reading (text, PDF, images, magic-byte binary detection)
 │   ├── edit.rs           // EditTool -- diff-based file editing
 │   ├── write.rs          // WriteTool -- file creation/overwrite
 │   ├── glob.rs           // GlobTool -- file pattern matching
 │   ├── grep.rs           // GrepTool -- content search
-│   ├── image_read.rs     // Image reading tool
 │   ├── notebook.rs       // NotebookTool -- Jupyter support
 │   ├── snip.rs           // Snip tool -- content truncation
 │   │

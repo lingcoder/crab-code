@@ -13,8 +13,8 @@ use crab_core::tool::ToolContext;
 use crab_engine::QueryConfig;
 use crab_mcp::McpManager;
 use crab_session::{
-    CompactionClient, CompactionConfig, Conversation, CostAccumulator, MemoryStore, SessionHistory,
-    SessionMetadata, compact_with_config, expand_at_mentions,
+    CompactionClient, CompactionConfig, Conversation, CostAccumulator, FileHistory, MemoryStore,
+    SessionHistory, SessionMetadata, compact_with_config, expand_at_mentions,
 };
 use crab_skills::SkillRegistry;
 use crab_tools::builtin::create_default_registry;
@@ -88,6 +88,14 @@ pub struct AgentRuntime {
     compaction_client: Option<Arc<dyn CompactionClient>>,
     /// Compaction policy passed to [`compact_with_config`] for `/compact`.
     compaction_config: CompactionConfig,
+    /// Session-scoped file-edit snapshot store backing `/rewind`. Populated
+    /// when a sessions directory is configured (so the parent has a stable
+    /// place to root file-history snapshots).
+    file_history: Option<Arc<std::sync::Mutex<FileHistory>>>,
+    /// Resolved shell choice for the TUI's `!` prefix
+    /// (`crab_config::DefaultShell`). Captured at init time from
+    /// [`SessionConfig::default_shell`].
+    default_shell: crab_config::DefaultShell,
 }
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
@@ -228,13 +236,44 @@ impl AgentRuntime {
             })
             .unwrap_or_default();
 
+        // Build a session-scoped FileHistory so Edit/Write tools can snapshot
+        // pre-edit file contents, and `/rewind` can restore them. The base
+        // directory mirrors the sessions dir layout — `<base>/file-history/`
+        // sits alongside `<base>/sessions/`. Without a configured sessions
+        // dir we fall back to the OS temp dir so the wiring still works in
+        // tests and one-off invocations.
+        let file_history_base = config
+            .session_config
+            .sessions_dir
+            .as_ref()
+            .and_then(|p| p.parent().map(|parent| parent.join("file-history")))
+            .unwrap_or_else(|| std::env::temp_dir().join("crab-file-history"));
+        let file_history = Arc::new(std::sync::Mutex::new(FileHistory::new(
+            file_history_base,
+            &session_id,
+        )));
+
+        let track_edit: crab_core::tool::TrackEditFn = {
+            let fh = Arc::clone(&file_history);
+            Arc::new(move |path: &Path, contents: &[u8]| {
+                if let Ok(mut history) = fh.lock()
+                    && let Err(e) = history.track_edit(path, contents)
+                {
+                    tracing::warn!(error = %e, path = %path.display(), "file_history track_edit failed");
+                }
+            })
+        };
+
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
             permission_mode: config.session_config.permission_policy.mode,
             session_id: session_id.clone(),
             cancellation_token: CancellationToken::new(),
             permission_policy: config.session_config.permission_policy,
-            ext: crab_core::tool::ToolContextExt::default(),
+            ext: crab_core::tool::ToolContextExt {
+                track_edit: Some(track_edit),
+                ..Default::default()
+            },
         };
 
         let compaction_config = CompactionConfig::default();
@@ -289,6 +328,8 @@ impl AgentRuntime {
             .unwrap_or_default();
 
         let memory_dir = config.session_config.memory_dir.clone();
+        let default_shell =
+            crab_config::DefaultShell::from_str_or_default(&config.session_config.default_shell);
 
         let runtime = Self {
             conversation,
@@ -303,6 +344,8 @@ impl AgentRuntime {
             team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
             compaction_client,
             compaction_config,
+            file_history: Some(file_history),
+            default_shell,
         };
 
         let meta = RuntimeInitMeta {
@@ -494,6 +537,14 @@ impl AgentRuntime {
     ///
     /// Priority order:
     /// Access the memory directory, if configured.
+    /// Resolved shell choice for the TUI's `!` prefix. The TUI consults
+    /// this together with the live tool registry to decide whether to
+    /// route to `Bash` or `PowerShell`.
+    #[must_use]
+    pub fn default_shell(&self) -> crab_config::DefaultShell {
+        self.default_shell
+    }
+
     pub fn memory_dir(&self) -> Option<&Path> {
         self.memory_dir.as_deref()
     }
@@ -742,6 +793,40 @@ impl AgentRuntime {
             }
             _ => None,
         }
+    }
+
+    // ── File history / rewind ───────────────────────────────────────────
+
+    /// Restore tracked file(s) from the session's file-history.
+    ///
+    /// When `path` is `Some`, only that file is rewound to its most recent
+    /// snapshot. When `None`, every file with at least one snapshot is
+    /// rewound to its latest version. Returns the list of paths that were
+    /// successfully restored (as display strings).
+    pub fn rewind(&self, path: Option<&str>) -> crab_core::Result<Vec<String>> {
+        let fh = self
+            .file_history
+            .as_ref()
+            .ok_or_else(|| crab_core::Error::Other("file history not available".into()))?;
+        let history = fh
+            .lock()
+            .map_err(|e| crab_core::Error::Other(format!("file history mutex poisoned: {e}")))?;
+
+        let mut restored = Vec::new();
+        if let Some(p) = path {
+            let abs = PathBuf::from(p);
+            history
+                .rewind_to_latest(&abs)
+                .map_err(|e| crab_core::Error::Other(e.to_string()))?;
+            restored.push(p.to_string());
+        } else {
+            for tracked in history.tracked_files() {
+                if history.rewind_to_latest(&tracked).is_ok() {
+                    restored.push(tracked.display().to_string());
+                }
+            }
+        }
+        Ok(restored)
     }
 
     // ── Input expansion ─────────────────────────────────────────────────

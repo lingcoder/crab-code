@@ -148,7 +148,8 @@
     },
     "default_shell": {
       "type": "string",
-      "description": "Shell used to execute Bash tool invocations and `apiKeyHelper`.",
+      "enum": ["bash", "powershell"],
+      "description": "Which shell tool the TUI's `!` prefix routes to. `bash` (default) targets the Bash tool; `powershell` targets the PowerShell tool (requires CRAB_USE_POWERSHELL_TOOL on Windows). Override at runtime with CRAB_DEFAULT_SHELL.",
       "default": null
     },
     "env": {

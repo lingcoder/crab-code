@@ -79,6 +79,7 @@ fn test_session_config() -> SessionConfig {
         beta_headers: Vec::new(),
         ide_connect: false,
         coordinator_mode: false,
+        default_shell: "bash".into(),
     }
 }
 

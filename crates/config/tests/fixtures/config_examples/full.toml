@@ -24,7 +24,7 @@ custom_instructions = "Always use Rust idioms."
 enable_all_project_mcp_servers = false
 disable_all_hooks = false
 
-default_shell = "/bin/bash"
+default_shell = "bash"
 theme = "dark"
 language = "en-US"
 output_style = "concise"

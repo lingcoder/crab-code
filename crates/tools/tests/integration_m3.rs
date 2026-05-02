@@ -183,15 +183,17 @@ async fn read_nonexistent_file_is_error() {
 }
 
 #[tokio::test]
-async fn read_binary_extension_returns_info() {
+async fn read_image_path_routes_to_image_branch() {
     let executor = make_executor();
     let tmp = tempfile::tempdir().unwrap();
     let ctx = make_ctx(tmp.path(), PermissionMode::Default);
 
+    // Nonexistent .png is now routed through the image branch and returns
+    // a "file not found" error rather than a "Binary file" text message.
     let input = serde_json::json!({ "file_path": "/some/image.png" });
     let output = executor.execute(READ_TOOL_NAME, input, &ctx).await.unwrap();
-    assert!(!output.is_error);
-    assert!(output.text().contains("Binary file"));
+    assert!(output.is_error);
+    assert!(output.text().contains("not found"));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -560,13 +562,13 @@ fn register_all_builtins_produces_expected_tools() {
 }
 
 /// Expected total tool count. On Windows the PowerShell tool is opt-in via
-/// `CRAB_USE_POWERSHELL_TOOL`, so the registry is 45 unless the env var is
-/// truthy; on other platforms the count is always 45.
+/// `CRAB_USE_POWERSHELL_TOOL`, so the registry is 44 unless the env var is
+/// truthy; on other platforms the count is always 44.
 fn expected_builtin_count() -> usize {
     let ps_enabled = cfg!(windows)
         && std::env::var("CRAB_USE_POWERSHELL_TOOL")
             .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-    if ps_enabled { 46 } else { 45 }
+    if ps_enabled { 45 } else { 44 }
 }
 
 #[test]
@@ -587,7 +589,6 @@ fn all_expected_tools_registered() {
         "WebFetch",
         "AskUserQuestion",
         "EnterPlanMode",
-        "ImageRead",
         "TaskCreate",
         "TaskList",
         "TaskUpdate",

@@ -65,6 +65,12 @@ pub struct SessionConfig {
     /// Gated on `CRAB_COORDINATOR_MODE=1` env only — Agent Teams, `TaskList`, and
     /// `Mailbox` are unconditional base infrastructure and do not need a flag.
     pub coordinator_mode: bool,
+
+    /// Which shell tool the TUI's `!` prefix should target. `"bash"` or
+    /// `"powershell"`. Resolved from `Config::default_shell` /
+    /// `CRAB_DEFAULT_SHELL` and surfaced here so the TUI doesn't have to
+    /// re-read the config layer at submit time.
+    pub default_shell: String,
 }
 
 #[cfg(test)]
@@ -103,6 +109,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            default_shell: "bash".into(),
         };
         assert_eq!(config.session_id, "sess_1");
         assert_eq!(config.context_window, 200_000);

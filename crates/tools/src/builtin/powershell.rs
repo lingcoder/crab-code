@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crab_core::Result;
@@ -9,11 +10,30 @@ use serde_json::Value;
 
 use crate::str_utils::truncate_chars;
 
-/// `PowerShell` command execution tool (Windows only).
+/// `PowerShell` command execution tool (Windows + cross-platform via `pwsh`).
 ///
 /// Prefers `pwsh` (`PowerShell` 7+) when available, falls back to
 /// `powershell.exe` (Windows `PowerShell` 5.1).
 pub const POWERSHELL_TOOL_NAME: &str = "PowerShell";
+
+/// Which `PowerShell` edition is available on this host.
+///
+/// The two editions differ enough that a one-size description either lies
+/// to the model on 5.1 (suggesting `&&`, ternary, null-coalescing — all
+/// parser errors) or sells 7+ short. The tool description rendered to the
+/// model is keyed on this enum so the syntax guidance matches reality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerShellEdition {
+    /// `pwsh` / `pwsh.exe` — `PowerShell` 7+. Supports pipeline chain
+    /// operators (`&&`, `||`), ternary, null-coalescing. UTF-8 default.
+    Core,
+    /// `powershell.exe` — Windows `PowerShell` 5.1. No `&&`/`||`,
+    /// no ternary, UTF-16 LE default file encoding.
+    Desktop,
+    /// Neither `pwsh` nor `powershell` was found on PATH. The description
+    /// falls back to conservative 5.1-safe guidance.
+    Unknown,
+}
 
 pub struct PowerShellTool;
 
@@ -23,9 +43,7 @@ impl Tool for PowerShellTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a PowerShell command. Uses pwsh (PowerShell 7+) when available, \
-         otherwise falls back to powershell.exe (5.1). Returns stdout and stderr combined. \
-         On non-zero exit the output is marked as an error."
+        powershell_description()
     }
 
     fn input_schema(&self) -> Value {
@@ -127,6 +145,60 @@ impl Tool for PowerShellTool {
     }
 }
 
+/// Detect which `PowerShell` edition is available on this host.
+///
+/// Cached after the first call via `OnceLock`. Probes `pwsh` first
+/// (`PowerShell` 7+), then `powershell` (Windows `PowerShell` 5.1).
+#[must_use]
+pub fn detect_powershell_edition() -> PowerShellEdition {
+    static EDITION: OnceLock<PowerShellEdition> = OnceLock::new();
+    *EDITION.get_or_init(|| {
+        if probe_binary("pwsh") {
+            PowerShellEdition::Core
+        } else if probe_binary("powershell") {
+            PowerShellEdition::Desktop
+        } else {
+            PowerShellEdition::Unknown
+        }
+    })
+}
+
+/// Spawn `<bin> -Version` and return whether the process started successfully.
+fn probe_binary(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("-Version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Edition-aware description rendered to the model. Cached after first
+/// call so each tool-list build doesn't re-probe `PowerShell`.
+fn powershell_description() -> &'static str {
+    static DESC: OnceLock<String> = OnceLock::new();
+    DESC.get_or_init(|| build_description(detect_powershell_edition()))
+        .as_str()
+}
+
+fn build_description(edition: PowerShellEdition) -> String {
+    let edition_section = match edition {
+        PowerShellEdition::Core => {
+            "PowerShell edition: PowerShell 7+ (pwsh)\n   - Pipeline chain operators `&&` and `||` ARE available and work like bash. Prefer `cmd1 && cmd2` over `cmd1; cmd2` when cmd2 should only run if cmd1 succeeds.\n   - Ternary (`$cond ? $a : $b`), null-coalescing (`??`), and null-conditional (`?.`) operators are available.\n   - Default file encoding is UTF-8 without BOM."
+        }
+        PowerShellEdition::Desktop => {
+            "PowerShell edition: Windows PowerShell 5.1 (powershell.exe)\n   - Pipeline chain operators `&&` and `||` are NOT available — they cause a parser error. To run B only if A succeeds: `A; if ($?) { B }`. To chain unconditionally: `A; B`.\n   - Ternary (`?:`), null-coalescing (`??`), and null-conditional (`?.`) operators are NOT available. Use `if/else` and explicit `$null -eq` checks instead.\n   - Default file encoding is UTF-16 LE (with BOM). When writing files other tools will read, pass `-Encoding utf8` to `Out-File`/`Set-Content`."
+        }
+        PowerShellEdition::Unknown => {
+            "PowerShell edition: unknown — assume Windows PowerShell 5.1 for compatibility\n   - Do NOT use `&&`, `||`, ternary `?:`, null-coalescing `??`, or null-conditional `?.`. These are PowerShell 7+ only and parser-error on 5.1.\n   - To chain commands conditionally: `A; if ($?) { B }`. Unconditionally: `A; B`."
+        }
+    };
+
+    format!(
+        "Execute a PowerShell command. Uses pwsh (PowerShell 7+) when available, otherwise falls back to powershell.exe (5.1). Returns stdout and stderr combined. On non-zero exit the output is marked as an error.\n\n{edition_section}"
+    )
+}
+
 /// Resolve the `PowerShell` executable — prefer `pwsh` (PS 7+), fall back to
 /// `powershell.exe` (Windows 5.1).
 fn resolve_powershell(command: &str) -> (String, Vec<String>) {
@@ -137,27 +209,13 @@ fn resolve_powershell(command: &str) -> (String, Vec<String>) {
         command.to_owned(),
     ];
 
-    // Check if pwsh is available (PowerShell 7+)
-    if is_pwsh_available() {
-        ("pwsh".to_owned(), args)
-    } else {
-        ("powershell".to_owned(), args)
+    match detect_powershell_edition() {
+        PowerShellEdition::Core => ("pwsh".to_owned(), args),
+        // On Desktop or Unknown we still try `powershell` — on non-Windows
+        // hosts without either binary the spawn will fail at `run()`, which
+        // surfaces a clear error instead of silently picking the wrong shell.
+        PowerShellEdition::Desktop | PowerShellEdition::Unknown => ("powershell".to_owned(), args),
     }
-}
-
-/// Check if `pwsh` (`PowerShell` 7+) is on the PATH.
-/// The result is cached after the first call via `OnceLock`.
-fn is_pwsh_available() -> bool {
-    use std::sync::OnceLock;
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        std::process::Command::new("pwsh")
-            .arg("-Version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
-    })
 }
 
 #[cfg(test)]
@@ -219,6 +277,41 @@ mod tests {
         assert!(args.contains(&"-NonInteractive".to_owned()));
         assert!(args.contains(&"-Command".to_owned()));
         assert!(args.contains(&"Get-Process".to_owned()));
+    }
+
+    #[test]
+    fn build_description_core_mentions_pwsh_features() {
+        let desc = build_description(PowerShellEdition::Core);
+        assert!(desc.contains("PowerShell 7+"));
+        assert!(desc.contains("&&"));
+        assert!(desc.contains("UTF-8"));
+    }
+
+    #[test]
+    fn build_description_desktop_warns_against_pwsh7_syntax() {
+        let desc = build_description(PowerShellEdition::Desktop);
+        assert!(desc.contains("5.1"));
+        assert!(desc.contains("NOT available"));
+        assert!(desc.contains("UTF-16"));
+    }
+
+    #[test]
+    fn build_description_unknown_uses_5_1_safe_defaults() {
+        let desc = build_description(PowerShellEdition::Unknown);
+        assert!(desc.contains("unknown"));
+        assert!(desc.contains("5.1"));
+        // Unknown defaults to the conservative path: warn the model away
+        // from PS-7-only syntax.
+        assert!(desc.contains("Do NOT use"));
+    }
+
+    #[test]
+    fn detect_powershell_edition_is_stable() {
+        // The result depends on the host but must be a valid enum value
+        // and stable across calls (cache check).
+        let first = detect_powershell_edition();
+        let second = detect_powershell_edition();
+        assert_eq!(first, second);
     }
 
     #[tokio::test]

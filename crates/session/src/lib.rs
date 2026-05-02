@@ -3,6 +3,7 @@ pub mod compaction;
 pub mod context;
 pub mod conversation;
 pub mod cost;
+pub mod file_history;
 pub mod history;
 pub mod input_expand;
 pub mod llm_compaction_client;
@@ -25,6 +26,7 @@ pub use cost::{
     CostAccumulator, CostSummary, ModelPricing, default_cost_path, load_cost_summary,
     lookup_pricing, save_cost_summary,
 };
+pub use file_history::{FileHistory, Snapshot, SnapshotError};
 pub use history::{
     BoundSessionPersister, ExportFormat, SearchResult, SessionHistory, SessionMetadata,
     SessionPersister, SessionStats,

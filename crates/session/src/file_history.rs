@@ -1,3 +1,20 @@
+//! Per-session file-history snapshots backing the `/rewind` slash command.
+//!
+//! Every time a file is about to be edited (Edit / Write / Notebook tool),
+//! the pre-edit contents are saved to
+//! `<base_dir>/{session_id}/{hash}@v{version}`. A user `/rewind N` restores
+//! the file to its state as of version `N`.
+//!
+//! Storage uses the on-disk hash of the **file path** (not the content), so
+//! repeated edits to the same file accumulate versions `@v1`, `@v2`, … and
+//! a stable key for lookup. Each session gets its own subdirectory, and an
+//! LRU cap of 100 snapshots per session prevents unbounded growth.
+//!
+//! This module is session-scoped — it does not touch the tool registry
+//! directly. The agent runtime owns the [`FileHistory`] handle and exposes
+//! it to Edit/Write tools through a [`crab_core::tool::ToolContextExt`]
+//! callback.
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,9 +49,9 @@ pub enum SnapshotError {
 
 /// Session-scoped file-edit snapshot store.
 ///
-/// One `FileHistory` per [`crate::session::AgentSession`]. Lives at
-/// `{base_dir}/{session_id}/` on disk; cheap to construct, does not read
-/// anything until the first `track_edit` call.
+/// One `FileHistory` per session. Lives at `{base_dir}/{session_id}/` on
+/// disk; cheap to construct, does not read anything until the first
+/// `track_edit` call.
 pub struct FileHistory {
     session_dir: PathBuf,
     /// In-memory index: path → ordered list of `(version, storage_path)`.
@@ -72,6 +89,16 @@ impl FileHistory {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.index.values().all(Vec::is_empty)
+    }
+
+    /// All file paths that currently have at least one tracked snapshot.
+    #[must_use]
+    pub fn tracked_files(&self) -> Vec<PathBuf> {
+        self.index
+            .iter()
+            .filter(|(_, entries)| !entries.is_empty())
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 
     /// Snapshot the pre-edit contents of `path`. Returns the new [`Snapshot`].
@@ -194,8 +221,6 @@ impl FileHistory {
 /// never share a storage slot; identical paths across versions do.
 fn snapshot_filename(path: &Path, version: u32) -> String {
     use std::hash::{BuildHasher, Hasher};
-    // Use a small, fast, non-cryptographic hash — fits the need (uniqueness
-    // within a session dir) without pulling in sha2.
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write(path.as_os_str().as_encoded_bytes());
     let hash = hasher.finish();
@@ -217,7 +242,6 @@ mod tests {
         let (dir, history) = temp_history();
         assert!(history.is_empty());
         assert_eq!(history.len(), 0);
-        // Session dir should NOT exist yet — it's created on first track_edit.
         assert!(!dir.path().join("test-session").exists());
     }
 
@@ -243,7 +267,6 @@ mod tests {
 
         assert_eq!(history.track_edit(p1, b"p1v1").unwrap().version, 1);
         assert_eq!(history.track_edit(p1, b"p1v2").unwrap().version, 2);
-        // Different file gets its own v1 start.
         assert_eq!(history.track_edit(p2, b"p2v1").unwrap().version, 1);
         assert_eq!(history.track_edit(p1, b"p1v3").unwrap().version, 3);
     }
@@ -328,7 +351,6 @@ mod tests {
         }
 
         assert_eq!(history.len(), MAX_SNAPSHOTS_PER_SESSION);
-        // Oldest 5 snapshots (v1..=v5) should have been evicted.
         let snaps = history.snapshots_for(path);
         assert_eq!(snaps.first().unwrap().version, 6);
     }
@@ -353,5 +375,21 @@ mod tests {
             snap_b.storage.parent().unwrap().ends_with("session-b"),
             "session-b snapshot must live in session-b/"
         );
+    }
+
+    #[test]
+    fn tracked_files_lists_paths_with_snapshots() {
+        let (_dir, mut history) = temp_history();
+        let f1 = tempfile::NamedTempFile::new().unwrap();
+        let f2 = tempfile::NamedTempFile::new().unwrap();
+
+        history.track_edit(f1.path(), b"a").unwrap();
+        history.track_edit(f2.path(), b"b").unwrap();
+
+        let mut tracked = history.tracked_files();
+        tracked.sort();
+        let mut expected = vec![f1.path().to_path_buf(), f2.path().to_path_buf()];
+        expected.sort();
+        assert_eq!(tracked, expected);
     }
 }

@@ -118,6 +118,7 @@ mod tests {
                 beta_headers: Vec::new(),
                 ide_connect: false,
                 coordinator_mode: false,
+                default_shell: "bash".into(),
             },
             backend: Arc::new(LlmBackend::OpenAi(crab_agents::openai::OpenAiClient::new(
                 "http://localhost:0/v1",

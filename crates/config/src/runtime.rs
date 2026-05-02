@@ -26,6 +26,7 @@ use toml::value::Table;
 /// |----------------------|----------------|----------------------------------------|
 /// | `CRAB_MODEL`         | `model`        |                                        |
 /// | `CRAB_API_PROVIDER`  | `apiProvider`  |                                        |
+/// | `CRAB_DEFAULT_SHELL` | `default_shell`| `"bash"` or `"powershell"` for `!` routing |
 /// | `CRAB_BASE_URL`       | `base_url`   | universal override (highest priority)  |
 /// | `ANTHROPIC_BASE_URL` | `base_url`   | only when provider is anthropic/unset (CCB-compat name) |
 /// | `OPENAI_BASE_URL`     | `base_url`   | only when provider is openai          |
@@ -53,6 +54,7 @@ pub fn env_to_value(env: &HashMap<String, String>) -> Value {
 
     put("CRAB_MODEL", "model");
     put("CRAB_API_PROVIDER", "api_provider");
+    put("CRAB_DEFAULT_SHELL", "default_shell");
 
     // API base URL: mutually exclusive, applied conservatively.
     //   1. CRAB_BASE_URL — universal override (highest priority).
@@ -303,6 +305,15 @@ mod tests {
         ]));
         let table = v.as_table().unwrap();
         assert!(table.is_empty());
+    }
+
+    #[test]
+    fn env_to_value_maps_default_shell() {
+        let v = env_to_value(&env_map(&[("CRAB_DEFAULT_SHELL", "powershell")]));
+        assert_eq!(
+            v.as_table().unwrap()["default_shell"].as_str(),
+            Some("powershell"),
+        );
     }
 
     #[test]

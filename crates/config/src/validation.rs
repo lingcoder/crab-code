@@ -297,6 +297,28 @@ max_tokens = 4096
     }
 
     #[test]
+    fn default_shell_accepts_bash_and_powershell() {
+        for v in ["bash", "powershell"] {
+            let toml = format!(r#"default_shell = "{v}""#);
+            let value: toml::Value = toml::from_str(&toml).unwrap();
+            assert!(
+                validate_config_value(&value).is_empty(),
+                "{v} should be a valid default_shell",
+            );
+        }
+    }
+
+    #[test]
+    fn default_shell_rejects_arbitrary_strings() {
+        let value: toml::Value = toml::from_str(r#"default_shell = "fish""#).unwrap();
+        let errors = validate_config_value(&value);
+        assert!(
+            !errors.is_empty(),
+            "schema should restrict default_shell to bash | powershell",
+        );
+    }
+
+    #[test]
     fn bad_provider_rejected() {
         let value: toml::Value = toml::from_str(r#"api_provider = "definitely-not-real""#).unwrap();
         let errors = validate_config_value(&value);

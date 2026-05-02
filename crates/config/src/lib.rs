@@ -9,7 +9,9 @@ pub mod runtime;
 pub mod validation;
 pub mod writer;
 
-pub use config::{Config, ConfigLayer, EnabledPluginValue, GitContextConfig, PermissionsConfig};
+pub use config::{
+    Config, ConfigLayer, DefaultShell, EnabledPluginValue, GitContextConfig, PermissionsConfig,
+};
 pub use crab_core::permission::stored::{
     AuditEntry, AuditSource, PermissionRuleSet, PermissionStore, RuleScope, RuleVerdict,
     StoredPermissionRule, load_permission_store, save_permission_store,

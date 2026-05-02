@@ -423,6 +423,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         beta_headers: cli.betas.clone(),
         ide_connect: cli.ide,
         coordinator_mode,
+        default_shell: settings.default_shell_kind().as_str().to_string(),
     };
 
     // Determine the effective prompt: positional arg, or stdin if -p with no prompt
@@ -800,12 +801,17 @@ async fn handle_command_effect(
             SlashOutcome::Continue
         }
         CommandEffect::Rewind(target) => {
-            let what = target.as_deref().unwrap_or("(most-recent edit)");
-            println!(
-                "[info] /rewind {what}: the `file_history` primitive is ready but \
-                 Edit/Write/Notebook tools do not yet call track_edit via ToolContextExt. \
-                 Wire-up lands in a follow-up."
-            );
+            match session.rewind(target.as_deref()) {
+                Ok(restored) if restored.is_empty() => {
+                    println!("[info] No file edits to rewind.");
+                }
+                Ok(restored) => {
+                    println!("[info] Rewound: {}", restored.join(", "));
+                }
+                Err(e) => {
+                    println!("[info] Rewind failed: {e}");
+                }
+            }
             SlashOutcome::Continue
         }
         other => {

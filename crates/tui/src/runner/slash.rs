@@ -6,9 +6,10 @@
 //! variants into concrete state mutations on the [`App`].
 
 use crab_agents::runtime::AgentRuntime;
+use crab_agents::{DefaultShell, ToolRegistry};
 use crab_commands::{CommandContext, CommandEffect, CommandRegistry, CommandResult, CostSnapshot};
 
-use crate::app::App;
+use crate::app::{App, ChatMessage};
 use crate::components::autocomplete::CommandInfo;
 
 /// Static list of built-in slash commands for Tab completion.
@@ -116,6 +117,20 @@ pub(super) async fn handle_submit(
     session_id: &str,
 ) -> SubmitOutcome {
     let trimmed = text.trim();
+
+    // `!command` runs the configured shell tool directly and surfaces
+    // the result as a system message — the LLM is not consulted.
+    // Routing respects `default_shell` config but falls back to Bash
+    // whenever PowerShell isn't actually registered (e.g. on Linux/macOS,
+    // or Windows without `CRAB_USE_POWERSHELL_TOOL`).
+    if let Some(command) = trimmed.strip_prefix('!') {
+        let command = command.trim();
+        if !command.is_empty() {
+            run_shell_command(rt, app, command).await;
+        }
+        return SubmitOutcome::Handled;
+    }
+
     if !trimmed.starts_with('/') {
         return SubmitOutcome::SpawnQuery(text.to_string());
     }
@@ -318,9 +333,134 @@ pub(super) async fn apply_command_effect(
         }
 
         CommandEffect::Rewind(target) => {
-            let desc = target.as_deref().unwrap_or("all recent edits");
-            app.push_system_message(format!("Rewind requested: {desc}"));
+            match rt.rewind(target.as_deref()) {
+                Ok(restored) if restored.is_empty() => {
+                    app.push_system_message("No file edits to rewind.");
+                }
+                Ok(restored) => {
+                    let list = restored.join(", ");
+                    app.push_system_message(format!("Rewound: {list}"));
+                }
+                Err(e) => {
+                    app.push_system_message(format!("Rewind failed: {e}"));
+                }
+            }
             SubmitOutcome::Handled
+        }
+    }
+}
+
+/// Pick the tool that should service a `!` prefix invocation.
+///
+/// `default_shell` carries the user's preference (`bash` or `powershell`),
+/// but a preference for PowerShell only takes effect when the tool is
+/// actually registered. On Linux/macOS or Windows without
+/// `CRAB_USE_POWERSHELL_TOOL` the routing falls back to `Bash` so the
+/// `!` prefix never breaks for users who flipped the config without
+/// flipping the env var.
+fn resolve_shell_tool_name(default_shell: DefaultShell, registry: &ToolRegistry) -> &'static str {
+    match default_shell {
+        DefaultShell::PowerShell
+            if registry.get(DefaultShell::PowerShell.tool_name()).is_some() =>
+        {
+            DefaultShell::PowerShell.tool_name()
+        }
+        _ => DefaultShell::Bash.tool_name(),
+    }
+}
+
+/// Execute `command` via the configured shell tool and push the result
+/// into the transcript as a system message. Permissions are honored —
+/// the tool's standard ASK / DENY paths still apply.
+async fn run_shell_command(rt: &AgentRuntime, app: &mut App, command: &str) {
+    let tool_name = resolve_shell_tool_name(rt.default_shell(), rt.executor().registry());
+
+    // Echo the user's command into the transcript so the output has
+    // context — the renderer otherwise loses it (we never round-trip
+    // through the LLM).
+    app.messages.push(ChatMessage::User {
+        text: format!("!{command}"),
+    });
+
+    let input = serde_json::json!({ "command": command });
+    let ctx = rt.tool_ctx().clone();
+    let result = rt.executor().execute(tool_name, input, &ctx).await;
+
+    let (output, is_error) = match result {
+        Ok(out) => (out.text(), out.is_error),
+        Err(e) => (format!("[shell error] {e}"), true),
+    };
+
+    app.messages.push(ChatMessage::ToolResult {
+        tool_name: tool_name.to_string(),
+        output,
+        is_error,
+        display: None,
+        collapsed: false,
+        is_read_only: false,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crab_tools::builtin::create_default_registry;
+
+    #[test]
+    fn resolve_defaults_to_bash() {
+        let reg = create_default_registry();
+        assert_eq!(resolve_shell_tool_name(DefaultShell::Bash, &reg), "Bash");
+    }
+
+    #[test]
+    fn resolve_powershell_falls_back_when_unregistered() {
+        // An empty registry obviously doesn't carry PowerShell — the
+        // resolver must drop back to Bash so users can never end up
+        // routing to a tool that won't run.
+        let reg = ToolRegistry::new();
+        assert_eq!(
+            resolve_shell_tool_name(DefaultShell::PowerShell, &reg),
+            "Bash",
+        );
+    }
+
+    #[test]
+    fn resolve_powershell_routes_when_registered() {
+        let mut reg = ToolRegistry::new();
+        reg.register(std::sync::Arc::new(StubPowerShell));
+        assert_eq!(
+            resolve_shell_tool_name(DefaultShell::PowerShell, &reg),
+            "PowerShell",
+        );
+    }
+
+    /// Minimal Tool stub registered under the canonical `PowerShell` name —
+    /// keeps the resolver test self-contained instead of depending on the
+    /// (Windows-only, env-gated) real PowerShell tool registration path.
+    struct StubPowerShell;
+
+    impl crab_core::tool::Tool for StubPowerShell {
+        fn name(&self) -> &str {
+            "PowerShell"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &crab_core::tool::ToolContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = crab_core::Result<crab_core::tool::ToolOutput>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async { Ok(crab_core::tool::ToolOutput::success("")) })
         }
     }
 }

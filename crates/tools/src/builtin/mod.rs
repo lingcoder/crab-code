@@ -16,7 +16,6 @@ pub mod cron;
 pub mod edit;
 pub mod glob;
 pub mod grep;
-pub mod image_read;
 pub mod lsp;
 pub mod mcp_auth;
 pub mod mcp_resource;
@@ -29,7 +28,6 @@ pub mod plan_mode;
 #[cfg(target_os = "windows")]
 pub mod powershell;
 pub mod read;
-pub mod read_enhanced;
 pub mod registry;
 pub mod remote_trigger;
 pub mod send_message;
