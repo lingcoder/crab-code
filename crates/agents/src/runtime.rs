@@ -643,9 +643,11 @@ impl PermissionHandler for ChannelPermissionHandler {
         &self,
         tool_name: &str,
         prompt: &str,
+        tool_input: &serde_json::Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
         let tool_name = tool_name.to_string();
         let prompt = prompt.to_string();
+        let tool_input = tool_input.clone();
         let request_id = crab_utils::id::new_ulid();
         let event_tx = self.event_tx.clone();
         let response_rx = self.response_rx.clone();
@@ -656,6 +658,7 @@ impl PermissionHandler for ChannelPermissionHandler {
                     tool_name,
                     input_summary: prompt,
                     request_id: request_id.clone(),
+                    tool_input,
                 })
                 .await;
 

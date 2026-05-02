@@ -106,6 +106,7 @@ pub enum AppEvent {
         request_id: String,
         tool_name: String,
         summary: String,
+        tool_input: serde_json::Value,
     },
 
     // ── Session ──

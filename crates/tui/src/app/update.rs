@@ -821,11 +821,13 @@ impl App {
                     request_id,
                     tool_name,
                     input_summary,
+                    tool_input,
                 } => {
                     vec![AppEvent::PermissionRequested {
                         request_id: request_id.clone(),
                         tool_name: tool_name.clone(),
                         summary: input_summary.clone(),
+                        tool_input: tool_input.clone(),
                     }]
                 }
                 Event::CompactStart { strategy, .. } => {
@@ -1123,6 +1125,7 @@ impl App {
                 request_id,
                 tool_name,
                 summary,
+                tool_input,
             } => {
                 if self.session_grants.contains(&tool_name) {
                     AppAction::PermissionResponse {
@@ -1136,6 +1139,7 @@ impl App {
                         &tool_name,
                         &summary,
                         request_id,
+                        &tool_input,
                     ));
                     AppAction::None
                 }

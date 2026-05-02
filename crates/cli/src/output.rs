@@ -290,11 +290,13 @@ pub fn event_to_json(event: &Event) -> Option<Value> {
             tool_name,
             input_summary,
             request_id,
+            tool_input,
         } => Some(json!({
             "type": "permission_request",
             "tool_name": tool_name,
             "input_summary": input_summary,
             "request_id": request_id,
+            "tool_input": tool_input,
         })),
         Event::PermissionResponse {
             request_id,
@@ -483,6 +485,7 @@ mod tests {
                 tool_name: "t".into(),
                 input_summary: "s".into(),
                 request_id: "r".into(),
+                tool_input: serde_json::Value::Null,
             },
             Event::PermissionResponse {
                 request_id: "r".into(),

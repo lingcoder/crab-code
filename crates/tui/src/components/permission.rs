@@ -32,8 +32,14 @@ pub enum PermissionKind {
     /// CC: `FileEditPermissionRequest` — title "Edit file", shows path + optional diff preview.
     FileEdit { path: String, diff: Option<String> },
     /// File creation or overwrite.
-    /// CC: `FileWritePermissionRequest` — title "Create file" / "Overwrite file".
-    FileWrite { path: String, file_exists: bool },
+    /// CC: `FileWritePermissionRequest` — title "Create file" / "Overwrite file",
+    /// shows before/after diff when overwriting an existing file.
+    FileWrite {
+        path: String,
+        file_exists: bool,
+        diff: Option<String>,
+        content_preview: Option<String>,
+    },
     /// URL fetch.
     /// CC: `WebFetchPermissionRequest` — title "Fetch", shows domain.
     WebFetch { url: String },
@@ -153,9 +159,17 @@ impl PermissionCard {
     /// Create a permission card from a raw event.
     ///
     /// Classifies the tool name into the appropriate `PermissionKind` and
-    /// builds the option set. Maps CC's `PermissionRequest.tsx` routing logic.
-    pub fn from_event(tool_name: &str, input_summary: &str, request_id: String) -> Self {
-        let kind = classify_permission_kind(tool_name, input_summary);
+    /// builds the option set. The `tool_input` JSON is the source of truth
+    /// for tool-specific fields (bash command, edit paths, write target,
+    /// fetch URL); `input_summary` is a fallback for tools that did not
+    /// emit structured input.
+    pub fn from_event(
+        tool_name: &str,
+        input_summary: &str,
+        request_id: String,
+        tool_input: &serde_json::Value,
+    ) -> Self {
+        let kind = classify_permission_kind(tool_name, input_summary, tool_input);
         let options = build_options(&kind);
         Self {
             kind,
@@ -368,24 +382,7 @@ impl PermissionCard {
                 ])];
                 if let Some(diff_text) = diff {
                     lines.push(Line::default());
-                    let diff_lines: Vec<&str> = diff_text.lines().collect();
-                    let show_count = diff_lines.len().min(5);
-                    for line in &diff_lines[..show_count] {
-                        let style = if line.starts_with('+') {
-                            Style::default().fg(Color::Green)
-                        } else if line.starts_with('-') {
-                            Style::default().fg(Color::Red)
-                        } else {
-                            dim
-                        };
-                        lines.push(Line::from(Span::styled(format!("  {line}"), style)));
-                    }
-                    if diff_lines.len() > 5 {
-                        lines.push(Line::from(Span::styled(
-                            format!("  ... ({} more lines)", diff_lines.len() - 5),
-                            dim,
-                        )));
-                    }
+                    render_diff_lines(diff_text, dim, &mut lines);
                 }
                 lines
             }
@@ -396,13 +393,29 @@ impl PermissionCard {
                 ])]
             }
             PermissionKind::WebFetch { url } => render_parsed_url(url, width),
-            PermissionKind::FileWrite { path, file_exists } => {
+            PermissionKind::FileWrite {
+                path,
+                file_exists,
+                diff,
+                content_preview,
+            } => {
                 let verb = if *file_exists { "overwrite" } else { "create" };
-                vec![Line::from(vec![
+                let mut lines = vec![Line::from(vec![
                     Span::styled(format!("  Do you want to {verb} "), dim),
                     Span::styled(path.clone(), emphasis),
                     Span::styled("?", dim),
-                ])]
+                ])];
+                if let Some(diff_text) = diff {
+                    lines.push(Line::default());
+                    render_diff_lines(diff_text, dim, &mut lines);
+                } else if let Some(preview) = content_preview {
+                    lines.push(Line::default());
+                    let add_style = Style::default().fg(Color::Green);
+                    for line in preview.lines() {
+                        lines.push(Line::from(Span::styled(format!("  +{line}"), add_style)));
+                    }
+                }
+                lines
             }
             PermissionKind::Generic {
                 tool_name,
@@ -559,31 +572,159 @@ impl Widget for &PermissionCard {
 ///
 /// Maps CC's `PermissionRequest.tsx` switch-case routing.
 /// Matches both canonical names (`"Bash"`) and lowercase variants (`"bash"`).
-fn classify_permission_kind(tool_name: &str, input_summary: &str) -> PermissionKind {
+/// Pulls structured fields out of `tool_input` so the rendered card shows
+/// real command / path / URL instead of the (often truncated) `input_summary`.
+fn classify_permission_kind(
+    tool_name: &str,
+    input_summary: &str,
+    tool_input: &serde_json::Value,
+) -> PermissionKind {
     let lower = tool_name.to_ascii_lowercase();
     match lower.as_str() {
-        "bash" => PermissionKind::Bash {
-            command: input_summary.to_string(),
-            description: None,
-        },
-        "edit" => PermissionKind::FileEdit {
-            path: input_summary.to_string(),
-            diff: None,
-        },
-        "write" => PermissionKind::FileWrite {
-            path: input_summary.to_string(),
-            file_exists: false,
-        },
-        "notebookedit" | "notebook_edit" => PermissionKind::NotebookEdit {
-            path: input_summary.to_string(),
-        },
-        name if name.contains("fetch") || name.contains("web") => PermissionKind::WebFetch {
-            url: input_summary.to_string(),
-        },
-        _ => PermissionKind::Generic {
-            tool_name: tool_name.to_string(),
-            input_summary: input_summary.to_string(),
-        },
+        "bash" => {
+            let command = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or(input_summary)
+                .to_string();
+            let description = tool_input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            PermissionKind::Bash {
+                command,
+                description,
+            }
+        }
+        "edit" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(input_summary)
+                .to_string();
+            let diff = compute_edit_diff(tool_input, &path);
+            PermissionKind::FileEdit { path, diff }
+        }
+        "write" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(input_summary)
+                .to_string();
+            let file_exists = std::path::Path::new(&path).exists();
+            let diff = compute_write_diff(tool_input, &path);
+            let content_preview = if file_exists {
+                None
+            } else {
+                tool_input.get("content").and_then(|v| v.as_str()).map(|s| {
+                    let preview_lines: Vec<&str> = s.lines().take(10).collect();
+                    preview_lines.join("\n")
+                })
+            };
+            PermissionKind::FileWrite {
+                path,
+                file_exists,
+                diff,
+                content_preview,
+            }
+        }
+        "notebookedit" | "notebook_edit" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(input_summary)
+                .to_string();
+            PermissionKind::NotebookEdit { path }
+        }
+        name if name.contains("fetch") || name.contains("web") => {
+            let url = tool_input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(input_summary)
+                .to_string();
+            PermissionKind::WebFetch { url }
+        }
+        _ => {
+            let summary = truncate_tool_input(tool_input, input_summary);
+            PermissionKind::Generic {
+                tool_name: tool_name.to_string(),
+                input_summary: summary,
+            }
+        }
+    }
+}
+
+/// Append colored diff lines to an output buffer. No line cap — shows
+/// the complete unified diff, matching CCB behavior.
+fn render_diff_lines(diff_text: &str, dim: Style, out: &mut Vec<Line<'static>>) {
+    for line in diff_text.lines() {
+        let style = if line.starts_with('+') {
+            Style::default().fg(Color::Green)
+        } else if line.starts_with('-') {
+            Style::default().fg(Color::Red)
+        } else {
+            dim
+        };
+        out.push(Line::from(Span::styled(format!("  {line}"), style)));
+    }
+}
+
+/// Build a unified diff of a pending `Edit` tool call by replaying the
+/// `old_string` → `new_string` substitution against the file on disk.
+/// Returns `None` if the file is unreadable or the substitution does not match.
+fn compute_edit_diff(tool_input: &serde_json::Value, path: &str) -> Option<String> {
+    let old_str = tool_input.get("old_string")?.as_str()?;
+    let new_str = tool_input.get("new_string")?.as_str()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    let replaced = content.replacen(old_str, new_str, 1);
+    if replaced == content {
+        return None;
+    }
+    let label = std::path::Path::new(path).file_name()?.to_str()?;
+    Some(
+        similar::TextDiff::from_lines(&content, &replaced)
+            .unified_diff()
+            .context_radius(3)
+            .header(label, label)
+            .to_string(),
+    )
+}
+
+/// Build a unified diff of a pending `Write` tool call by comparing the
+/// existing file on disk with the new `content` from tool input.
+/// Returns `None` if the file doesn't exist or `content` is absent.
+fn compute_write_diff(tool_input: &serde_json::Value, path: &str) -> Option<String> {
+    let new_content = tool_input.get("content")?.as_str()?;
+    let old_content = std::fs::read_to_string(path).ok()?;
+    if old_content == new_content {
+        return None;
+    }
+    let label = std::path::Path::new(path).file_name()?.to_str()?;
+    Some(
+        similar::TextDiff::from_lines(&old_content, new_content)
+            .unified_diff()
+            .context_radius(3)
+            .header(label, label)
+            .to_string(),
+    )
+}
+
+/// Render `tool_input` as a compact JSON summary, falling back to
+/// `fallback` when the input is null or empty. Truncates beyond 200 chars
+/// so the generic permission card stays readable.
+fn truncate_tool_input(tool_input: &serde_json::Value, fallback: &str) -> String {
+    if tool_input.is_null()
+        || tool_input
+            .as_object()
+            .is_some_and(serde_json::Map::is_empty)
+    {
+        return fallback.to_string();
+    }
+    let s = serde_json::to_string_pretty(tool_input).unwrap_or_default();
+    if s.len() > 200 {
+        format!("{}…", &s[..200])
+    } else {
+        s
     }
 }
 
@@ -726,15 +867,26 @@ mod tests {
     use super::*;
 
     fn bash_card() -> PermissionCard {
-        PermissionCard::from_event("bash", "rm -rf /tmp/cache", "req_1".into())
+        let input = serde_json::json!({"command": "rm -rf /tmp/cache"});
+        PermissionCard::from_event("bash", "rm -rf /tmp/cache", "req_1".into(), &input)
     }
 
     fn edit_card() -> PermissionCard {
-        PermissionCard::from_event("edit", "src/main.rs", "req_2".into())
+        let input = serde_json::json!({
+            "file_path": "src/main.rs",
+            "old_string": "foo",
+            "new_string": "bar",
+        });
+        PermissionCard::from_event("edit", "src/main.rs", "req_2".into(), &input)
     }
 
     fn generic_card() -> PermissionCard {
-        PermissionCard::from_event("mcp_tool", "some input data", "req_3".into())
+        PermissionCard::from_event(
+            "mcp_tool",
+            "some input data",
+            "req_3".into(),
+            &serde_json::Value::Null,
+        )
     }
 
     #[test]
@@ -870,15 +1022,21 @@ mod tests {
 
     #[test]
     fn write_card_uses_overwrite_title() {
-        let card = PermissionCard::from_event("write", "output.txt", "req_w".into());
-        // Default: file_exists = false → "Create file"
+        let input = serde_json::json!({"file_path": "output.txt"});
+        let card = PermissionCard::from_event("write", "output.txt", "req_w".into(), &input);
+        // File doesn't exist on disk → "Create file"
         assert_eq!(card.kind.title(), "Create file");
     }
 
     #[test]
     fn web_fetch_detection() {
-        let card =
-            PermissionCard::from_event("web_fetch", "https://example.com/api", "req_f".into());
+        let input = serde_json::json!({"url": "https://example.com/api"});
+        let card = PermissionCard::from_event(
+            "web_fetch",
+            "https://example.com/api",
+            "req_f".into(),
+            &input,
+        );
         assert!(matches!(card.kind, PermissionKind::WebFetch { .. }));
         assert_eq!(card.kind.title(), "Fetch");
     }
@@ -939,7 +1097,9 @@ mod tests {
 
     #[test]
     fn notebook_edit_detected() {
-        let card = PermissionCard::from_event("notebook_edit", "analysis.ipynb", "req_n".into());
+        let input = serde_json::json!({"file_path": "analysis.ipynb"});
+        let card =
+            PermissionCard::from_event("notebook_edit", "analysis.ipynb", "req_n".into(), &input);
         assert!(matches!(card.kind, PermissionKind::NotebookEdit { .. }));
         assert_eq!(card.kind.title(), "Edit notebook");
     }
@@ -948,11 +1108,9 @@ mod tests {
 
     #[test]
     fn bash_multiline_command_shows_dollar_prefix() {
-        let card = PermissionCard::from_event(
-            "bash",
-            "echo hello\necho world\necho done",
-            "req_ml".into(),
-        );
+        let cmd = "echo hello\necho world\necho done";
+        let input = serde_json::json!({"command": cmd});
+        let card = PermissionCard::from_event("bash", cmd, "req_ml".into(), &input);
         let lines = card.render_lines(80);
         let all_text: String = lines
             .iter()
@@ -968,7 +1126,8 @@ mod tests {
             .map(|i| format!("line{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let card = PermissionCard::from_event("bash", &cmd, "req_trunc".into());
+        let input = serde_json::json!({"command": cmd});
+        let card = PermissionCard::from_event("bash", &cmd, "req_trunc".into(), &input);
         let lines = card.render_lines(80);
         let all_text: String = lines
             .iter()
@@ -979,11 +1138,9 @@ mod tests {
 
     #[test]
     fn web_fetch_url_parsed_display() {
-        let card = PermissionCard::from_event(
-            "web_fetch",
-            "https://api.example.com/v1/data?q=test",
-            "req_url".into(),
-        );
+        let url = "https://api.example.com/v1/data?q=test";
+        let input = serde_json::json!({"url": url});
+        let card = PermissionCard::from_event("web_fetch", url, "req_url".into(), &input);
         let lines = card.render_lines(80);
         let all_text: String = lines
             .iter()
@@ -1006,8 +1163,12 @@ mod tests {
 
     #[test]
     fn mcp_generic_card_renders_server_tool_format() {
-        let card =
-            PermissionCard::from_event("mcp__myserver__do_thing", "some input", "req_mcp".into());
+        let card = PermissionCard::from_event(
+            "mcp__myserver__do_thing",
+            "some input",
+            "req_mcp".into(),
+            &serde_json::Value::Null,
+        );
         let lines = card.render_lines(80);
         let all_text: String = lines
             .iter()
@@ -1051,7 +1212,13 @@ mod tests {
             "bash always-allow label: {bash_always}"
         );
 
-        let web = PermissionCard::from_event("web_fetch", "https://api.example.com", "r".into());
+        let web_input = serde_json::json!({"url": "https://api.example.com"});
+        let web = PermissionCard::from_event(
+            "web_fetch",
+            "https://api.example.com",
+            "r".into(),
+            &web_input,
+        );
         let web_always = &web.options[1].label;
         assert_eq!(
             web_always, "Yes, and don't ask again for api.example.com",
@@ -1074,5 +1241,223 @@ mod tests {
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("just-a-hostname"));
+    }
+
+    // ── tool_input wiring tests ──
+
+    #[test]
+    fn compute_edit_diff_generates_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hello.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({
+            "file_path": path_str,
+            "old_string": "beta",
+            "new_string": "BETA",
+        });
+        let diff = compute_edit_diff(&input, &path_str).expect("diff should be produced");
+        assert!(diff.contains("-beta"), "expected '-beta' in diff: {diff}");
+        assert!(diff.contains("+BETA"), "expected '+BETA' in diff: {diff}");
+    }
+
+    #[test]
+    fn compute_edit_diff_returns_none_for_missing_file() {
+        let input = serde_json::json!({
+            "old_string": "x",
+            "new_string": "y",
+        });
+        let diff = compute_edit_diff(&input, "/nonexistent/path/does/not/exist.txt");
+        assert!(diff.is_none());
+    }
+
+    #[test]
+    fn compute_edit_diff_returns_none_when_old_string_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({
+            "old_string": "missing",
+            "new_string": "replacement",
+        });
+        assert!(compute_edit_diff(&input, &path_str).is_none());
+    }
+
+    #[test]
+    fn classify_with_tool_input_extracts_bash_command() {
+        let input = serde_json::json!({
+            "command": "echo from-json",
+            "description": "say hi",
+        });
+        let kind = classify_permission_kind("bash", "fallback summary", &input);
+        let PermissionKind::Bash {
+            command,
+            description,
+        } = kind
+        else {
+            panic!("expected Bash kind");
+        };
+        assert_eq!(command, "echo from-json");
+        assert_eq!(description.as_deref(), Some("say hi"));
+    }
+
+    #[test]
+    fn classify_with_tool_input_extracts_edit_path() {
+        let input = serde_json::json!({"file_path": "/tmp/some/file.rs"});
+        let kind = classify_permission_kind("edit", "fallback", &input);
+        let PermissionKind::FileEdit { path, .. } = kind else {
+            panic!("expected FileEdit kind");
+        };
+        assert_eq!(path, "/tmp/some/file.rs");
+    }
+
+    #[test]
+    fn classify_with_tool_input_detects_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("existing.txt");
+        std::fs::write(&path, "content").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({"file_path": path_str});
+        let kind = classify_permission_kind("write", "fallback", &input);
+        let PermissionKind::FileWrite { file_exists, .. } = kind else {
+            panic!("expected FileWrite kind");
+        };
+        assert!(file_exists, "file_exists should be true for existing path");
+    }
+
+    #[test]
+    fn compute_write_diff_generates_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.txt");
+        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({
+            "file_path": path_str,
+            "content": "line1\nLINE2\nline3\n",
+        });
+        let diff = compute_write_diff(&input, &path_str).expect("diff should be produced");
+        assert!(diff.contains("-line2"), "expected '-line2' in diff: {diff}");
+        assert!(diff.contains("+LINE2"), "expected '+LINE2' in diff: {diff}");
+    }
+
+    #[test]
+    fn compute_write_diff_returns_none_for_new_file() {
+        let input = serde_json::json!({
+            "content": "brand new content",
+        });
+        assert!(compute_write_diff(&input, "/nonexistent/path.txt").is_none());
+    }
+
+    #[test]
+    fn compute_write_diff_returns_none_when_content_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.txt");
+        std::fs::write(&path, "unchanged\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({
+            "file_path": path_str,
+            "content": "unchanged\n",
+        });
+        assert!(compute_write_diff(&input, &path_str).is_none());
+    }
+
+    #[test]
+    fn classify_write_with_content_produces_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overwrite.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let input = serde_json::json!({
+            "file_path": path_str,
+            "content": "new\n",
+        });
+        let kind = classify_permission_kind("write", "fallback", &input);
+        let PermissionKind::FileWrite {
+            file_exists, diff, ..
+        } = kind
+        else {
+            panic!("expected FileWrite kind");
+        };
+        assert!(file_exists);
+        assert!(diff.is_some(), "overwrite should produce a diff");
+    }
+
+    #[test]
+    fn classify_write_new_file_has_content_preview() {
+        let input = serde_json::json!({
+            "file_path": "/nonexistent/new_file.rs",
+            "content": "fn main() {\n    println!(\"hello\");\n}\n",
+        });
+        let kind = classify_permission_kind("write", "fallback", &input);
+        let PermissionKind::FileWrite {
+            file_exists,
+            diff,
+            content_preview,
+            ..
+        } = kind
+        else {
+            panic!("expected FileWrite kind");
+        };
+        assert!(!file_exists);
+        assert!(diff.is_none(), "new file should have no diff");
+        let preview = content_preview.expect("new file should have content preview");
+        assert!(preview.contains("fn main()"));
+        assert!(preview.contains("println!"));
+    }
+
+    #[test]
+    fn classify_write_new_file_preview_capped_at_10_lines() {
+        let long_content: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        let input = serde_json::json!({
+            "file_path": "/nonexistent/long.txt",
+            "content": long_content,
+        });
+        let kind = classify_permission_kind("write", "fallback", &input);
+        let PermissionKind::FileWrite {
+            content_preview, ..
+        } = kind
+        else {
+            panic!("expected FileWrite kind");
+        };
+        let preview = content_preview.expect("should have preview");
+        let line_count = preview.lines().count();
+        assert_eq!(
+            line_count, 10,
+            "preview should be capped at 10 lines, got {line_count}"
+        );
+    }
+
+    #[test]
+    fn classify_with_tool_input_extracts_fetch_url() {
+        let input = serde_json::json!({"url": "https://structured.example.com/api"});
+        let kind = classify_permission_kind("web_fetch", "fallback", &input);
+        let PermissionKind::WebFetch { url } = kind else {
+            panic!("expected WebFetch kind");
+        };
+        assert_eq!(url, "https://structured.example.com/api");
+    }
+
+    #[test]
+    fn truncate_tool_input_null_falls_back() {
+        let result = truncate_tool_input(&serde_json::Value::Null, "fallback summary");
+        assert_eq!(result, "fallback summary");
+    }
+
+    #[test]
+    fn truncate_tool_input_empty_object_falls_back() {
+        let empty = serde_json::json!({});
+        let result = truncate_tool_input(&empty, "fallback");
+        assert_eq!(result, "fallback");
+    }
+
+    #[test]
+    fn truncate_tool_input_long_value_truncated() {
+        let big_str: String = "x".repeat(500);
+        let input = serde_json::json!({"data": big_str});
+        let result = truncate_tool_input(&input, "fallback");
+        assert!(result.ends_with('…'), "long input should end with ellipsis");
+        // The byte length of the prefix is 200; the ellipsis adds 3 more bytes (UTF-8).
+        assert_eq!(result.len(), 200 + '…'.len_utf8());
     }
 }

@@ -72,6 +72,10 @@ pub enum Event {
         tool_name: String,
         input_summary: String,
         request_id: String,
+        /// Raw tool input parameters, available to UI for richer rendering
+        /// (e.g. show the bash command, edit diff, or write target).
+        #[serde(default)]
+        tool_input: Value,
     },
 
     /// User's response to a permission request.
@@ -261,16 +265,19 @@ mod tests {
             tool_name: "bash".into(),
             input_summary: "rm -rf /".into(),
             request_id: "req_1".into(),
+            tool_input: serde_json::json!({"command": "rm -rf /"}),
         };
         if let Event::PermissionRequest {
             tool_name,
             input_summary,
             request_id,
+            tool_input,
         } = event
         {
             assert_eq!(tool_name, "bash");
             assert_eq!(input_summary, "rm -rf /");
             assert_eq!(request_id, "req_1");
+            assert_eq!(tool_input["command"], "rm -rf /");
         } else {
             panic!("unexpected variant");
         }
@@ -409,6 +416,7 @@ mod tests {
             tool_name: "bash".into(),
             input_summary: "rm -rf /tmp/cache".into(),
             request_id: "req_42".into(),
+            tool_input: serde_json::json!({"command": "rm -rf /tmp/cache"}),
         });
     }
 

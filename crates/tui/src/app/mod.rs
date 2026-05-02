@@ -815,6 +815,7 @@ mod tests {
                 tool_name: "bash".into(),
                 input_summary: "rm -rf /tmp".into(),
                 request_id: "req_1".into(),
+                tool_input: serde_json::json!({"command": "rm -rf /tmp"}),
             },
         });
 
@@ -829,6 +830,7 @@ mod tests {
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
+            &serde_json::Value::Null,
         ));
 
         let action = app.handle_event(key(KeyCode::Char('y')));
@@ -851,6 +853,7 @@ mod tests {
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
+            &serde_json::Value::Null,
         ));
 
         let action = app.handle_event(key(KeyCode::Char('n')));
@@ -871,6 +874,7 @@ mod tests {
             "edit",
             "src/main.rs",
             "req_2".into(),
+            &serde_json::Value::Null,
         ));
 
         let action = app.handle_event(key(KeyCode::Esc));
@@ -891,11 +895,13 @@ mod tests {
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
+            &serde_json::Value::Null,
         ));
         app.approval_queue.push(PermissionCard::from_event(
             "edit",
             "src/main.rs",
             "req_2".into(),
+            &serde_json::Value::Null,
         ));
 
         let action = app.handle_event(ctrl_key('c'));
@@ -1041,6 +1047,7 @@ mod tests {
             "bash",
             "rm -rf /tmp",
             "req_1".into(),
+            &serde_json::Value::Null,
         ));
 
         let area = Rect::new(0, 0, 80, 24);
@@ -1063,16 +1070,17 @@ mod tests {
     fn permission_kind_classification() {
         use crate::components::permission::PermissionKind;
 
-        let card = PermissionCard::from_event("bash", "ls -la", "r1".into());
+        let null = serde_json::Value::Null;
+        let card = PermissionCard::from_event("bash", "ls -la", "r1".into(), &null);
         assert!(matches!(card.kind, PermissionKind::Bash { .. }));
 
-        let card = PermissionCard::from_event("edit", "file.rs", "r2".into());
+        let card = PermissionCard::from_event("edit", "file.rs", "r2".into(), &null);
         assert!(matches!(card.kind, PermissionKind::FileEdit { .. }));
 
-        let card = PermissionCard::from_event("write", "out.txt", "r3".into());
+        let card = PermissionCard::from_event("write", "out.txt", "r3".into(), &null);
         assert!(matches!(card.kind, PermissionKind::FileWrite { .. }));
 
-        let card = PermissionCard::from_event("custom_tool", "data", "r4".into());
+        let card = PermissionCard::from_event("custom_tool", "data", "r4".into(), &null);
         assert!(matches!(card.kind, PermissionKind::Generic { .. }));
     }
 

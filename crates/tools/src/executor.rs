@@ -82,11 +82,15 @@ pub trait PermissionHandler: Send + Sync {
     /// Called when a tool requires user confirmation.
     ///
     /// `tool_name` is the tool being invoked, `prompt` is the human-readable
-    /// question. Returns `true` to allow, `false` to deny.
+    /// question, and `tool_input` is the raw JSON input — handlers can use
+    /// it to render richer prompts (e.g. show the full bash command, the
+    /// edit diff, or the write target). Returns `true` to allow, `false`
+    /// to deny.
     fn ask_permission(
         &self,
         tool_name: &str,
         prompt: &str,
+        tool_input: &serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
 }
 
@@ -159,7 +163,7 @@ impl ToolExecutor {
             PermissionDecision::Deny(reason) => Ok(ToolOutput::error(reason)),
             PermissionDecision::AskUser(prompt) => {
                 if let Some(handler) = &self.permission_handler {
-                    let allowed = handler.ask_permission(tool_name, &prompt).await;
+                    let allowed = handler.ask_permission(tool_name, &prompt, &input).await;
                     if allowed {
                         tool.execute(input, ctx).await
                     } else {
@@ -216,7 +220,7 @@ impl ToolExecutor {
                 PermissionDecision::Deny(reason) => return Ok(ToolOutput::error(reason)),
                 PermissionDecision::AskUser(prompt) => {
                     if let Some(handler) = &permission_handler
-                        && !handler.ask_permission(&tool_name, &prompt).await
+                        && !handler.ask_permission(&tool_name, &prompt, &input).await
                     {
                         return Ok(ToolOutput::error(REJECT_MESSAGE.to_string()));
                     }
@@ -378,6 +382,7 @@ mod tests {
             &self,
             _tool_name: &str,
             _prompt: &str,
+            _tool_input: &serde_json::Value,
         ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
             Box::pin(async { false })
         }

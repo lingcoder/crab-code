@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     fn test_card(tool: &str, summary: &str, id: &str) -> PermissionCard {
-        PermissionCard::from_event(tool, summary, id.into())
+        PermissionCard::from_event(tool, summary, id.into(), &serde_json::Value::Null)
     }
 
     #[test]

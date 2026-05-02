@@ -549,18 +549,56 @@ fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillRegistr
 /// CLI-based permission handler: prints prompt to stderr, reads y/n from stdin.
 struct CliPermissionHandler;
 
+/// Format a CLI permission prompt line, picking the best representation
+/// for well-known tools so the user sees the actual command/path instead
+/// of a generic summary.
+fn format_cli_permission(tool_name: &str, prompt: &str, tool_input: &Value) -> String {
+    let lower = tool_name.to_lowercase();
+    match lower.as_str() {
+        "bash" => {
+            let command = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or(prompt);
+            let description = tool_input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            match description {
+                Some(desc) => format!("[permission] Bash: {command}\n  ({desc})"),
+                None => format!("[permission] Bash: {command}"),
+            }
+        }
+        "edit" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(prompt);
+            format!("[permission] Edit: {path}")
+        }
+        "write" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(prompt);
+            format!("[permission] Write: {path}")
+        }
+        _ => format!("[permission] {prompt} ({tool_name})"),
+    }
+}
+
 impl PermissionHandler for CliPermissionHandler {
     fn ask_permission(
         &self,
         tool_name: &str,
         prompt: &str,
+        tool_input: &Value,
     ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
-        let tool_name = tool_name.to_string();
-        let prompt = prompt.to_string();
+        let line = format_cli_permission(tool_name, prompt, tool_input);
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 use std::io::{BufRead, Write};
-                eprint!("[permission] {prompt} ({tool_name}) [y/N] ");
+                eprint!("{line} [y/N] ");
                 let _ = std::io::stderr().flush();
                 let mut line = String::new();
                 if std::io::stdin().lock().read_line(&mut line).is_ok() {
