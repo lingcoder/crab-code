@@ -214,18 +214,19 @@ impl AgentRuntime {
             config.session_config.context_window,
         );
 
-        let resumed_grants = if let Some(ref resume_id) =
-            config.session_config.resume_session_id
-            && let Some(ref history) = session_history
-            && let Ok(Some((messages, grants))) = history.load_with_grants(resume_id)
-        {
-            for msg in messages {
-                conversation.push(msg);
-            }
-            grants
-        } else {
-            Vec::new()
-        };
+        let resumed_grants = config
+            .session_config
+            .resume_session_id
+            .as_ref()
+            .zip(session_history.as_ref())
+            .and_then(|(resume_id, history)| history.load_with_grants(resume_id).ok().flatten())
+            .map(|(messages, grants)| {
+                for msg in messages {
+                    conversation.push(msg);
+                }
+                grants
+            })
+            .unwrap_or_default();
 
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
