@@ -69,8 +69,14 @@ pub enum AppAction {
     None,
     /// User submitted a message to send to the agent.
     Submit(String),
-    /// User confirmed a permission request.
-    PermissionResponse { request_id: String, allowed: bool },
+    /// User confirmed a permission request. `feedback` is an optional
+    /// free-text note from the user (typically only set on a deny) that
+    /// the runner forwards back to the model so it can adjust its approach.
+    PermissionResponse {
+        request_id: String,
+        allowed: bool,
+        feedback: Option<String>,
+    },
     /// Ctrl+C during `Confirming` — reject all queued permission requests
     /// and interrupt the engine loop.
     InterruptPermissions { rejected_ids: Vec<String> },

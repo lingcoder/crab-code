@@ -839,6 +839,7 @@ mod tests {
             AppAction::PermissionResponse {
                 request_id: "req_1".into(),
                 allowed: true,
+                feedback: None,
             }
         );
         assert_eq!(app.state, AppState::Processing);
@@ -862,6 +863,7 @@ mod tests {
             AppAction::PermissionResponse {
                 request_id: "req_1".into(),
                 allowed: false,
+                feedback: None,
             }
         );
     }
@@ -883,6 +885,78 @@ mod tests {
             AppAction::PermissionResponse {
                 request_id: "req_2".into(),
                 allowed: false,
+                feedback: None,
+            }
+        );
+    }
+
+    #[test]
+    fn confirming_tab_then_text_then_enter_emits_deny_with_feedback() {
+        let mut app = App::new("test");
+        app.state = AppState::Confirming;
+        app.approval_queue.push(PermissionCard::from_event(
+            "bash",
+            "rm -rf /tmp",
+            "req_3".into(),
+            &serde_json::Value::Null,
+        ));
+
+        // Tab enters feedback mode — no decision yet.
+        let action = app.handle_event(key(KeyCode::Tab));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.state, AppState::Confirming);
+
+        // Type a feedback note (ASCII chars route through the card while
+        // in feedback mode).
+        for c in "use Read tool".chars() {
+            let action = app.handle_event(key(KeyCode::Char(c)));
+            assert_eq!(action, AppAction::None);
+        }
+
+        // Enter submits a deny carrying the feedback string.
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(
+            action,
+            AppAction::PermissionResponse {
+                request_id: "req_3".into(),
+                allowed: false,
+                feedback: Some("use Read tool".into()),
+            }
+        );
+        assert_eq!(app.state, AppState::Processing);
+        assert!(app.approval_queue.is_empty());
+        // The user-feedback note should be appended as a User message so the
+        // transcript shows what was sent back to the model.
+        assert!(messages_contain(&app.messages, "(feedback) use Read tool"));
+    }
+
+    #[test]
+    fn confirming_tab_then_esc_cancels_back_to_decision_mode() {
+        let mut app = App::new("test");
+        app.state = AppState::Confirming;
+        app.approval_queue.push(PermissionCard::from_event(
+            "bash",
+            "ls -la",
+            "req_4".into(),
+            &serde_json::Value::Null,
+        ));
+
+        app.handle_event(key(KeyCode::Tab));
+        for c in "draft".chars() {
+            app.handle_event(key(KeyCode::Char(c)));
+        }
+        // Esc inside feedback mode cancels — no decision, no state change.
+        let action = app.handle_event(key(KeyCode::Esc));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.state, AppState::Confirming);
+        // y now works again because we exited feedback mode.
+        let action = app.handle_event(key(KeyCode::Char('y')));
+        assert_eq!(
+            action,
+            AppAction::PermissionResponse {
+                request_id: "req_4".into(),
+                allowed: true,
+                feedback: None,
             }
         );
     }

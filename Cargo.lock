@@ -1645,6 +1645,7 @@ dependencies = [
  "crab-config",
  "crab-core",
  "crab-memory",
+ "crab-tools",
  "crab-utils",
  "crossterm 0.29.0",
  "futures",

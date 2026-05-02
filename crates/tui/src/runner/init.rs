@@ -55,7 +55,7 @@ pub(super) struct PreparedRuntime {
     /// (which stamps `ALWAYS_CURRENT_EPOCH`) and the per-query forwarders
     /// in `repl::run_loop` (which stamp the current query epoch).
     pub(super) tagged_tx: mpsc::UnboundedSender<(u64, Event)>,
-    pub(super) perm_resp_tx: mpsc::UnboundedSender<(String, bool)>,
+    pub(super) perm_resp_tx: mpsc::UnboundedSender<(String, bool, Option<String>)>,
     pub(super) session_id: String,
     pub(super) event_broker: Arc<EventBroker>,
     pub(super) frame_requester: FrameRequester,
@@ -115,7 +115,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
     // forwarder below stamps each one with `ALWAYS_CURRENT_EPOCH` so they
     // bypass the REPL's stale-event filter.
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(256);
-    let (perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel::<(String, bool)>();
+    let (perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel::<(String, bool, Option<String>)>();
 
     // `tagged_tx`/`tagged_rx` is the shared tagged channel feeding
     // `spawn_event_loop`. Per-query forwarders in `repl::run_loop` will
@@ -156,6 +156,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
         skill_dirs: config.skill_dirs.clone(),
         perm_event_tx: event_tx.clone(),
         perm_resp_rx,
+        backend: Some(Arc::clone(&config.backend)),
     };
     let (init_tx, init_rx) = tokio::sync::oneshot::channel::<(AgentRuntime, RuntimeInitMeta)>();
     tokio::spawn(async move {

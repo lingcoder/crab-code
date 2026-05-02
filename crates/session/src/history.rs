@@ -15,6 +15,10 @@ struct SessionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     working_dir: Option<String>,
     messages: Vec<Message>,
+    /// Session-level "always allow" tool grants — preserved across save and
+    /// resume so the user is not re-prompted for tools they already granted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grants: Vec<String>,
 }
 
 /// Metadata for a saved session (returned by list operations).
@@ -155,8 +159,13 @@ impl SessionHistory {
     }
 
     /// Save a session transcript to disk.
+    ///
+    /// Preserves any session-level grants already on disk: the auto-save
+    /// path doesn't have grants in scope, so reading them back avoids
+    /// silently wiping a user's "always allow" set on every turn.
     pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_core::Result<()> {
-        self.save_with_metadata(session_id, None, None, messages)
+        let existing_grants = self.load_grants(session_id).unwrap_or_default();
+        self.save_with_metadata(session_id, None, None, messages, &existing_grants)
     }
 
     /// Save a session with optional name and working directory metadata.
@@ -166,6 +175,7 @@ impl SessionHistory {
         name: Option<&str>,
         working_dir: Option<&str>,
         messages: &[Message],
+        grants: &[String],
     ) -> crab_core::Result<()> {
         self.ensure_dir()?;
         let file = SessionFile {
@@ -173,11 +183,26 @@ impl SessionHistory {
             name: name.map(std::string::ToString::to_string),
             working_dir: working_dir.map(std::string::ToString::to_string),
             messages: messages.to_vec(),
+            grants: grants.to_vec(),
         };
         let json = serde_json::to_string_pretty(&file)
             .map_err(|e| crab_core::Error::Other(format!("serialize session: {e}")))?;
         std::fs::write(self.session_path(session_id), json)?;
         Ok(())
+    }
+
+    /// Save messages plus session-level grants in one call.
+    ///
+    /// This is the path used by interactive frontends (TUI / IDE) that
+    /// track user-granted "always allow" decisions for the duration of a
+    /// session and want them restored on resume.
+    pub fn save_with_grants(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        grants: &[String],
+    ) -> crab_core::Result<()> {
+        self.save_with_metadata(session_id, None, None, messages, grants)
     }
 
     /// Load a session transcript from disk. Returns `None` if the file doesn't exist.
@@ -190,6 +215,38 @@ impl SessionHistory {
         let file: SessionFile = serde_json::from_str(&data)
             .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
         Ok(Some(file.messages))
+    }
+
+    /// Load both messages and session-level grants from disk.
+    ///
+    /// Returns `None` if the session file doesn't exist; otherwise returns
+    /// `Some((messages, grants))`. Grants default to an empty `Vec` when
+    /// the on-disk file predates the field.
+    pub fn load_with_grants(
+        &self,
+        session_id: &str,
+    ) -> crab_core::Result<Option<(Vec<Message>, Vec<String>)>> {
+        let path = self.session_path(session_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = std::fs::read_to_string(&path)?;
+        let file: SessionFile = serde_json::from_str(&data)
+            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
+        Ok(Some((file.messages, file.grants)))
+    }
+
+    /// Load only the session-level grants. Returns an empty `Vec` when the
+    /// session file is missing or the grants field is absent.
+    pub fn load_grants(&self, session_id: &str) -> crab_core::Result<Vec<String>> {
+        let path = self.session_path(session_id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        let file: SessionFile = serde_json::from_str(&data)
+            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
+        Ok(file.grants)
     }
 
     /// List all saved session IDs (sorted by name).
@@ -329,6 +386,7 @@ impl SessionHistory {
                     name: None,
                     working_dir: None,
                     messages,
+                    grants: Vec::new(),
                 };
                 serde_json::to_string_pretty(&file)
                     .map_err(|e| crab_core::Error::Other(format!("export json: {e}")))?
@@ -1147,6 +1205,7 @@ mod tests {
                 Some("my feature"),
                 Some("/tmp/project"),
                 &[Message::user("hi")],
+                &[],
             )
             .unwrap();
 
@@ -1163,7 +1222,7 @@ mod tests {
         let history = SessionHistory::new(dir.path().to_path_buf());
 
         history
-            .save_with_metadata("s1", None, None, &[Message::user("hi")])
+            .save_with_metadata("s1", None, None, &[Message::user("hi")], &[])
             .unwrap();
 
         let data = std::fs::read_to_string(dir.path().join("s1.json")).unwrap();
@@ -1177,7 +1236,7 @@ mod tests {
         let history = SessionHistory::new(dir.path().to_path_buf());
 
         history
-            .save_with_metadata("s1", Some("bug fix"), None, &[Message::user("a")])
+            .save_with_metadata("s1", Some("bug fix"), None, &[Message::user("a")], &[])
             .unwrap();
         history
             .save("s2", &[Message::user("b"), Message::assistant("c")])
@@ -1209,7 +1268,13 @@ mod tests {
         let history = SessionHistory::new(dir.path().to_path_buf());
 
         history
-            .save_with_metadata("s1", Some("named"), Some("/proj"), &[Message::user("test")])
+            .save_with_metadata(
+                "s1",
+                Some("named"),
+                Some("/proj"),
+                &[Message::user("test")],
+                &[],
+            )
             .unwrap();
 
         let msgs = history.load("s1").unwrap().unwrap();
@@ -1231,6 +1296,82 @@ mod tests {
         let metas = history.list_sessions_with_metadata().unwrap();
         assert_eq!(metas.len(), 1);
         assert!(metas[0].name.is_none());
+    }
+
+    // ── Grants persistence tests ───────────────────────────────────
+
+    #[test]
+    fn save_with_grants_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        let grants = vec!["bash".to_string(), "edit".to_string()];
+        history
+            .save_with_grants("s1", &[Message::user("hi")], &grants)
+            .unwrap();
+
+        let (msgs, loaded_grants) = history.load_with_grants("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(loaded_grants, grants);
+    }
+
+    #[test]
+    fn load_grants_returns_empty_for_missing_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        assert!(history.load_grants("nope").unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_grants_returns_empty_for_legacy_file_without_grants_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_json = r#"{"session_id":"legacy","messages":[]}"#;
+        std::fs::write(dir.path().join("legacy.json"), legacy_json).unwrap();
+
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        assert!(history.load_grants("legacy").unwrap().is_empty());
+
+        // load_with_grants should also succeed and return empty grants.
+        let (msgs, grants) = history.load_with_grants("legacy").unwrap().unwrap();
+        assert!(msgs.is_empty());
+        assert!(grants.is_empty());
+    }
+
+    #[test]
+    fn save_preserves_existing_grants_when_no_grants_supplied() {
+        // Auto-save (which doesn't have grants in scope) must not wipe a
+        // previously persisted grants set — otherwise every turn would
+        // silently revoke the user's "always allow" decisions.
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        let initial = vec!["bash".to_string()];
+        history
+            .save_with_grants("s1", &[Message::user("first")], &initial)
+            .unwrap();
+
+        // Plain save: must not clobber the on-disk grants.
+        history
+            .save("s1", &[Message::user("first"), Message::assistant("ack")])
+            .unwrap();
+
+        let grants = history.load_grants("s1").unwrap();
+        assert_eq!(grants, initial);
+    }
+
+    #[test]
+    fn empty_grants_skipped_in_serialized_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+
+        history.save("s1", &[Message::user("hi")]).unwrap();
+
+        let data = std::fs::read_to_string(dir.path().join("s1.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            parsed.get("grants").is_none(),
+            "empty grants should be omitted from disk; got: {data}"
+        );
     }
 
     // ── JSONL tests ───────────────────────────────────────────────

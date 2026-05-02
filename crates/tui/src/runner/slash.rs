@@ -108,7 +108,7 @@ pub(super) enum SubmitOutcome {
 /// local-only effects (push system message, open overlay, compact, switch
 /// model, ...). Returns what the caller should do next.
 #[allow(clippy::too_many_lines)]
-pub(super) fn handle_submit(
+pub(super) async fn handle_submit(
     rt: &mut AgentRuntime,
     app: &mut App,
     command_registry: &CommandRegistry,
@@ -132,7 +132,9 @@ pub(super) fn handle_submit(
                 SubmitOutcome::Handled
             }
             CommandResult::Silent => SubmitOutcome::Handled,
-            CommandResult::Effect(effect) => apply_command_effect(rt, app, effect, session_id),
+            CommandResult::Effect(effect) => {
+                apply_command_effect(rt, app, effect, session_id).await
+            }
         };
     }
 
@@ -171,7 +173,7 @@ fn build_command_ctx<'a>(rt: &'a AgentRuntime, session_id: &'a str) -> CommandCo
 }
 
 /// Translate a [`CommandEffect`] into concrete state mutations.
-pub(super) fn apply_command_effect(
+pub(super) async fn apply_command_effect(
     rt: &mut AgentRuntime,
     app: &mut App,
     effect: CommandEffect,
@@ -191,13 +193,13 @@ pub(super) fn apply_command_effect(
         }
 
         CommandEffect::Compact => {
-            let (before, after, removed, _summary) = rt.compact_now();
+            let result = rt.compact_now().await;
             app.messages.push(crate::app::ChatMessage::CompactBoundary {
-                strategy: "heuristic-summarizer".into(),
-                after_tokens: after,
-                removed_messages: removed,
+                strategy: result.strategy,
+                after_tokens: result.after_tokens,
+                removed_messages: result.removed_messages,
             });
-            app.total_input_tokens = before;
+            app.total_input_tokens = result.before_tokens;
             app.total_output_tokens = 0;
             SubmitOutcome::Handled
         }

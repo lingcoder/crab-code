@@ -786,7 +786,7 @@ pub enum Event {
 
     // --- Permission interaction ---
     PermissionRequest { tool_name: String, input_summary: String, request_id: String },
-    PermissionResponse { request_id: String, allowed: bool },
+    PermissionResponse { request_id: String, allowed: bool, feedback: Option<String> },
 
     // --- Context compaction ---
     CompactStart { strategy: String, before_tokens: u64 },

@@ -10,7 +10,7 @@ use crab_core::event::Event;
 use crab_core::model::ModelId;
 use crab_core::permission::{PermissionMode, PermissionPolicy};
 use crab_tools::builtin::create_default_registry;
-use crab_tools::executor::PermissionHandler;
+use crab_tools::executor::{PermissionHandler, PermissionResult};
 
 use crate::args::{Cli, OutputFormat};
 #[cfg(feature = "tui")]
@@ -593,7 +593,7 @@ impl PermissionHandler for CliPermissionHandler {
         tool_name: &str,
         prompt: &str,
         tool_input: &Value,
-    ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = PermissionResult> + Send + '_>> {
         let line = format_cli_permission(tool_name, prompt, tool_input);
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
@@ -603,13 +603,17 @@ impl PermissionHandler for CliPermissionHandler {
                 let mut line = String::new();
                 if std::io::stdin().lock().read_line(&mut line).is_ok() {
                     let answer = line.trim().to_lowercase();
-                    answer == "y" || answer == "yes"
+                    let allowed = answer == "y" || answer == "yes";
+                    PermissionResult {
+                        allowed,
+                        feedback: None,
+                    }
                 } else {
-                    false
+                    PermissionResult::deny()
                 }
             })
             .await
-            .unwrap_or(false)
+            .unwrap_or_else(|_| PermissionResult::deny())
         })
     }
 }

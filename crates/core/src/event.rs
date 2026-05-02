@@ -79,7 +79,16 @@ pub enum Event {
     },
 
     /// User's response to a permission request.
-    PermissionResponse { request_id: String, allowed: bool },
+    ///
+    /// `feedback` carries an optional free-text note from the user (typically
+    /// only present on a deny) that downstream consumers forward to the
+    /// model so it can adjust its next move.
+    PermissionResponse {
+        request_id: String,
+        allowed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+    },
 
     // ─── Context compaction ───
     /// Context compaction has started.
@@ -425,11 +434,62 @@ mod tests {
         serde_roundtrip(&Event::PermissionResponse {
             request_id: "req_42".into(),
             allowed: true,
+            feedback: None,
         });
         serde_roundtrip(&Event::PermissionResponse {
             request_id: "req_43".into(),
             allowed: false,
+            feedback: None,
         });
+        serde_roundtrip(&Event::PermissionResponse {
+            request_id: "req_44".into(),
+            allowed: false,
+            feedback: Some("please ask before deleting files".into()),
+        });
+    }
+
+    #[test]
+    fn permission_response_feedback_omitted_when_none() {
+        // Round-trips that round-tripped before (no feedback) must keep
+        // the on-the-wire shape stable so older consumers don't see a new
+        // null field. `skip_serializing_if = Option::is_none` is what
+        // guarantees this.
+        let event = Event::PermissionResponse {
+            request_id: "req_50".into(),
+            allowed: true,
+            feedback: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("feedback"), "serialized form: {json}");
+    }
+
+    #[test]
+    fn permission_response_feedback_serialized_when_some() {
+        let event = Event::PermissionResponse {
+            request_id: "req_51".into(),
+            allowed: false,
+            feedback: Some("use Read tool instead".into()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"feedback\":\"use Read tool instead\""));
+    }
+
+    #[test]
+    fn permission_response_feedback_default_when_absent_from_input() {
+        let raw = r#"{"PermissionResponse":{"request_id":"req_60","allowed":true}}"#;
+        let event: Event = serde_json::from_str(raw).unwrap();
+        match event {
+            Event::PermissionResponse {
+                request_id,
+                allowed,
+                feedback,
+            } => {
+                assert_eq!(request_id, "req_60");
+                assert!(allowed);
+                assert!(feedback.is_none());
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 
     #[test]

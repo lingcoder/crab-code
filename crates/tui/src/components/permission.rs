@@ -27,6 +27,11 @@ pub enum PermissionKind {
     Bash {
         command: String,
         description: Option<String>,
+        /// `(label, color)` derived from `bash_classifier::classify_command`.
+        /// Surfaces the command's risk category as a badge above the
+        /// description so the user sees "dangerous" / "read-only" / etc.
+        /// before granting permission.
+        risk_badge: Option<(String, Color)>,
     },
     /// File edit operation.
     /// CC: `FileEditPermissionRequest` — title "Edit file", shows path + optional diff preview.
@@ -125,8 +130,28 @@ pub enum PermissionResponse {
     Allow,
     /// Deny this execution.
     Deny,
+    /// Deny this execution and pass a free-text note back to the model so it
+    /// can adjust its approach (e.g. "use Read instead of Bash cat").
+    DenyWithFeedback(String),
     /// Allow and remember (don't ask again for this tool/prefix in this session).
     AllowAlways,
+}
+
+impl PermissionResponse {
+    /// Whether this response allows the tool to run.
+    #[must_use]
+    pub fn is_allow(&self) -> bool {
+        matches!(self, Self::Allow | Self::AllowAlways)
+    }
+
+    /// Free-text feedback the user supplied alongside this response, if any.
+    #[must_use]
+    pub fn feedback(&self) -> Option<&str> {
+        match self {
+            Self::DenyWithFeedback(text) => Some(text.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// A single selectable option in the permission card.
@@ -153,6 +178,12 @@ pub struct PermissionCard {
     options: Vec<PermissionOption>,
     /// Currently highlighted option index.
     selected: usize,
+    /// Whether the card is currently capturing free-text feedback to attach
+    /// to a deny. Toggled by Tab. While true, options/shortcuts are inert
+    /// and key events go into `feedback_text`.
+    pub feedback_mode: bool,
+    /// Buffered feedback text the user is composing (visible in feedback mode).
+    pub feedback_text: String,
 }
 
 impl PermissionCard {
@@ -176,6 +207,8 @@ impl PermissionCard {
             request_id,
             options,
             selected: 0,
+            feedback_mode: false,
+            feedback_text: String::new(),
         }
     }
 
@@ -220,10 +253,27 @@ impl PermissionCard {
 
     /// Handle a key event. Returns `Some(response)` when the user confirms.
     ///
-    /// Navigation: Up/Down (vertical list, matching CC's `<Select>` component).
-    /// Shortcuts: y = Allow, n/Esc = Deny, a = `AllowAlways`.
+    /// Two modes drive the dispatch table:
+    ///
+    /// - **Decision mode** (default). Vertical navigation with Up/Down or
+    ///   j/k; Enter confirms the highlighted option; y/n/a/Esc are
+    ///   shortcuts. Tab enters feedback mode without producing a response.
+    /// - **Feedback mode** (`self.feedback_mode == true`). Printable chars
+    ///   append to `feedback_text`, Backspace pops one character, Esc
+    ///   cancels (clears the buffer and returns to decision mode), Enter
+    ///   submits a [`PermissionResponse::DenyWithFeedback`]. All other
+    ///   keys are inert so the input flow doesn't accidentally allow.
     pub fn handle_key(&mut self, code: KeyCode) -> Option<PermissionResponse> {
+        if self.feedback_mode {
+            return self.handle_feedback_key(code);
+        }
         match code {
+            // Tab toggles feedback mode — defer the decision until the user
+            // either submits feedback (Enter) or cancels (Esc).
+            KeyCode::Tab => {
+                self.feedback_mode = true;
+                None
+            }
             // Vertical navigation (CC uses Up/Down for Select)
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
@@ -253,6 +303,36 @@ impl PermissionCard {
                 } else {
                     Some(PermissionResponse::Allow)
                 }
+            }
+            _ => None,
+        }
+    }
+
+    /// Feedback-mode key handler. Splits out so `handle_key` stays scannable.
+    fn handle_feedback_key(&mut self, code: KeyCode) -> Option<PermissionResponse> {
+        match code {
+            KeyCode::Esc => {
+                self.feedback_mode = false;
+                self.feedback_text.clear();
+                None
+            }
+            KeyCode::Enter => {
+                let text = std::mem::take(&mut self.feedback_text);
+                self.feedback_mode = false;
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    Some(PermissionResponse::Deny)
+                } else {
+                    Some(PermissionResponse::DenyWithFeedback(trimmed.to_string()))
+                }
+            }
+            KeyCode::Backspace => {
+                self.feedback_text.pop();
+                None
+            }
+            KeyCode::Char(c) => {
+                self.feedback_text.push(c);
+                None
             }
             _ => None,
         }
@@ -298,44 +378,80 @@ impl PermissionCard {
         let content_lines = self.render_content(w);
         lines.extend(content_lines);
 
-        // ─── Blank line before options ───
+        // ─── Blank line before options / feedback area ───
         lines.push(Line::default());
 
-        // ─── Options (vertical select list) ───
-        for (i, opt) in self.options.iter().enumerate() {
-            let is_selected = i == self.selected;
-            let prefix = if is_selected { "  ▸ " } else { "    " };
-            let label_style = if is_selected {
-                Style::default()
-                    .fg(selected_color())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(label_color())
-            };
+        if self.feedback_mode {
+            lines.extend(self.render_feedback_area());
+        } else {
+            // ─── Options (vertical select list) ───
+            for (i, opt) in self.options.iter().enumerate() {
+                let is_selected = i == self.selected;
+                let prefix = if is_selected { "  ▸ " } else { "    " };
+                let label_style = if is_selected {
+                    Style::default()
+                        .fg(selected_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(label_color())
+                };
 
-            let mut spans = vec![
-                Span::styled(prefix, label_style),
-                Span::styled(opt.label.clone(), label_style),
-            ];
+                let mut spans = vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(opt.label.clone(), label_style),
+                ];
 
-            if let Some(hint) = opt.hint {
-                spans.push(Span::styled(
-                    format!("  ({hint})"),
-                    Style::default().fg(muted_color()),
-                ));
+                if let Some(hint) = opt.hint {
+                    spans.push(Span::styled(
+                        format!("  ({hint})"),
+                        Style::default().fg(muted_color()),
+                    ));
+                }
+
+                lines.push(Line::from(spans));
             }
-
-            lines.push(Line::from(spans));
         }
 
         // ─── Footer hint ───
         lines.push(Line::default());
+        let hint = if self.feedback_mode {
+            "  Enter to deny with feedback, Esc to cancel"
+        } else {
+            "  Esc to deny  ·  Tab to add feedback"
+        };
         lines.push(Line::from(Span::styled(
-            "  Esc to deny",
+            hint,
             Style::default().fg(muted_color()),
         )));
 
         lines
+    }
+
+    /// Render the inline feedback input area shown when `feedback_mode` is on.
+    /// Two lines: a prompt with the buffered text + cursor glyph, and a hint
+    /// describing how to commit or cancel.
+    fn render_feedback_area(&self) -> Vec<Line<'static>> {
+        let dim = Style::default().fg(muted_color());
+        let label_style = Style::default()
+            .fg(label_color())
+            .add_modifier(Modifier::BOLD);
+        let body = Style::default().fg(body_color());
+
+        let mut spans = vec![
+            Span::styled("  ", dim),
+            Span::styled("Feedback: ", label_style),
+            Span::styled(self.feedback_text.clone(), body),
+            // Block cursor glyph — visually distinct but doesn't depend on
+            // terminal cursor positioning, which is owned by the input box.
+            Span::styled("▎", Style::default().fg(selected_color())),
+        ];
+        if self.feedback_text.is_empty() {
+            spans.push(Span::styled(
+                "  (type a note for the model)",
+                Style::default().fg(muted_color()),
+            ));
+        }
+        vec![Line::from(spans)]
     }
 
     /// Render the per-tool-type content section.
@@ -351,6 +467,7 @@ impl PermissionCard {
             PermissionKind::Bash {
                 command,
                 description,
+                risk_badge,
             } => {
                 let mut lines = Vec::new();
                 let cmd_lines: Vec<&str> = command.lines().collect();
@@ -368,7 +485,20 @@ impl PermissionCard {
                         dim,
                     )));
                 }
-                if let Some(desc) = description
+                if let Some((label, color)) = risk_badge {
+                    let badge_style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
+                    let mut spans = vec![
+                        Span::styled("  [", dim),
+                        Span::styled(label.clone(), badge_style),
+                        Span::styled("]", dim),
+                    ];
+                    if let Some(desc) = description
+                        && !desc.is_empty()
+                    {
+                        spans.push(Span::styled(format!(" {desc}"), dim));
+                    }
+                    lines.push(Line::from(spans));
+                } else if let Some(desc) = description
                     && !desc.is_empty()
                 {
                     lines.push(Line::from(Span::styled(format!("  {desc}"), dim)));
@@ -482,13 +612,17 @@ impl Widget for &PermissionCard {
             return;
         }
 
-        // Split inner: content + spacer + options + footer
-        let option_count = self.options.len() as u16;
+        // Split inner: content + spacer + (options OR feedback) + footer
+        let middle_height = if self.feedback_mode {
+            1u16
+        } else {
+            self.options.len() as u16
+        };
         let chunks = Layout::vertical([
-            Constraint::Min(1),               // content
-            Constraint::Length(1),            // spacer
-            Constraint::Length(option_count), // options
-            Constraint::Length(1),            // footer hint
+            Constraint::Min(1),                // content
+            Constraint::Length(1),             // spacer
+            Constraint::Length(middle_height), // options OR feedback input
+            Constraint::Length(1),             // footer hint
         ])
         .split(inner);
 
@@ -510,47 +644,70 @@ impl Widget for &PermissionCard {
             );
         }
 
-        // Options (vertical select)
-        for (i, opt) in self.options.iter().enumerate() {
-            if i >= chunks[2].height as usize {
-                break;
+        if self.feedback_mode {
+            for (i, line) in self.render_feedback_area().iter().enumerate() {
+                if i >= chunks[2].height as usize {
+                    break;
+                }
+                Widget::render(
+                    line.clone(),
+                    Rect {
+                        x: chunks[2].x,
+                        y: chunks[2].y + i as u16,
+                        width: chunks[2].width,
+                        height: 1,
+                    },
+                    buf,
+                );
             }
-            let y = chunks[2].y + i as u16;
-            let is_selected = i == self.selected;
-            let prefix = if is_selected { " ▸ " } else { "   " };
-            let label_style = if is_selected {
-                Style::default()
-                    .fg(selected_color())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(label_color())
-            };
+        } else {
+            // Options (vertical select)
+            for (i, opt) in self.options.iter().enumerate() {
+                if i >= chunks[2].height as usize {
+                    break;
+                }
+                let y = chunks[2].y + i as u16;
+                let is_selected = i == self.selected;
+                let prefix = if is_selected { " ▸ " } else { "   " };
+                let label_style = if is_selected {
+                    Style::default()
+                        .fg(selected_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(label_color())
+                };
 
-            let mut spans = vec![
-                Span::styled(prefix, label_style),
-                Span::styled(&opt.label, label_style),
-            ];
-            if let Some(hint) = opt.hint {
-                spans.push(Span::styled(
-                    format!("  ({hint})"),
-                    Style::default().fg(muted_color()),
-                ));
+                let mut spans = vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(&opt.label, label_style),
+                ];
+                if let Some(hint) = opt.hint {
+                    spans.push(Span::styled(
+                        format!("  ({hint})"),
+                        Style::default().fg(muted_color()),
+                    ));
+                }
+
+                Widget::render(
+                    Line::from(spans),
+                    Rect {
+                        x: chunks[2].x,
+                        y,
+                        width: chunks[2].width,
+                        height: 1,
+                    },
+                    buf,
+                );
             }
-
-            Widget::render(
-                Line::from(spans),
-                Rect {
-                    x: chunks[2].x,
-                    y,
-                    width: chunks[2].width,
-                    height: 1,
-                },
-                buf,
-            );
         }
 
         // Footer hint
-        let hint = Paragraph::new("Esc to deny")
+        let hint_text = if self.feedback_mode {
+            "Enter to deny with feedback, Esc to cancel"
+        } else {
+            "Esc to deny  ·  Tab to add feedback"
+        };
+        let hint = Paragraph::new(hint_text)
             .style(Style::default().fg(muted_color()))
             .wrap(Wrap { trim: true });
         Widget::render(
@@ -591,9 +748,11 @@ fn classify_permission_kind(
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(String::from);
+            let risk_badge = Some(classify_bash_risk(&command));
             PermissionKind::Bash {
                 command,
                 description,
+                risk_badge,
             }
         }
         "edit" => {
@@ -851,6 +1010,31 @@ fn parse_mcp_tool_name(name: &str) -> Option<(String, String)> {
     Some((server.to_string(), tool.to_string()))
 }
 
+/// Map a bash command to a `(label, color)` risk badge by classifying it
+/// with `crab_tools::builtin::bash_classifier::classify_command`.
+///
+/// Reflects both the command's category and its `is_destructive` flag so
+/// that, for example, `rm -rf /tmp/x` shows as red "dangerous" even though
+/// its base category is `FileWrite`.
+fn classify_bash_risk(command: &str) -> (String, Color) {
+    use crab_tools::builtin::bash_classifier::{CommandCategory, classify_command};
+
+    let result = classify_command(command);
+    if result.category == CommandCategory::Dangerous || result.is_destructive {
+        return ("dangerous".to_string(), Color::Red);
+    }
+    match result.category {
+        CommandCategory::ReadOnly => ("read-only".to_string(), Color::Green),
+        CommandCategory::FileWrite => ("file-write".to_string(), Color::Yellow),
+        CommandCategory::GitOperation => ("git".to_string(), Color::Yellow),
+        CommandCategory::NetworkAccess => ("network".to_string(), Color::Yellow),
+        CommandCategory::ProcessControl => ("process".to_string(), Color::Yellow),
+        CommandCategory::PackageManager => ("package-mgr".to_string(), Color::Yellow),
+        CommandCategory::Dangerous => ("dangerous".to_string(), Color::Red),
+        CommandCategory::Unknown => ("unknown".to_string(), Color::DarkGray),
+    }
+}
+
 /// Extract domain from a URL for display.
 fn extract_domain(url: &str) -> String {
     url.strip_prefix("https://")
@@ -1016,8 +1200,140 @@ mod tests {
     #[test]
     fn unknown_key_returns_none() {
         let mut card = bash_card();
+        // Function keys are inert — they don't make a decision.
         assert_eq!(card.handle_key(KeyCode::F(1)), None);
+        // Tab no longer returns None as a fallthrough; it now toggles
+        // feedback mode (still without producing a response).
+        assert!(!card.feedback_mode);
         assert_eq!(card.handle_key(KeyCode::Tab), None);
+        assert!(card.feedback_mode);
+    }
+
+    // ── feedback-mode tests ──
+
+    #[test]
+    fn tab_enters_feedback_mode_without_decision() {
+        let mut card = bash_card();
+        assert!(!card.feedback_mode);
+        let response = card.handle_key(KeyCode::Tab);
+        assert_eq!(response, None);
+        assert!(card.feedback_mode);
+        assert!(card.feedback_text.is_empty());
+    }
+
+    #[test]
+    fn typing_in_feedback_mode_buffers_chars() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        for c in "use Read".chars() {
+            assert_eq!(card.handle_key(KeyCode::Char(c)), None);
+        }
+        assert_eq!(card.feedback_text, "use Read");
+        // Y/N/A do NOT short-circuit while in feedback mode — they're text.
+        assert_eq!(card.handle_key(KeyCode::Char('y')), None);
+        assert_eq!(card.feedback_text, "use Ready");
+    }
+
+    #[test]
+    fn backspace_in_feedback_mode_pops_one() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        for c in "abc".chars() {
+            card.handle_key(KeyCode::Char(c));
+        }
+        assert_eq!(card.feedback_text, "abc");
+        card.handle_key(KeyCode::Backspace);
+        assert_eq!(card.feedback_text, "ab");
+        // Pop past empty is a no-op, not a panic.
+        for _ in 0..5 {
+            card.handle_key(KeyCode::Backspace);
+        }
+        assert!(card.feedback_text.is_empty());
+    }
+
+    #[test]
+    fn esc_in_feedback_mode_cancels_and_clears_buffer() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        for c in "draft".chars() {
+            card.handle_key(KeyCode::Char(c));
+        }
+        let response = card.handle_key(KeyCode::Esc);
+        assert_eq!(response, None);
+        assert!(!card.feedback_mode);
+        assert!(card.feedback_text.is_empty());
+    }
+
+    #[test]
+    fn enter_in_feedback_mode_submits_deny_with_feedback() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        for c in "use Read instead".chars() {
+            card.handle_key(KeyCode::Char(c));
+        }
+        let response = card.handle_key(KeyCode::Enter);
+        assert_eq!(
+            response,
+            Some(PermissionResponse::DenyWithFeedback(
+                "use Read instead".into()
+            ))
+        );
+        assert!(!card.feedback_mode);
+        assert!(card.feedback_text.is_empty());
+    }
+
+    #[test]
+    fn enter_in_feedback_mode_with_empty_text_is_plain_deny() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        let response = card.handle_key(KeyCode::Enter);
+        assert_eq!(response, Some(PermissionResponse::Deny));
+        assert!(!card.feedback_mode);
+    }
+
+    #[test]
+    fn render_lines_in_feedback_mode_shows_input_prompt() {
+        let mut card = bash_card();
+        card.handle_key(KeyCode::Tab);
+        for c in "tighten the diff".chars() {
+            card.handle_key(KeyCode::Char(c));
+        }
+        let lines = card.render_lines(80);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(all_text.contains("Feedback: "));
+        assert!(all_text.contains("tighten the diff"));
+        assert!(all_text.contains("Enter to deny with feedback"));
+        // Decision-mode hint must be gone.
+        assert!(!all_text.contains("Yes, and don't ask again"));
+    }
+
+    #[test]
+    fn render_lines_decision_mode_hints_at_tab_for_feedback() {
+        let card = bash_card();
+        let lines = card.render_lines(80);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(all_text.contains("Tab to add feedback"));
+    }
+
+    #[test]
+    fn permission_response_helpers_are_consistent() {
+        assert!(PermissionResponse::Allow.is_allow());
+        assert!(PermissionResponse::AllowAlways.is_allow());
+        assert!(!PermissionResponse::Deny.is_allow());
+        assert!(!PermissionResponse::DenyWithFeedback("x".into()).is_allow());
+
+        assert_eq!(PermissionResponse::Allow.feedback(), None);
+        assert_eq!(PermissionResponse::Deny.feedback(), None);
+        assert_eq!(
+            PermissionResponse::DenyWithFeedback("note".into()).feedback(),
+            Some("note")
+        );
     }
 
     #[test]
@@ -1190,6 +1506,8 @@ mod tests {
             request_id: "req_diff".into(),
             options,
             selected: 0,
+            feedback_mode: false,
+            feedback_text: String::new(),
         };
         let lines = card.render_lines(80);
         let all_text: String = lines
@@ -1294,12 +1612,67 @@ mod tests {
         let PermissionKind::Bash {
             command,
             description,
+            ..
         } = kind
         else {
             panic!("expected Bash kind");
         };
         assert_eq!(command, "echo from-json");
         assert_eq!(description.as_deref(), Some("say hi"));
+    }
+
+    #[test]
+    fn bash_kind_carries_risk_badge() {
+        let input = serde_json::json!({"command": "ls -la"});
+        let kind = classify_permission_kind("bash", "ls -la", &input);
+        let PermissionKind::Bash { risk_badge, .. } = kind else {
+            panic!("expected Bash kind");
+        };
+        let (label, color) = risk_badge.expect("ls should produce a badge");
+        assert_eq!(label, "read-only");
+        assert_eq!(color, Color::Green);
+    }
+
+    #[test]
+    fn bash_dangerous_command_gets_red_badge() {
+        let input = serde_json::json!({"command": "rm -rf /"});
+        let kind = classify_permission_kind("bash", "rm -rf /", &input);
+        let PermissionKind::Bash { risk_badge, .. } = kind else {
+            panic!("expected Bash kind");
+        };
+        let (label, color) = risk_badge.expect("dangerous cmd should produce a badge");
+        assert_eq!(label, "dangerous");
+        assert_eq!(color, Color::Red);
+    }
+
+    #[test]
+    fn bash_destructive_rm_gets_dangerous_label_even_when_filewrite() {
+        // `rm file.txt` is FileWrite category but is_destructive=true,
+        // so the badge should escalate to "dangerous".
+        let input = serde_json::json!({"command": "rm file.txt"});
+        let kind = classify_permission_kind("bash", "rm file.txt", &input);
+        let PermissionKind::Bash { risk_badge, .. } = kind else {
+            panic!("expected Bash kind");
+        };
+        let (label, color) = risk_badge.expect("rm should produce a badge");
+        assert_eq!(label, "dangerous");
+        assert_eq!(color, Color::Red);
+    }
+
+    #[test]
+    fn bash_render_includes_badge_label() {
+        let input = serde_json::json!({"command": "git status", "description": "list changes"});
+        let card = PermissionCard::from_event("bash", "git status", "req_badge".into(), &input);
+        let lines = card.render_lines(80);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            all_text.contains("[read-only]"),
+            "expected badge in: {all_text}"
+        );
+        assert!(all_text.contains("list changes"));
     }
 
     #[test]

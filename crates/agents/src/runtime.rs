@@ -13,12 +13,12 @@ use crab_core::tool::ToolContext;
 use crab_engine::QueryConfig;
 use crab_mcp::McpManager;
 use crab_session::{
-    CompactionConfig, Conversation, CostAccumulator, MemoryStore, SessionHistory, SessionMetadata,
-    expand_at_mentions,
+    CompactionClient, CompactionConfig, Conversation, CostAccumulator, MemoryStore, SessionHistory,
+    SessionMetadata, compact_with_config, expand_at_mentions,
 };
 use crab_skills::SkillRegistry;
 use crab_tools::builtin::create_default_registry;
-use crab_tools::executor::{PermissionHandler, ToolExecutor};
+use crab_tools::executor::{PermissionHandler, PermissionResult, ToolExecutor};
 use crab_tools::registry::ToolRegistry;
 
 use crate::SessionConfig;
@@ -29,7 +29,14 @@ pub struct RuntimeInitConfig {
     pub mcp_servers: Option<serde_json::Value>,
     pub skill_dirs: Vec<PathBuf>,
     pub perm_event_tx: mpsc::Sender<Event>,
-    pub perm_resp_rx: mpsc::UnboundedReceiver<(String, bool)>,
+    /// Permission response channel — `(request_id, allowed, feedback)`.
+    /// `feedback` carries an optional free-text note from the user (typically
+    /// only on a deny) that the executor surfaces to the model.
+    pub perm_resp_rx: mpsc::UnboundedReceiver<(String, bool, Option<String>)>,
+    /// Optional LLM backend used to drive `/compact` and any other
+    /// summary-style sidequeries that need a real model. When `None`,
+    /// the runtime falls back to the deterministic heuristic summariser.
+    pub backend: Option<Arc<crab_api::LlmBackend>>,
 }
 
 /// Data returned alongside an [`AgentRuntime`] from [`AgentRuntime::init`].
@@ -37,6 +44,11 @@ pub struct RuntimeInitMeta {
     pub tool_registry: Arc<ToolRegistry>,
     pub sidebar_entries: Vec<SessionMetadata>,
     pub mcp_failures: Vec<String>,
+    /// Session-level grants loaded from a resumed session (empty for new
+    /// sessions or when no `resume_session_id` was supplied). The TUI
+    /// rehydrates `app.session_grants` from this so users aren't
+    /// re-prompted for tools they already granted in the prior run.
+    pub resumed_grants: Vec<String>,
 }
 
 /// Result returned when a spawned query task completes.
@@ -70,6 +82,12 @@ pub struct AgentRuntime {
     cost: CostAccumulator,
     memory_dir: Option<PathBuf>,
     team_coordinator: crate::teams::coordinator::TeamCoordinator,
+    /// LLM-backed compaction client. `None` when no backend was wired in
+    /// at init time — `compact_now` then falls back to the heuristic
+    /// summariser.
+    compaction_client: Option<Arc<dyn CompactionClient>>,
+    /// Compaction policy passed to [`compact_with_config`] for `/compact`.
+    compaction_config: CompactionConfig,
 }
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
@@ -81,6 +99,21 @@ pub struct AgentRuntime {
 pub struct TeamSnapshot {
     /// All teammates currently tracked by the in-process backend.
     pub members: Vec<TeamMemberSnapshot>,
+}
+
+/// Outcome of [`AgentRuntime::compact_now`], used by the TUI to render the
+/// compact-boundary cell.
+#[derive(Debug, Clone)]
+pub struct CompactNowResult {
+    /// Estimated conversation tokens before compaction.
+    pub before_tokens: u64,
+    /// Estimated conversation tokens after compaction.
+    pub after_tokens: u64,
+    /// Number of messages dropped or rewritten.
+    pub removed_messages: usize,
+    /// Short label identifying which strategy actually ran (e.g.
+    /// `"llm-summarize"`, `"heuristic-summarizer"`).
+    pub strategy: String,
 }
 
 /// One row in [`TeamSnapshot::members`].
@@ -181,14 +214,18 @@ impl AgentRuntime {
             config.session_config.context_window,
         );
 
-        if let Some(ref resume_id) = config.session_config.resume_session_id
+        let resumed_grants = if let Some(ref resume_id) =
+            config.session_config.resume_session_id
             && let Some(ref history) = session_history
-            && let Ok(Some(messages)) = history.load(resume_id)
+            && let Ok(Some((messages, grants))) = history.load_with_grants(resume_id)
         {
             for msg in messages {
                 conversation.push(msg);
             }
-        }
+            grants
+        } else {
+            Vec::new()
+        };
 
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
@@ -198,6 +235,16 @@ impl AgentRuntime {
             permission_policy: config.session_config.permission_policy,
             ext: crab_core::tool::ToolContextExt::default(),
         };
+
+        let compaction_config = CompactionConfig::default();
+        let compaction_client: Option<Arc<dyn CompactionClient>> =
+            config.backend.as_ref().map(|backend| {
+                let client = crate::llm_compaction_client::LlmCompactionClient::new(
+                    Arc::clone(backend),
+                    config.session_config.model.clone(),
+                );
+                Arc::new(client) as Arc<dyn CompactionClient>
+            });
 
         let loop_config = QueryConfig {
             model: config.session_config.model.clone(),
@@ -213,8 +260,8 @@ impl AgentRuntime {
             fallback_model: config.session_config.fallback_model.map(ModelId::from),
             plan_model: None,
             source: crab_core::query::QuerySource::Repl,
-            compaction_client: None,
-            compaction_config: CompactionConfig::default(),
+            compaction_client: compaction_client.clone(),
+            compaction_config: compaction_config.clone(),
             session_persister: None,
         };
 
@@ -253,12 +300,15 @@ impl AgentRuntime {
             cost: CostAccumulator::default(),
             memory_dir,
             team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
+            compaction_client,
+            compaction_config,
         };
 
         let meta = RuntimeInitMeta {
             tool_registry: registry,
             sidebar_entries,
             mcp_failures,
+            resumed_grants,
         };
 
         (runtime, meta)
@@ -386,17 +436,35 @@ impl AgentRuntime {
 
     // ── Manual compaction ───────────────────────────────────────────────
 
-    /// Run the heuristic summarizer in place, replacing the conversation
-    /// with a single summary user-message.
+    /// Result of a `/compact` invocation, used by the TUI to render the
+    /// compact-boundary cell without needing an engine-side event round-trip.
     ///
-    /// Returns `(before_tokens, after_tokens, removed_messages, summary)` so
-    /// the caller can render a compact-boundary cell without needing an
-    /// engine-side event round-trip. The summarizer is LLM-free and
-    /// deterministic; cost/model/window state are preserved.
-    pub fn compact_now(&mut self) -> (u64, u64, usize, crate::summarizer::ConversationSummary) {
+    /// `strategy` is a short label (e.g. `"llm-summarize"`,
+    /// `"heuristic-summarizer"`) suitable for direct display.
+    pub async fn compact_now(&mut self) -> CompactNowResult {
         let before_tokens = self.conversation.estimated_tokens();
         let before_count = self.conversation.len();
 
+        // Prefer the LLM-driven path when a backend is available.
+        if let Some(client) = self.compaction_client.as_deref() {
+            match compact_with_config(&mut self.conversation, &self.compaction_config, client).await
+            {
+                Ok(report) => {
+                    let strategy = format!("llm-{:?}", report.strategy_used).to_lowercase();
+                    return CompactNowResult {
+                        before_tokens: report.tokens_before,
+                        after_tokens: report.tokens_after,
+                        removed_messages: report.messages_removed(),
+                        strategy,
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "LLM compaction failed; falling back to heuristic");
+                }
+            }
+        }
+
+        // Fallback: deterministic heuristic summariser, no network calls.
         let summary = crate::summarizer::summarize_conversation(
             self.conversation.messages(),
             &crate::summarizer::SummarizerConfig::default(),
@@ -411,7 +479,12 @@ impl AgentRuntime {
 
         let after_tokens = self.conversation.estimated_tokens();
         let removed = before_count.saturating_sub(self.conversation.len());
-        (before_tokens, after_tokens, removed, summary)
+        CompactNowResult {
+            before_tokens,
+            after_tokens,
+            removed_messages: removed,
+            strategy: "heuristic-summarizer".to_string(),
+        }
     }
 
     // ── Slash command dispatch ──────────────────────────────────────────
@@ -579,8 +652,32 @@ impl AgentRuntime {
         }
     }
 
+    /// Save the current conversation along with session-level grants.
+    ///
+    /// Used by the TUI runner so the user's "always allow" decisions
+    /// survive `/exit` and resume.
+    pub fn save_session_with_grants(&self, session_id: &str, grants: &[String]) {
+        if let Some(ref history) = self.session_history
+            && let Err(e) =
+                history.save_with_grants(session_id, self.conversation.messages(), grants)
+        {
+            tracing::warn!(error = %e, "session save (with grants) failed");
+        }
+    }
+
     pub fn session_history(&self) -> Option<&SessionHistory> {
         self.session_history.as_ref()
+    }
+
+    /// Load only the grants for a session id (e.g. for `--continue` /
+    /// startup rehydration where the conversation was loaded via a
+    /// different path). Returns an empty `Vec` if there are none or no
+    /// session history is configured.
+    pub fn load_session_grants(&self, session_id: &str) -> Vec<String> {
+        self.session_history
+            .as_ref()
+            .and_then(|h| h.load_grants(session_id).ok())
+            .unwrap_or_default()
     }
 
     /// Reset conversation for a new session.
@@ -616,6 +713,36 @@ impl AgentRuntime {
         }
     }
 
+    /// Switch sessions while preserving session-level grants.
+    ///
+    /// Saves the outgoing session's grants alongside its messages, then
+    /// loads both messages and grants for the target. Returns the loaded
+    /// grants on success so the TUI can rehydrate its in-memory set.
+    /// Returns `None` if the target session does not exist.
+    pub fn switch_session_with_grants(
+        &mut self,
+        session_id: &str,
+        outgoing_grants: &[String],
+        target_id: &str,
+    ) -> Option<Vec<String>> {
+        let history = self.session_history.as_ref()?;
+        let _ = history.save_with_grants(session_id, self.conversation.messages(), outgoing_grants);
+        match history.load_with_grants(target_id) {
+            Ok(Some((messages, grants))) => {
+                self.conversation = Conversation::new(
+                    target_id.to_string(),
+                    self.conversation.system_prompt.clone(),
+                    self.conversation.context_window,
+                );
+                for msg in messages {
+                    self.conversation.push(msg);
+                }
+                Some(grants)
+            }
+            _ => None,
+        }
+    }
+
     // ── Input expansion ─────────────────────────────────────────────────
 
     /// Expand `@file` mentions in user input.
@@ -632,10 +759,13 @@ impl AgentRuntime {
 /// Channel-based permission handler wired to the TUI event system.
 ///
 /// When a tool needs permission, sends `Event::PermissionRequest` through
-/// the channel and waits for a response.
+/// the channel and waits for a response. The response carries an optional
+/// free-text feedback note that the executor surfaces back to the model.
+type PermissionResponseRx = mpsc::UnboundedReceiver<(String, bool, Option<String>)>;
+
 struct ChannelPermissionHandler {
     event_tx: mpsc::Sender<Event>,
-    response_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(String, bool)>>>,
+    response_rx: Arc<tokio::sync::Mutex<PermissionResponseRx>>,
 }
 
 impl PermissionHandler for ChannelPermissionHandler {
@@ -644,7 +774,7 @@ impl PermissionHandler for ChannelPermissionHandler {
         tool_name: &str,
         prompt: &str,
         tool_input: &serde_json::Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionResult> + Send + '_>> {
         let tool_name = tool_name.to_string();
         let prompt = prompt.to_string();
         let tool_input = tool_input.clone();
@@ -663,12 +793,12 @@ impl PermissionHandler for ChannelPermissionHandler {
                 .await;
 
             let mut rx = response_rx.lock().await;
-            while let Some((id, allowed)) = rx.recv().await {
+            while let Some((id, allowed, feedback)) = rx.recv().await {
                 if id == request_id {
-                    return allowed;
+                    return PermissionResult { allowed, feedback };
                 }
             }
-            false
+            PermissionResult::deny()
         })
     }
 }

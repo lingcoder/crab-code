@@ -16,6 +16,7 @@ crab-config.workspace = true
 crab-agents.workspace = true
 crab-commands.workspace = true
 crab-memory.workspace = true
+crab-tools.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 syntect.workspace = true

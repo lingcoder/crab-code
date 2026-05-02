@@ -705,10 +705,8 @@ impl App {
         });
 
         if let Some((request_id, response)) = self.approval_queue.handle_key(key.code) {
-            let allowed = matches!(
-                response,
-                PermissionResponse::Allow | PermissionResponse::AllowAlways
-            );
+            let allowed = response.is_allow();
+            let feedback = response.feedback().map(str::to_string);
             if response == PermissionResponse::AllowAlways
                 && let Some((ref grant_name, _)) = current_info
             {
@@ -733,6 +731,11 @@ impl App {
                     summary,
                     display,
                 });
+                if let Some(ref note) = feedback {
+                    self.messages.push(ChatMessage::User {
+                        text: format!("(feedback) {note}"),
+                    });
+                }
             }
             if self.approval_queue.is_empty() {
                 self.state = AppState::Processing;
@@ -743,6 +746,7 @@ impl App {
             return AppAction::PermissionResponse {
                 request_id,
                 allowed,
+                feedback,
             };
         }
         AppAction::None
@@ -1131,6 +1135,7 @@ impl App {
                     AppAction::PermissionResponse {
                         request_id,
                         allowed: true,
+                        feedback: None,
                     }
                 } else {
                     self.spinner.pause();

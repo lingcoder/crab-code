@@ -52,6 +52,15 @@ pub fn apply_result_budget(output: ToolOutput, max_chars: usize, tool_use_id: &s
 /// Canonical reject text. Fixed phrasing primes the model to stop and wait for instructions.
 const REJECT_MESSAGE: &str = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
 
+/// Build the canonical rejection message, optionally appended with the
+/// user's free-text feedback so the model can adjust its next move.
+fn reject_message_with_feedback(feedback: Option<&str>) -> String {
+    match feedback.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(text) => format!("{REJECT_MESSAGE}\n\nUser feedback: {text}"),
+        None => REJECT_MESSAGE.to_string(),
+    }
+}
+
 /// A channel sender for streaming incremental tool output (e.g. bash stdout lines).
 #[derive(Clone)]
 pub struct StreamingOutput {
@@ -74,6 +83,53 @@ impl StreamingOutput {
     }
 }
 
+/// Outcome of a permission prompt.
+///
+/// `allowed` is the decision; `feedback` is an optional free-text note
+/// supplied by the user (typically only set when `allowed = false`) that
+/// the executor will surface to the model so it can adjust its approach.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PermissionResult {
+    pub allowed: bool,
+    pub feedback: Option<String>,
+}
+
+impl PermissionResult {
+    /// Allow the tool to run with no feedback.
+    #[must_use]
+    pub fn allow() -> Self {
+        Self {
+            allowed: true,
+            feedback: None,
+        }
+    }
+
+    /// Deny the tool with no feedback.
+    #[must_use]
+    pub fn deny() -> Self {
+        Self {
+            allowed: false,
+            feedback: None,
+        }
+    }
+
+    /// Deny the tool and attach a free-text note for the model.
+    #[must_use]
+    pub fn deny_with_feedback(feedback: impl Into<String>) -> Self {
+        let text = feedback.into();
+        let trimmed = text.trim();
+        let feedback = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        Self {
+            allowed: false,
+            feedback,
+        }
+    }
+}
+
 /// Callback trait for handling permission prompts.
 ///
 /// Implementations decide how to ask the user for confirmation (CLI stdin,
@@ -84,14 +140,15 @@ pub trait PermissionHandler: Send + Sync {
     /// `tool_name` is the tool being invoked, `prompt` is the human-readable
     /// question, and `tool_input` is the raw JSON input — handlers can use
     /// it to render richer prompts (e.g. show the full bash command, the
-    /// edit diff, or the write target). Returns `true` to allow, `false`
-    /// to deny.
+    /// edit diff, or the write target). Returns a [`PermissionResult`]
+    /// carrying the allow/deny decision and an optional user-supplied
+    /// feedback note.
     fn ask_permission(
         &self,
         tool_name: &str,
         prompt: &str,
         tool_input: &serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = PermissionResult> + Send + '_>>;
 }
 
 /// Unified tool executor with permission checks.
@@ -163,11 +220,13 @@ impl ToolExecutor {
             PermissionDecision::Deny(reason) => Ok(ToolOutput::error(reason)),
             PermissionDecision::AskUser(prompt) => {
                 if let Some(handler) = &self.permission_handler {
-                    let allowed = handler.ask_permission(tool_name, &prompt, &input).await;
-                    if allowed {
+                    let result = handler.ask_permission(tool_name, &prompt, &input).await;
+                    if result.allowed {
                         tool.execute(input, ctx).await
                     } else {
-                        Ok(ToolOutput::error(REJECT_MESSAGE.to_string()))
+                        Ok(ToolOutput::error(reject_message_with_feedback(
+                            result.feedback.as_deref(),
+                        )))
                     }
                 } else {
                     // No handler installed — auto-allow (development fallback)
@@ -219,10 +278,13 @@ impl ToolExecutor {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Deny(reason) => return Ok(ToolOutput::error(reason)),
                 PermissionDecision::AskUser(prompt) => {
-                    if let Some(handler) = &permission_handler
-                        && !handler.ask_permission(&tool_name, &prompt, &input).await
-                    {
-                        return Ok(ToolOutput::error(REJECT_MESSAGE.to_string()));
+                    if let Some(handler) = &permission_handler {
+                        let result = handler.ask_permission(&tool_name, &prompt, &input).await;
+                        if !result.allowed {
+                            return Ok(ToolOutput::error(reject_message_with_feedback(
+                                result.feedback.as_deref(),
+                            )));
+                        }
                     }
                 }
             }
@@ -383,8 +445,22 @@ mod tests {
             _tool_name: &str,
             _prompt: &str,
             _tool_input: &serde_json::Value,
-        ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
-            Box::pin(async { false })
+        ) -> Pin<Box<dyn Future<Output = PermissionResult> + Send + '_>> {
+            Box::pin(async { PermissionResult::deny() })
+        }
+    }
+
+    /// A handler that denies and attaches a fixed feedback string.
+    struct DenyWithFeedback(&'static str);
+    impl PermissionHandler for DenyWithFeedback {
+        fn ask_permission(
+            &self,
+            _tool_name: &str,
+            _prompt: &str,
+            _tool_input: &serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = PermissionResult> + Send + '_>> {
+            let feedback = self.0;
+            Box::pin(async move { PermissionResult::deny_with_feedback(feedback) })
         }
     }
 
@@ -551,6 +627,75 @@ mod tests {
         assert_eq!(on_disk, big);
         // Cleanup
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn ask_user_denied_with_feedback_appends_feedback_to_reject_message() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(MutatingTool));
+        let mut executor = ToolExecutor::new(Arc::new(reg));
+        executor.set_permission_handler(Arc::new(DenyWithFeedback("use Read instead")));
+
+        let ctx = make_ctx(PermissionMode::Default);
+        let output = executor
+            .execute("mutating", serde_json::json!({}), &ctx)
+            .await
+            .unwrap();
+
+        assert!(output.is_error);
+        let text = output.text();
+        assert!(text.contains(REJECT_MESSAGE));
+        assert!(text.contains("User feedback: use Read instead"));
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_ask_user_denied_with_feedback_appends_feedback() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(MutatingTool));
+        let mut executor = ToolExecutor::new(Arc::new(reg));
+        executor.set_permission_handler(Arc::new(DenyWithFeedback("try a smaller diff")));
+
+        let ctx = make_ctx(PermissionMode::Default);
+        let (_rx, handle) = executor.execute_streaming("mutating", serde_json::json!({}), &ctx);
+        let output = handle.await.unwrap().unwrap();
+
+        assert!(output.is_error);
+        let text = output.text();
+        assert!(text.contains(REJECT_MESSAGE));
+        assert!(text.contains("User feedback: try a smaller diff"));
+    }
+
+    #[test]
+    fn permission_result_helpers_normalize_feedback() {
+        let allow = PermissionResult::allow();
+        assert!(allow.allowed);
+        assert_eq!(allow.feedback, None);
+
+        let deny = PermissionResult::deny();
+        assert!(!deny.allowed);
+        assert_eq!(deny.feedback, None);
+
+        let with = PermissionResult::deny_with_feedback("  please don't  ");
+        assert!(!with.allowed);
+        assert_eq!(with.feedback.as_deref(), Some("please don't"));
+
+        let blank = PermissionResult::deny_with_feedback("   \n\t  ");
+        assert!(!blank.allowed);
+        assert_eq!(blank.feedback, None);
+    }
+
+    #[test]
+    fn reject_message_with_feedback_appends_when_present() {
+        let plain = reject_message_with_feedback(None);
+        assert_eq!(plain, REJECT_MESSAGE);
+        assert!(!plain.contains("User feedback"));
+
+        let with = reject_message_with_feedback(Some("be more careful"));
+        assert!(with.starts_with(REJECT_MESSAGE));
+        assert!(with.contains("\n\nUser feedback: be more careful"));
+
+        let blank = reject_message_with_feedback(Some("   "));
+        assert_eq!(blank, REJECT_MESSAGE);
     }
 
     #[tokio::test]

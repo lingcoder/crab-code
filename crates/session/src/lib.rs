@@ -5,6 +5,7 @@ pub mod conversation;
 pub mod cost;
 pub mod history;
 pub mod input_expand;
+pub mod llm_compaction_client;
 pub mod memory;
 pub mod memory_extract;
 pub mod micro_compact;
@@ -29,6 +30,7 @@ pub use history::{
     SessionPersister, SessionStats,
 };
 pub use input_expand::expand_at_mentions;
+pub use llm_compaction_client::NullCompactionClient;
 pub use memory::{IndexEntry, MemoryFile, MemoryIndex, MemoryStore};
 pub use snip_compact::SnipConfig;
 pub use telemetry::logs::SessionRecorder;

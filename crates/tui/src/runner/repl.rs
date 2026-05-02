@@ -39,7 +39,7 @@ pub(super) async fn run_loop(
     backend: Arc<LlmBackend>,
     event_tx: mpsc::Sender<Event>,
     tagged_tx: mpsc::UnboundedSender<(u64, Event)>,
-    perm_resp_tx: mpsc::UnboundedSender<(String, bool)>,
+    perm_resp_tx: mpsc::UnboundedSender<(String, bool, Option<String>)>,
     session_id: &str,
     event_broker: Arc<EventBroker>,
     frame_requester: FrameRequester,
@@ -92,6 +92,10 @@ pub(super) async fn run_loop(
                     app.session_sidebar.set_sessions(to_sidebar_entries(&meta.sidebar_entries));
                     for name in &meta.mcp_failures {
                         app.notifications.warn(format!("MCP server '{name}' failed to connect"));
+                    }
+                    if !meta.resumed_grants.is_empty() {
+                        app.session_grants =
+                            meta.resumed_grants.iter().cloned().collect();
                     }
                     app.state = crate::app::AppState::Idle;
 
@@ -153,7 +157,9 @@ pub(super) async fn run_loop(
                             // needing to reach back into the runtime
                             // from the render thread.
                             app.team_snapshot = rt.team_snapshot();
-                            rt.save_session(session_id);
+                            let grants: Vec<String> =
+                                app.session_grants.iter().cloned().collect();
+                            rt.save_session_with_grants(session_id, &grants);
                         }
                         Err(_) => {
                             let _ = event_tx.send(Event::Error {
@@ -163,7 +169,7 @@ pub(super) async fn run_loop(
                     }
 
                     if let Some(queued_text) = app.dequeue_command() {
-                        match handle_submit(rt, app, &slash_registry, &queued_text, session_id) {
+                        match handle_submit(rt, app, &slash_registry, &queued_text, session_id).await {
                             SubmitOutcome::SpawnQuery(prompt) => {
                                 cancel = tokio_util::sync::CancellationToken::new();
                                 rt.tool_ctx_mut().cancellation_token = cancel.clone();
@@ -200,7 +206,9 @@ pub(super) async fn run_loop(
                                         Some(std::path::Path::new(&app.working_dir))
                                     },
                                 );
-                                rt.save_session(session_id);
+                                let grants: Vec<String> =
+                                    app.session_grants.iter().cloned().collect();
+                                rt.save_session_with_grants(session_id, &grants);
                                 app.should_quit = true;
                             }
                         }
@@ -292,7 +300,8 @@ pub(super) async fn run_loop(
                             Some(std::path::Path::new(working_dir))
                         },
                     );
-                    rt.save_session(session_id);
+                    let grants: Vec<String> = app.session_grants.iter().cloned().collect();
+                    rt.save_session_with_grants(session_id, &grants);
                 }
                 break;
             }
@@ -301,7 +310,7 @@ pub(super) async fn run_loop(
                     continue;
                 };
 
-                match handle_submit(rt, app, &slash_registry, &text, session_id) {
+                match handle_submit(rt, app, &slash_registry, &text, session_id).await {
                     SubmitOutcome::SpawnQuery(prompt) => {
                         cancel = tokio_util::sync::CancellationToken::new();
                         rt.tool_ctx_mut().cancellation_token = cancel.clone();
@@ -328,7 +337,8 @@ pub(super) async fn run_loop(
                                 Some(std::path::Path::new(&app.working_dir))
                             },
                         );
-                        rt.save_session(session_id);
+                        let grants: Vec<String> = app.session_grants.iter().cloned().collect();
+                        rt.save_session_with_grants(session_id, &grants);
                         break;
                     }
                 }
@@ -336,12 +346,13 @@ pub(super) async fn run_loop(
             AppAction::PermissionResponse {
                 request_id,
                 allowed,
+                feedback,
             } => {
-                let _ = perm_resp_tx.send((request_id, allowed));
+                let _ = perm_resp_tx.send((request_id, allowed, feedback));
             }
             AppAction::InterruptPermissions { rejected_ids } => {
                 for id in rejected_ids {
-                    let _ = perm_resp_tx.send((id, false));
+                    let _ = perm_resp_tx.send((id, false, None));
                 }
                 cancel.cancel();
             }
@@ -350,16 +361,21 @@ pub(super) async fn run_loop(
             }
             AppAction::NewSession => {
                 if let Some(ref mut rt) = state {
-                    rt.save_session(session_id);
+                    let grants: Vec<String> = app.session_grants.iter().cloned().collect();
+                    rt.save_session_with_grants(session_id, &grants);
                     rt.new_session(session_id);
                 }
                 app.reset_for_new_session();
             }
             AppAction::SwitchSession(target_id) => {
-                if let Some(ref mut rt) = state
-                    && rt.switch_session(session_id, &target_id)
-                {
-                    app.load_session_messages(rt.conversation());
+                if let Some(ref mut rt) = state {
+                    let outgoing: Vec<String> = app.session_grants.iter().cloned().collect();
+                    if let Some(loaded_grants) =
+                        rt.switch_session_with_grants(session_id, &outgoing, &target_id)
+                    {
+                        app.load_session_messages(rt.conversation());
+                        app.session_grants = loaded_grants.into_iter().collect();
+                    }
                 }
             }
             AppAction::ExternalEditor(initial_text) => {

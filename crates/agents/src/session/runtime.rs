@@ -177,6 +177,12 @@ impl AgentSession {
             ext: crab_core::tool::ToolContextExt::default(),
         };
 
+        let compaction_client: Arc<dyn crab_session::CompactionClient> =
+            Arc::new(crate::llm_compaction_client::LlmCompactionClient::new(
+                Arc::clone(&backend),
+                session_config.model.clone(),
+            ));
+
         let config = QueryConfig {
             model: session_config.model,
             max_tokens: session_config.max_tokens,
@@ -194,7 +200,7 @@ impl AgentSession {
             fallback_model: session_config.fallback_model.map(ModelId::from),
             plan_model: None,
             source: crab_core::query::QuerySource::Repl,
-            compaction_client: None,
+            compaction_client: Some(compaction_client),
             compaction_config: crab_session::CompactionConfig::default(),
             session_persister: None,
         };

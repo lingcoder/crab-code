@@ -301,11 +301,20 @@ pub fn event_to_json(event: &Event) -> Option<Value> {
         Event::PermissionResponse {
             request_id,
             allowed,
-        } => Some(json!({
-            "type": "permission_response",
-            "request_id": request_id,
-            "allowed": allowed,
-        })),
+            feedback,
+        } => {
+            let mut obj = json!({
+                "type": "permission_response",
+                "request_id": request_id,
+                "allowed": allowed,
+            });
+            if let Some(text) = feedback {
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert("feedback".into(), Value::String(text.clone()));
+            }
+            Some(obj)
+        }
         Event::MemoryLoaded { count } => Some(json!({
             "type": "memory_loaded",
             "count": count,
@@ -490,6 +499,12 @@ mod tests {
             Event::PermissionResponse {
                 request_id: "r".into(),
                 allowed: true,
+                feedback: None,
+            },
+            Event::PermissionResponse {
+                request_id: "r2".into(),
+                allowed: false,
+                feedback: Some("use Read instead".into()),
             },
             Event::MemoryLoaded { count: 0 },
             Event::MemorySaved {
