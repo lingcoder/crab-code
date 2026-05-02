@@ -66,7 +66,7 @@ pub struct AgentRuntime {
     loop_config: QueryConfig,
     skill_registry: SkillRegistry,
     session_history: Option<SessionHistory>,
-    _mcp_manager: Option<McpManager>,
+    _mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
     cost: CostAccumulator,
     memory_dir: Option<PathBuf>,
     team_coordinator: crate::teams::coordinator::TeamCoordinator,
@@ -113,12 +113,19 @@ impl AgentRuntime {
                 tracing::warn!("MCP server '{name}' failed to connect");
             }
             mcp_failures = failed;
-            let count =
-                crab_tools::builtin::mcp_tool::register_mcp_tools(&mgr, &mut registry).await;
+            let mgr_handle = Arc::new(tokio::sync::Mutex::new(mgr));
+            let mgr_ref = mgr_handle.lock().await;
+            let count = crab_tools::builtin::mcp_tool::register_mcp_tools(
+                &mgr_ref,
+                &mut registry,
+                Some(Arc::clone(&mgr_handle)),
+            )
+            .await;
+            drop(mgr_ref);
             if count > 0 {
                 tracing::info!("Registered {count} MCP tool(s)");
             }
-            Some(mgr)
+            Some(mgr_handle)
         } else {
             None
         };
@@ -211,7 +218,22 @@ impl AgentRuntime {
             session_persister: None,
         };
 
-        let skill_registry = SkillRegistry::discover(&config.skill_dirs).unwrap_or_default();
+        let mut skill_registry = SkillRegistry::new();
+        skill_registry.register_all(crab_skills::builtin::builtin_skills());
+        if let Ok(disk) = SkillRegistry::discover(&config.skill_dirs) {
+            for skill in disk.list() {
+                skill_registry.register(skill.clone());
+            }
+        }
+        if let Some(ref mgr_handle) = mcp_manager {
+            let mgr = mgr_handle.lock().await;
+            let count =
+                crate::mcp_skills::register_mcp_prompt_skills(&mgr, &mut skill_registry).await;
+            drop(mgr);
+            if count > 0 {
+                tracing::info!("Registered {count} MCP prompt skill(s)");
+            }
+        }
 
         let sidebar_entries = session_history
             .as_ref()
@@ -409,17 +431,21 @@ impl AgentRuntime {
 
     /// Re-discover skills from the given directories.
     pub fn reload_skills(&mut self, skill_dirs: &[PathBuf]) -> usize {
+        let mut new_registry = SkillRegistry::new();
+        new_registry.register_all(crab_skills::builtin::builtin_skills());
         match SkillRegistry::discover(skill_dirs) {
-            Ok(new_registry) => {
-                let count = new_registry.len();
-                self.skill_registry = new_registry;
-                count
+            Ok(disk) => {
+                for skill in disk.list() {
+                    new_registry.register(skill.clone());
+                }
             }
             Err(e) => {
                 tracing::warn!("failed to reload skills: {e}");
-                self.skill_registry.len()
             }
         }
+        let count = new_registry.len();
+        self.skill_registry = new_registry;
+        count
     }
 
     // ── Settings ────────────────────────────────────────────────────────

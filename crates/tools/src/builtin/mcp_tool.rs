@@ -29,6 +29,10 @@ pub struct McpTool {
     /// Shared MCP client — `Mutex` because `call_tool` takes `&self` but we
     /// need exclusive access to the transport for concurrent requests.
     client: Arc<Mutex<McpClient>>,
+    /// Optional handle to the owning `McpManager`, used to drive automatic
+    /// reconnection when a tool call fails with a transport-level error. When
+    /// `None`, transport errors surface to the caller without retry.
+    manager: Option<Arc<Mutex<crab_mcp::McpManager>>>,
 }
 
 impl McpTool {
@@ -39,6 +43,7 @@ impl McpTool {
     /// - `description`: tool description from the server
     /// - `schema`: JSON Schema for the tool's input parameters
     /// - `client`: shared MCP client connection
+    /// - `manager`: optional handle to the owning manager for auto-reconnect
     #[must_use]
     pub fn new(
         server_name: String,
@@ -46,6 +51,7 @@ impl McpTool {
         description: String,
         schema: Value,
         client: Arc<Mutex<McpClient>>,
+        manager: Option<Arc<Mutex<crab_mcp::McpManager>>>,
     ) -> Self {
         let tool_name = format!("mcp__{server_name}__{mcp_tool_name}");
         Self {
@@ -55,6 +61,7 @@ impl McpTool {
             server_name,
             schema,
             client,
+            manager,
         }
     }
 
@@ -69,6 +76,33 @@ impl McpTool {
     pub fn server_name(&self) -> &str {
         &self.server_name
     }
+}
+
+/// Convert an MCP `ToolCallResult` into the native `ToolOutput` shape.
+fn mcp_result_to_tool_output(result: crab_mcp::protocol::ToolCallResult) -> ToolOutput {
+    let content = result
+        .content
+        .into_iter()
+        .map(|block| match block {
+            crab_mcp::protocol::ToolResultContent::Text { text } => {
+                ToolOutputContent::Text { text }
+            }
+            crab_mcp::protocol::ToolResultContent::Image { data, mime_type } => {
+                ToolOutputContent::Image {
+                    media_type: mime_type,
+                    data,
+                }
+            }
+            crab_mcp::protocol::ToolResultContent::Resource { resource } => {
+                ToolOutputContent::Text {
+                    text: resource
+                        .text
+                        .unwrap_or_else(|| format!("[resource: {}]", resource.uri)),
+                }
+            }
+        })
+        .collect();
+    ToolOutput::with_content(content, result.is_error)
 }
 
 impl Tool for McpTool {
@@ -90,39 +124,58 @@ impl Tool for McpTool {
         _ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         Box::pin(async move {
-            let result = self
+            let first_attempt = self
                 .client
                 .lock()
                 .await
-                .call_tool(&self.original_name, input)
-                .await?;
+                .call_tool(&self.original_name, input.clone())
+                .await;
 
-            // Convert MCP ToolCallResult → native ToolOutput
-            let content = result
-                .content
-                .into_iter()
-                .map(|block| match block {
-                    crab_mcp::protocol::ToolResultContent::Text { text } => {
-                        ToolOutputContent::Text { text }
-                    }
-                    crab_mcp::protocol::ToolResultContent::Image { data, mime_type } => {
-                        ToolOutputContent::Image {
-                            media_type: mime_type,
-                            data,
+            match first_attempt {
+                Ok(result) => Ok(mcp_result_to_tool_output(result)),
+                Err(e) if crab_mcp::is_connection_error(&e) && self.manager.is_some() => {
+                    // Transport-level error — attempt one reconnect + retry.
+                    let manager = self.manager.as_ref().unwrap();
+                    let mut mgr = manager.lock().await;
+                    match mgr.try_reconnect(&self.server_name).await {
+                        Ok(true) => {
+                            // Reconnect replaced the client in the manager;
+                            // grab the fresh handle before retrying so we
+                            // don't re-issue against the dead transport.
+                            let fresh = mgr.get_client(&self.server_name).map(Arc::clone);
+                            drop(mgr);
+                            if let Some(fresh) = fresh {
+                                match fresh
+                                    .lock()
+                                    .await
+                                    .call_tool(&self.original_name, input)
+                                    .await
+                                {
+                                    Ok(result) => Ok(mcp_result_to_tool_output(result)),
+                                    Err(retry_err) => Ok(ToolOutput::error(format!(
+                                        "MCP tool '{}' failed after reconnect: {retry_err}",
+                                        self.original_name
+                                    ))),
+                                }
+                            } else {
+                                Ok(ToolOutput::error(format!(
+                                    "MCP server '{}' missing after reconnect",
+                                    self.server_name
+                                )))
+                            }
                         }
+                        Ok(false) => Ok(ToolOutput::error(format!(
+                            "MCP server '{}' connection lost and reconnect attempts exhausted: {e}",
+                            self.server_name
+                        ))),
+                        Err(reconnect_err) => Ok(ToolOutput::error(format!(
+                            "MCP server '{}' reconnect failed: {reconnect_err} (original: {e})",
+                            self.server_name
+                        ))),
                     }
-                    crab_mcp::protocol::ToolResultContent::Resource { resource } => {
-                        // Convert resource content to text (best effort)
-                        ToolOutputContent::Text {
-                            text: resource
-                                .text
-                                .unwrap_or_else(|| format!("[resource: {}]", resource.uri)),
-                        }
-                    }
-                })
-                .collect();
-
-            Ok(ToolOutput::with_content(content, result.is_error))
+                }
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -237,9 +290,15 @@ impl Tool for McpTool {
 ///
 /// For each discovered tool, creates an `McpTool` and registers it.
 /// Returns the number of tools registered.
+///
+/// When `manager_handle` is `Some`, every adapter is wired with a reference
+/// back to the manager so it can drive automatic reconnection on transport
+/// failures. Pass `None` to opt out (failed calls then surface as errors
+/// without a retry).
 pub async fn register_mcp_tools(
     manager: &crab_mcp::McpManager,
     registry: &mut crate::registry::ToolRegistry,
+    manager_handle: Option<Arc<Mutex<crab_mcp::McpManager>>>,
 ) -> usize {
     let discovered = manager.discovered_tools().await;
     let count = discovered.len();
@@ -251,6 +310,7 @@ pub async fn register_mcp_tools(
             tool.tool_def.description,
             tool.tool_def.input_schema,
             tool.client,
+            manager_handle.clone(),
         );
         registry.register(Arc::new(adapter));
     }
@@ -347,6 +407,7 @@ mod tests {
                 "Click an element".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             assert_eq!(adapter.name(), "mcp__playwright__click");
@@ -388,6 +449,7 @@ mod tests {
             "Does a thing".into(),
             serde_json::json!({"type": "object"}),
             Arc::new(Mutex::new(client)),
+            None,
         );
 
         let ctx = crab_core::tool::ToolContext {
@@ -432,6 +494,7 @@ mod tests {
             "A tool that fails".into(),
             serde_json::json!({"type": "object"}),
             Arc::new(Mutex::new(client)),
+            None,
         );
 
         let ctx = crab_core::tool::ToolContext {
@@ -519,6 +582,7 @@ mod tests {
                 tool.tool_def.description,
                 tool.tool_def.input_schema,
                 tool.client,
+                None,
             );
             registry.register(Arc::new(adapter));
         }
@@ -552,6 +616,7 @@ mod tests {
                 "Click an element".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let input = serde_json::json!({"selector": "#btn", "timeout": 5000});
@@ -577,6 +642,7 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let long_val = "a".repeat(50);
@@ -602,6 +668,7 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let summary = adapter.format_use_summary(&serde_json::json!({})).unwrap();
@@ -624,6 +691,7 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let output = ToolOutput::success(r#"{"key": "value", "num": 42}"#);
@@ -656,6 +724,7 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let output = ToolOutput::success("line1\nline2\nline3");
@@ -680,6 +749,7 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             let long_text = (1..=20)
@@ -708,9 +778,40 @@ mod tests {
                 "desc".into(),
                 serde_json::json!({"type": "object"}),
                 Arc::new(Mutex::new(client)),
+                None,
             );
 
             assert_eq!(adapter.display_color(), ToolDisplayStyle::Highlight);
         });
+    }
+
+    #[tokio::test]
+    async fn adapter_constructor_accepts_no_manager() {
+        let client = mock_client(vec![]).await;
+        let adapter = McpTool::new(
+            "srv".into(),
+            "tool".into(),
+            "desc".into(),
+            serde_json::json!({"type": "object"}),
+            Arc::new(Mutex::new(client)),
+            None,
+        );
+        assert!(adapter.manager.is_none());
+        assert_eq!(adapter.server_name(), "srv");
+    }
+
+    #[tokio::test]
+    async fn adapter_constructor_accepts_manager_handle() {
+        let client = mock_client(vec![]).await;
+        let mgr = Arc::new(Mutex::new(crab_mcp::McpManager::new()));
+        let adapter = McpTool::new(
+            "srv".into(),
+            "tool".into(),
+            "desc".into(),
+            serde_json::json!({"type": "object"}),
+            Arc::new(Mutex::new(client)),
+            Some(Arc::clone(&mgr)),
+        );
+        assert!(adapter.manager.is_some());
     }
 }

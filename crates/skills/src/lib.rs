@@ -23,6 +23,7 @@ pub mod builder;
 pub mod builtin;
 pub mod frontmatter;
 pub mod matcher;
+pub mod mcp;
 pub mod registry;
 pub mod types;
 

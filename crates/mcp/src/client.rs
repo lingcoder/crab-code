@@ -7,8 +7,9 @@ use serde_json::{Map, Value, json};
 
 use crate::protocol::{
     InitializeParams, InitializeResult, JsonRpcRequest, McpPrompt, McpResource, McpToolDef,
-    PromptArgument, ResourceContent, ResourceReadParams, ResourceReadResult, ServerCapabilities,
-    ServerInfo, ToolCallParams, ToolCallResult, ToolResultContent,
+    PromptArgument, PromptGetParams, PromptGetResult, PromptMessage, PromptMessageContent,
+    ResourceContent, ResourceReadParams, ResourceReadResult, ServerCapabilities, ServerInfo,
+    ToolCallParams, ToolCallResult, ToolResultContent,
 };
 use crate::transport::Transport;
 
@@ -212,6 +213,28 @@ impl McpClient {
         match &self.backend {
             ClientBackend::Legacy(transport) => list_prompts_legacy(&**transport).await,
             ClientBackend::Rmcp(service) => list_prompts_rmcp(service.peer()).await,
+        }
+    }
+
+    /// Fetch a specific prompt's rendered messages from the connected MCP server.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: HashMap<String, String>,
+    ) -> crab_core::Result<PromptGetResult> {
+        match &self.backend {
+            ClientBackend::Legacy(transport) => {
+                get_prompt_legacy(&**transport, name, arguments).await
+            }
+            ClientBackend::Rmcp(service) => get_prompt_rmcp(service.peer(), name, arguments).await,
+        }
+    }
+
+    /// Send a `ping` request to the connected MCP server (liveness check).
+    pub async fn ping(&self) -> crab_core::Result<()> {
+        match &self.backend {
+            ClientBackend::Legacy(transport) => ping_legacy(&**transport).await,
+            ClientBackend::Rmcp(service) => ping_rmcp(service.peer()).await,
         }
     }
 
@@ -532,6 +555,113 @@ async fn list_prompts_rmcp(
         .map(|prompts| prompts.into_iter().map(convert_prompt).collect())
 }
 
+async fn get_prompt_legacy(
+    transport: &dyn Transport,
+    name: &str,
+    arguments: HashMap<String, String>,
+) -> crab_core::Result<PromptGetResult> {
+    let params = PromptGetParams {
+        name: name.to_string(),
+        arguments,
+    };
+
+    let req = JsonRpcRequest::new(
+        crate::protocol::method::PROMPTS_GET,
+        Some(serde_json::to_value(&params).map_err(|e| {
+            crab_core::Error::Other(format!("failed to serialize prompt get params: {e}"))
+        })?),
+    );
+
+    let resp = transport.send(req).await?;
+    let result_value = resp.into_result()?;
+
+    serde_json::from_value(result_value)
+        .map_err(|e| crab_core::Error::Other(format!("failed to parse prompt get result: {e}")))
+}
+
+async fn get_prompt_rmcp(
+    peer: &rmcp::Peer<rmcp::RoleClient>,
+    name: &str,
+    arguments: HashMap<String, String>,
+) -> crab_core::Result<PromptGetResult> {
+    let mut params = rmcp::model::GetPromptRequestParams::new(name.to_string());
+    if !arguments.is_empty() {
+        params = params.with_arguments(string_hashmap_to_json_object(arguments));
+    }
+
+    peer.get_prompt(params)
+        .await
+        .map_err(map_rmcp_error)
+        .map(convert_prompt_get_result)
+}
+
+async fn ping_legacy(transport: &dyn Transport) -> crab_core::Result<()> {
+    let req = JsonRpcRequest::new(crate::protocol::method::PING, Some(json!({})));
+    let resp = transport.send(req).await?;
+    resp.into_result().map(|_| ())
+}
+
+async fn ping_rmcp(peer: &rmcp::Peer<rmcp::RoleClient>) -> crab_core::Result<()> {
+    let request = rmcp::model::ClientRequest::PingRequest(rmcp::model::PingRequest::default());
+    peer.send_request(request)
+        .await
+        .map(|_| ())
+        .map_err(map_rmcp_error)
+}
+
+fn string_hashmap_to_json_object(map: HashMap<String, String>) -> Map<String, Value> {
+    map.into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect()
+}
+
+fn convert_prompt_get_result(result: rmcp::model::GetPromptResult) -> PromptGetResult {
+    PromptGetResult {
+        description: result.description,
+        messages: result
+            .messages
+            .into_iter()
+            .map(convert_prompt_message)
+            .collect(),
+    }
+}
+
+fn convert_prompt_message(msg: rmcp::model::PromptMessage) -> PromptMessage {
+    let role = match msg.role {
+        rmcp::model::PromptMessageRole::User => "user".to_string(),
+        rmcp::model::PromptMessageRole::Assistant => "assistant".to_string(),
+    };
+    PromptMessage {
+        role,
+        content: convert_prompt_message_content(msg.content),
+    }
+}
+
+fn convert_prompt_message_content(
+    content: rmcp::model::PromptMessageContent,
+) -> PromptMessageContent {
+    match content {
+        rmcp::model::PromptMessageContent::Text { text } => PromptMessageContent::Text { text },
+        rmcp::model::PromptMessageContent::Resource { resource } => {
+            PromptMessageContent::Resource {
+                resource: convert_resource_content(resource.raw.resource),
+            }
+        }
+        rmcp::model::PromptMessageContent::Image { image } => PromptMessageContent::Text {
+            text: format!("[image:{}]", image.raw.mime_type),
+        },
+        rmcp::model::PromptMessageContent::ResourceLink { link } => {
+            PromptMessageContent::Resource {
+                resource: ResourceContent {
+                    uri: link.raw.uri,
+                    mime_type: link.raw.mime_type,
+                    text: link.raw.description.or(link.raw.title),
+                },
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,6 +761,58 @@ mod tests {
             .await
             .unwrap();
         assert!(client.tools().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_prompt_parses_messages() {
+        let transport = MockTransport::new(vec![
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"prompts": {}},
+                "serverInfo": {"name": "s", "version": "1.0"}
+            }),
+            json!({
+                "description": "A greeting",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": {"type": "text", "text": "Hello, world"}
+                    }
+                ]
+            }),
+        ]);
+
+        let client = McpClient::connect(Box::new(transport), "test")
+            .await
+            .unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".into(), "world".into());
+        let result = client.get_prompt("greet", args).await.unwrap();
+
+        assert_eq!(result.description.as_deref(), Some("A greeting"));
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].role, "user");
+        match &result.messages[0].content {
+            PromptMessageContent::Text { text } => assert_eq!(text, "Hello, world"),
+            PromptMessageContent::Resource { .. } => panic!("expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ping_returns_ok_on_success() {
+        let transport = MockTransport::new(vec![
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "serverInfo": {"name": "s", "version": "1.0"}
+            }),
+            json!({}),
+        ]);
+
+        let client = McpClient::connect(Box::new(transport), "test")
+            .await
+            .unwrap();
+        client.ping().await.unwrap();
     }
 
     #[tokio::test]

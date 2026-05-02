@@ -16,7 +16,7 @@ mod tests {
     fn all_builtin_agents_have_unique_types() {
         let agents = builtin_agents();
         let mut types: Vec<&str> = agents.iter().map(|a| a.agent_type.as_str()).collect();
-        types.sort();
+        types.sort_unstable();
         types.dedup();
         assert_eq!(types.len(), agents.len());
     }

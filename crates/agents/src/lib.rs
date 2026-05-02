@@ -4,6 +4,7 @@ pub mod coordinator;
 pub mod definition;
 pub mod error_recovery;
 pub mod file_history;
+pub mod mcp_skills;
 pub mod proactive;
 pub mod prompt;
 pub mod repl_commands;

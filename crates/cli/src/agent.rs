@@ -237,7 +237,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     let mut registry = create_default_registry();
 
     // Connect to MCP servers and register their tools
-    let mut _mcp_manager = if let Some(ref mcp_value) = settings.mcp_servers {
+    let mcp_manager = if let Some(ref mcp_value) = settings.mcp_servers {
         let mut mgr = crab_mcp::McpManager::new();
         let failed = mgr.start_all(mcp_value).await.unwrap_or_else(|e| {
             eprintln!("Warning: failed to parse MCP config: {e}");
@@ -246,11 +246,19 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         for name in &failed {
             eprintln!("Warning: MCP server '{name}' failed to connect");
         }
-        let count = crab_tools::builtin::mcp_tool::register_mcp_tools(&mgr, &mut registry).await;
+        let mgr_handle = Arc::new(tokio::sync::Mutex::new(mgr));
+        let mgr_ref = mgr_handle.lock().await;
+        let count = crab_tools::builtin::mcp_tool::register_mcp_tools(
+            &mgr_ref,
+            &mut registry,
+            Some(Arc::clone(&mgr_handle)),
+        )
+        .await;
+        drop(mgr_ref);
         if count > 0 {
             eprintln!("Registered {count} MCP tool(s).");
         }
-        Some(mgr)
+        Some(mgr_handle)
     } else {
         None
     };
@@ -265,7 +273,23 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     for dir in &cli.plugin_dir {
         skill_dirs.push(dir.clone());
     }
-    let skill_registry = crab_skills::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
+    let mut skill_registry = crab_skills::SkillRegistry::new();
+    if !cli.bare && !cli.disable_slash_commands {
+        skill_registry.register_all(crab_skills::builtin::builtin_skills());
+    }
+    let disk = crab_skills::SkillRegistry::discover(&skill_dirs).unwrap_or_default();
+    for skill in disk.list() {
+        skill_registry.register(skill.clone());
+    }
+    if let Some(ref mgr_handle) = mcp_manager {
+        let mgr = mgr_handle.lock().await;
+        let count =
+            crab_agents::mcp_skills::register_mcp_prompt_skills(&mgr, &mut skill_registry).await;
+        drop(mgr);
+        if count > 0 {
+            eprintln!("Registered {count} MCP prompt skill(s).");
+        }
+    }
     if !skill_registry.is_empty() {
         eprintln!("Loaded {} skill(s).", skill_registry.len());
     }

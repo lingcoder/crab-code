@@ -39,7 +39,7 @@ pub use health::{
     AutoReconnect, HealthChecker, HealthCheckerConfig, HealthStatus, Heartbeat, ReconnectConfig,
 };
 pub use logging::{McpLogEntry, McpLogLevel, McpLogger};
-pub use manager::{DiscoveredTool, McpManager};
+pub use manager::{DiscoveredPrompt, DiscoveredTool, McpManager, is_connection_error};
 pub use negotiation::{
     CompatibilityCheck, CompatibilityRegistry, NegotiationResult, ProtocolVersion, VersionRange,
     negotiate_version, negotiate_version_range,
@@ -51,7 +51,8 @@ pub use progress::{ProgressCallback, ProgressNotification, ProgressToken, Progre
 pub use protocol::{
     ClientCapabilities, ClientInfo, InitializeParams, InitializeResult, JsonRpcError,
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, McpPrompt, McpResource, McpToolDef,
-    ServerCapabilities, ServerInfo, ToolCallParams, ToolCallResult,
+    PromptGetResult, PromptMessage, PromptMessageContent, ServerCapabilities, ServerInfo,
+    ToolCallParams, ToolCallResult,
 };
 pub use resource::ResourceCache;
 pub use roots::{RootInfo, RootRegistry};

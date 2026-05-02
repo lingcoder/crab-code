@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 
 use crate::client::McpClient;
 use crate::discovery::{McpServerConfig, connect_server};
-use crate::protocol::McpToolDef;
+use crate::health::{AutoReconnect, ReconnectConfig};
+use crate::protocol::{McpPrompt, McpToolDef};
 
 /// Manages the lifecycle of multiple MCP server connections.
 ///
@@ -17,6 +18,10 @@ use crate::protocol::McpToolDef;
 pub struct McpManager {
     /// Connected MCP clients keyed by server name.
     clients: HashMap<String, Arc<Mutex<McpClient>>>,
+    /// Original configs kept around so we can restart a server on demand.
+    configs: HashMap<String, McpServerConfig>,
+    /// Per-server reconnect state machines (exponential backoff).
+    reconnect_states: HashMap<String, AutoReconnect>,
 }
 
 /// A tool discovered from an MCP server, carrying enough info for registration.
@@ -30,12 +35,26 @@ pub struct DiscoveredTool {
     pub client: Arc<Mutex<McpClient>>,
 }
 
+/// A prompt discovered from an MCP server, carrying enough info to convert it
+/// into a skill (`mcp__<server>__<prompt>`).
+#[derive(Clone)]
+pub struct DiscoveredPrompt {
+    /// The MCP server name (from config).
+    pub server_name: String,
+    /// The prompt definition from the server.
+    pub prompt: McpPrompt,
+    /// Shared client handle for fetching prompt contents on demand.
+    pub client: Arc<Mutex<McpClient>>,
+}
+
 impl McpManager {
     /// Create an empty manager (no connections yet).
     #[must_use]
     pub fn new() -> Self {
         Self {
             clients: HashMap::new(),
+            configs: HashMap::new(),
+            reconnect_states: HashMap::new(),
         }
     }
 
@@ -59,6 +78,11 @@ impl McpManager {
                     );
                     self.clients
                         .insert(config.name.clone(), Arc::new(Mutex::new(client)));
+                    self.configs.insert(config.name.clone(), config.clone());
+                    self.reconnect_states.insert(
+                        config.name.clone(),
+                        AutoReconnect::new(&config.name, ReconnectConfig::default()),
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -79,6 +103,11 @@ impl McpManager {
         let client = connect_server(config).await?;
         self.clients
             .insert(config.name.clone(), Arc::new(Mutex::new(client)));
+        self.configs.insert(config.name.clone(), config.clone());
+        self.reconnect_states.insert(
+            config.name.clone(),
+            AutoReconnect::new(&config.name, ReconnectConfig::default()),
+        );
         Ok(())
     }
 
@@ -101,6 +130,37 @@ impl McpManager {
         }
 
         tools
+    }
+
+    /// Get all discovered prompts from all connected servers.
+    ///
+    /// Each connected server is queried via `prompts/list`. Servers that fail
+    /// to respond are logged and skipped — a single broken server should not
+    /// prevent prompts from other servers from being registered.
+    pub async fn discovered_prompts(&self) -> Vec<DiscoveredPrompt> {
+        let mut prompts = Vec::new();
+        for (server_name, client_arc) in &self.clients {
+            let client = client_arc.lock().await;
+            match client.list_prompts().await {
+                Ok(server_prompts) => {
+                    for prompt in server_prompts {
+                        prompts.push(DiscoveredPrompt {
+                            server_name: server_name.clone(),
+                            prompt,
+                            client: Arc::clone(client_arc),
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        server = server_name.as_str(),
+                        error = %e,
+                        "failed to list prompts from MCP server"
+                    );
+                }
+            }
+        }
+        prompts
     }
 
     /// Get the shared client handle for a specific server.
@@ -141,6 +201,8 @@ impl McpManager {
             client_arc.lock().await.close().await?;
             tracing::info!(server = server_name, "MCP server disconnected");
         }
+        self.configs.remove(server_name);
+        self.reconnect_states.remove(server_name);
         Ok(())
     }
 
@@ -157,10 +219,73 @@ impl McpManager {
         Ok(failed)
     }
 
-    /// Restart a specific server by disconnecting and reconnecting.
+    /// Restart a specific server by closing the current client and connecting
+    /// a fresh one. Preserves the existing reconnect state so backoff metadata
+    /// survives the restart (use [`disconnect`] if you want to drop everything).
+    ///
+    /// [`disconnect`]: Self::disconnect
     pub async fn restart_server(&mut self, config: &McpServerConfig) -> crab_core::Result<()> {
-        self.disconnect(&config.name).await?;
-        self.connect_one(config).await
+        if let Some(client_arc) = self.clients.remove(&config.name)
+            && let Err(e) = client_arc.lock().await.close().await
+        {
+            tracing::warn!(
+                server = config.name.as_str(),
+                error = %e,
+                "error closing MCP server during restart; continuing with reconnect"
+            );
+        }
+        let client = connect_server(config).await?;
+        self.clients
+            .insert(config.name.clone(), Arc::new(Mutex::new(client)));
+        self.configs.insert(config.name.clone(), config.clone());
+        Ok(())
+    }
+
+    /// Attempt to reconnect a server that has lost its connection.
+    ///
+    /// Drives the per-server [`AutoReconnect`] state machine: pulls the next
+    /// backoff delay, sleeps, then calls [`restart_server`]. Returns `Ok(true)`
+    /// when the reconnect succeeded, `Ok(false)` when retry attempts are
+    /// exhausted, and `Err` when the underlying restart fails (the caller can
+    /// decide whether to retry again).
+    ///
+    /// [`AutoReconnect`]: crate::health::AutoReconnect
+    /// [`restart_server`]: Self::restart_server
+    pub async fn try_reconnect(&mut self, server_name: &str) -> crab_core::Result<bool> {
+        let reconnect = self.reconnect_states.get_mut(server_name).ok_or_else(|| {
+            crab_core::Error::Other(format!("no reconnect state for server '{server_name}'"))
+        })?;
+
+        let Some(delay) = reconnect.connection_lost() else {
+            tracing::warn!(server = server_name, "reconnect attempts exhausted");
+            return Ok(false);
+        };
+
+        tracing::info!(
+            server = server_name,
+            delay_ms = delay.as_millis() as u64,
+            attempt = reconnect.attempt(),
+            "attempting MCP server reconnect"
+        );
+        tokio::time::sleep(delay).await;
+
+        let config = self.configs.get(server_name).cloned().ok_or_else(|| {
+            crab_core::Error::Other(format!("no config for server '{server_name}'"))
+        })?;
+
+        match self.restart_server(&config).await {
+            Ok(()) => {
+                if let Some(rs) = self.reconnect_states.get_mut(server_name) {
+                    rs.connection_restored();
+                }
+                tracing::info!(server = server_name, "MCP server reconnected successfully");
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::warn!(server = server_name, error = %e, "MCP server reconnect failed");
+                Err(e)
+            }
+        }
     }
 
     /// Close all MCP server connections.
@@ -182,6 +307,22 @@ impl Default for McpManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Heuristic check for whether an error message indicates a transport-level
+/// connection loss (broken pipe, closed channel, transport reset, …).
+///
+/// Used to decide whether a tool call failure should trigger an automatic
+/// reconnect attempt. False positives are mostly harmless — the worst case
+/// is one extra reconnect attempt — so the matcher is intentionally lenient.
+#[must_use]
+pub fn is_connection_error(e: &crab_core::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("closed connection")
+        || msg.contains("TransportClosed")
+        || msg.contains("broken pipe")
+        || msg.contains("connection reset")
+        || msg.contains("transport error")
 }
 
 #[cfg(test)]
@@ -207,6 +348,13 @@ mod tests {
         let mgr = McpManager::new();
         let tools = mgr.discovered_tools().await;
         assert!(tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovered_prompts_empty_when_no_servers() {
+        let mgr = McpManager::new();
+        let prompts = mgr.discovered_prompts().await;
+        assert!(prompts.is_empty());
     }
 
     #[tokio::test]
@@ -366,5 +514,69 @@ mod tests {
 
         mgr.close_all().await;
         assert_eq!(mgr.server_count(), 0);
+    }
+
+    #[test]
+    fn is_connection_error_recognizes_known_signatures() {
+        for msg in [
+            "closed connection",
+            "stream closed: TransportClosed",
+            "io error: broken pipe",
+            "tcp connection reset by peer",
+            "stdio transport error: child exited",
+        ] {
+            let err = crab_core::Error::Other(msg.into());
+            assert!(
+                is_connection_error(&err),
+                "expected `{msg}` to be detected as a connection error"
+            );
+        }
+    }
+
+    #[test]
+    fn is_connection_error_ignores_other_failures() {
+        for msg in [
+            "tool not found",
+            "invalid arguments",
+            "permission denied: not a transport problem",
+            "JSON parse error",
+        ] {
+            let err = crab_core::Error::Other(msg.into());
+            assert!(
+                !is_connection_error(&err),
+                "did not expect `{msg}` to be detected as a connection error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn try_reconnect_returns_error_when_state_missing() {
+        let mut mgr = McpManager::new();
+        let result = mgr.try_reconnect("nonexistent").await;
+        assert!(result.is_err(), "expected error when no reconnect state");
+    }
+
+    #[tokio::test]
+    async fn try_reconnect_returns_false_when_attempts_exhausted() {
+        let mut mgr = McpManager::new();
+        // Inject a reconnect state that's already given up — no client/config
+        // is registered, but try_reconnect should bail out at the
+        // exhausted-attempts check before touching configs.
+        let mut ar = AutoReconnect::new(
+            "depleted",
+            ReconnectConfig {
+                max_attempts: 1,
+                ..ReconnectConfig::default()
+            },
+        );
+        // Burn the single allowed attempt so the next call returns None.
+        let _ = ar.connection_lost();
+        mgr.reconnect_states.insert("depleted".into(), ar);
+
+        let result = mgr.try_reconnect("depleted").await.unwrap();
+        assert!(
+            !result,
+            "expected Ok(false) when reconnect attempts exhausted"
+        );
     }
 }
