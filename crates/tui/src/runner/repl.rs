@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -71,6 +71,15 @@ pub(super) async fn run_loop(
 
     loop {
         let width = terminal.size()?.width.max(1);
+
+        // When the terminal width changes, re-render all finalized history
+        // at the new width so scrollback content doesn't wrap incorrectly.
+        if app.needs_scrollback_rebuild(width) {
+            execute!(terminal.backend_mut(), Clear(ClearType::All))?;
+            terminal.clear()?;
+            app.rebuild_scrollback(width);
+        }
+
         app.drain_finalized_into_pending(width);
         app.flush_streaming_assistant_lines(width);
         if !app.pending_history.is_empty() {

@@ -67,7 +67,9 @@ impl AssistantCell {
     /// Render the markdown body up to the last newline and return any lines
     /// beyond `committed`. The cell still owns the full text so subsequent
     /// frames can re-render the streaming tail. Holds back commits while an
-    /// opened fenced code block is still missing its closing fence.
+    /// opened fenced code block is still missing its closing fence, or while
+    /// a markdown table is incomplete (missing delimiter row or rows after
+    /// the delimiter).
     pub fn render_committed_lines(&self, width: u16, committed: usize) -> Vec<Line<'static>> {
         let body = match self.text.rfind('\n') {
             Some(idx) => &self.text[..=idx],
@@ -76,7 +78,14 @@ impl AssistantCell {
         if has_unclosed_code_fence(body) {
             return Vec::new();
         }
-        let mut rendered = render_with_bullet_no_trailing_blank(body, width);
+        let render_body = match find_unclosed_table_start(body) {
+            Some(table_line) => &body[..byte_offset_of_line(body, table_line)],
+            None => body,
+        };
+        if render_body.is_empty() {
+            return Vec::new();
+        }
+        let mut rendered = render_with_bullet_no_trailing_blank(render_body, width);
         while rendered.last().is_some_and(line_is_blank) {
             rendered.pop();
         }
@@ -102,6 +111,80 @@ fn has_unclosed_code_fence(text: &str) -> bool {
         }
     }
     open
+}
+
+/// If a markdown table is still incomplete (header present but no delimiter,
+/// or delimiter present but stream hasn't left the table yet), return the
+/// source line index where the table starts. Lines from that point onward
+/// must not be committed to scrollback because column widths may change as
+/// new rows arrive.
+fn find_unclosed_table_start(text: &str) -> Option<usize> {
+    let mut in_fence = false;
+    let mut pending_header: Option<usize> = None;
+    let mut confirmed_table_start: Option<usize> = None;
+
+    for (line_idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            if in_fence {
+                pending_header = None;
+            }
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        if is_table_delimiter_line(trimmed) {
+            if pending_header.is_some() {
+                confirmed_table_start = pending_header;
+                pending_header = None;
+            }
+        } else if is_table_header_line(trimmed) {
+            if confirmed_table_start.is_none() {
+                pending_header = Some(line_idx);
+            }
+        } else if !trimmed.is_empty() {
+            pending_header = None;
+            confirmed_table_start = None;
+        }
+    }
+
+    confirmed_table_start.or(pending_header)
+}
+
+/// A line looks like a table header if it contains `|`-delimited segments
+/// with at least one non-empty cell, and is not a delimiter row.
+fn is_table_header_line(line: &str) -> bool {
+    if is_table_delimiter_line(line) {
+        return false;
+    }
+    let stripped = line.strip_prefix('|').unwrap_or(line);
+    let stripped = stripped.strip_suffix('|').unwrap_or(stripped);
+    stripped.split('|').any(|seg| !seg.trim().is_empty()) && stripped.contains('|')
+}
+
+/// A GFM table delimiter row: every cell is a run of `-` with optional
+/// `:` alignment markers, at least 3 dashes per cell.
+fn is_table_delimiter_line(line: &str) -> bool {
+    let stripped = line.strip_prefix('|').unwrap_or(line);
+    let stripped = stripped.strip_suffix('|').unwrap_or(stripped);
+    let segments: Vec<&str> = stripped.split('|').map(str::trim).collect();
+    !segments.is_empty()
+        && segments.iter().all(|seg| {
+            let s = seg.strip_prefix(':').unwrap_or(seg);
+            let s = s.strip_suffix(':').unwrap_or(s);
+            s.len() >= 3 && s.chars().all(|c| c == '-')
+        })
+}
+
+/// Byte offset of the start of line `n` in `text`.
+fn byte_offset_of_line(text: &str, n: usize) -> usize {
+    text.lines()
+        .take(n)
+        .map(|l| l.len() + 1) // +1 for the '\n'
+        .sum()
 }
 
 fn line_is_blank(line: &Line<'static>) -> bool {
@@ -228,5 +311,83 @@ mod tests {
         let cell = AssistantCell::new("the **answer** is 42");
         let needle = "the";
         assert!(cell.search_text().contains(needle));
+    }
+
+    // -- Table holdback tests --
+
+    #[test]
+    fn table_header_detected() {
+        assert!(is_table_header_line("| Name | Age |"));
+        assert!(is_table_header_line("Name | Age"));
+        assert!(!is_table_header_line("just plain text"));
+        assert!(!is_table_header_line("|---|---|"));
+    }
+
+    #[test]
+    fn table_delimiter_detected() {
+        assert!(is_table_delimiter_line("| --- | --- |"));
+        assert!(is_table_delimiter_line("|:---:|:---:|"));
+        assert!(is_table_delimiter_line("---|---"));
+        assert!(!is_table_delimiter_line("| Name | Age |"));
+        assert!(!is_table_delimiter_line("| -- |")); // only 2 dashes
+    }
+
+    #[test]
+    fn unclosed_table_holds_back() {
+        // Header + delimiter present but no blank line to close the table.
+        let text = "intro\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n";
+        assert_eq!(find_unclosed_table_start(text), Some(1));
+    }
+
+    #[test]
+    fn closed_table_does_not_hold_back() {
+        // Blank line after the table closes it.
+        let text = "intro\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n\nnext section\n";
+        assert_eq!(find_unclosed_table_start(text), None);
+    }
+
+    #[test]
+    fn header_without_delimiter_holds_back() {
+        let text = "intro\n| Name | Age |\n";
+        assert_eq!(find_unclosed_table_start(text), Some(1));
+    }
+
+    #[test]
+    fn table_inside_code_fence_ignored() {
+        let text = "intro\n```\n| Name | Age |\n| --- | --- |\n```\n";
+        assert_eq!(find_unclosed_table_start(text), None);
+    }
+
+    #[test]
+    fn byte_offset_calculation() {
+        let text = "line0\nline1\nline2\n";
+        assert_eq!(byte_offset_of_line(text, 0), 0);
+        assert_eq!(byte_offset_of_line(text, 1), 6); // "line0\n"
+        assert_eq!(byte_offset_of_line(text, 2), 12); // "line0\nline1\n"
+    }
+
+    #[test]
+    fn render_committed_lines_holds_back_table() {
+        let cell = AssistantCell::new("before\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n");
+        let lines = cell.render_committed_lines(80, 0);
+        // Only "before" should be committed; table lines are held back.
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| &*s.content).collect();
+        assert!(text.contains("before"), "got: {text}");
+    }
+
+    #[test]
+    fn render_committed_lines_releases_table_on_close() {
+        let cell =
+            AssistantCell::new("before\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n\nafter\n");
+        let lines = cell.render_committed_lines(80, 0);
+        // Table is closed by blank line, so all content commits.
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(joined.contains("before"));
+        assert!(joined.contains("after"));
     }
 }

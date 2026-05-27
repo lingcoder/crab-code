@@ -187,6 +187,34 @@ fn streaming_holds_committed_lines_while_code_fence_open() {
 }
 
 #[test]
+fn streaming_holds_committed_lines_while_table_open() {
+    let width: u16 = 80;
+    let mut app = App::new("test-model");
+    app.state = AppState::Processing;
+    app.messages.push(ChatMessage::Assistant {
+        streaming: true,
+        text: "intro\n| Name | Age |\n| --- | --- |\n| Alice | 30 |\n".into(),
+        committed_lines: 0,
+    });
+
+    app.flush_streaming_assistant_lines(width);
+    // Only "intro" should commit; table rows are held back.
+    let lines = app.pending_history.take();
+    assert_eq!(lines.len(), 1, "only the pre-table line commits");
+
+    // Now close the table with a blank line.
+    if let Some(ChatMessage::Assistant { text, .. }) = app.messages.last_mut() {
+        text.push_str("\nmore text after table\n");
+    }
+    app.flush_streaming_assistant_lines(width);
+    let after_close = app.pending_history.take();
+    assert!(
+        !after_close.is_empty(),
+        "once the table closes, held-back lines become committable"
+    );
+}
+
+#[test]
 fn single_newlines_in_prose_commit_line_by_line() {
     // Regression: SoftBreak used to collapse to a space, which made single-
     // newline-separated prose render as one giant paragraph and never reach

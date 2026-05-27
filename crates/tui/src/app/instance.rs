@@ -139,6 +139,13 @@ pub struct App {
     /// Lines drained from finalized cells, waiting to be flushed into the
     /// terminal's native scrollback by the next render pass.
     pub pending_history: crate::history::PendingHistory,
+    /// Copies of drained finalized messages, kept for scrollback rebuild on
+    /// terminal resize. Each entry preserves the `ChatMessage` so the cell
+    /// can be re-rendered at a different width.
+    pub(super) finalized_history: Vec<ChatMessage>,
+    /// The terminal width at which `finalized_history` was last flushed into
+    /// scrollback. When the width changes, the scrollback must be rebuilt.
+    pub(super) last_scrollback_width: Option<u16>,
 }
 
 impl App {
@@ -193,6 +200,8 @@ impl App {
             processing_start: None,
             last_render_width: 0,
             pending_history: crate::history::PendingHistory::new(),
+            finalized_history: Vec::new(),
+            last_scrollback_width: None,
         }
     }
 
@@ -275,12 +284,43 @@ impl App {
         if drain_count == 0 {
             return;
         }
-        for msg in self.messages.drain(..drain_count) {
-            let cell = crate::history::cell_from_chat_message(&msg);
+        // Preserve drained messages so we can re-render them at a different
+        // width when the terminal is resized.
+        let drained: Vec<ChatMessage> = self.messages.drain(..drain_count).collect();
+        for msg in &drained {
+            let cell = crate::history::cell_from_chat_message(msg);
             self.pending_history.extend(cell.display_lines(width));
         }
-        // Re-render of remaining messages must invalidate any cached layout
-        // bound to the prior message indices.
+        self.finalized_history.extend(drained);
+        self.last_scrollback_width = Some(width);
+    }
+
+    /// Returns `true` if the terminal width has changed since the last
+    /// scrollback flush, indicating that finalized history needs to be
+    /// re-rendered at the new width.
+    pub fn needs_scrollback_rebuild(&self, current_width: u16) -> bool {
+        match self.last_scrollback_width {
+            Some(prev) => prev != current_width,
+            None => false,
+        }
+    }
+
+    /// Re-render all finalized history at `new_width` and stage it for
+    /// insertion into the terminal scrollback. Call this after a terminal
+    /// resize when the width has changed.
+    ///
+    /// The caller must clear the terminal screen before calling this so
+    /// the re-inserted lines replace the stale (old-width) scrollback.
+    pub fn rebuild_scrollback(&mut self, new_width: u16) {
+        if self.finalized_history.is_empty() {
+            self.last_scrollback_width = Some(new_width);
+            return;
+        }
+        for msg in &self.finalized_history {
+            let cell = crate::history::cell_from_chat_message(msg);
+            self.pending_history.extend(cell.display_lines(new_width));
+        }
+        self.last_scrollback_width = Some(new_width);
     }
 
     /// Set the working directory (displayed in header).
@@ -318,6 +358,8 @@ impl App {
         self.scroll_anchor = None;
         self.unseen_message_count = 0;
         self.command_queue.clear();
+        self.finalized_history.clear();
+        self.last_scrollback_width = None;
     }
 
     /// Rebuild the message list from a loaded conversation.
