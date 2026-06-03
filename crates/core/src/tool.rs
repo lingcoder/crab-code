@@ -117,6 +117,16 @@ pub trait Tool: Send + Sync {
         InterruptBehavior::Cancel
     }
 
+    /// Whether an in-flight invocation can be safely aborted mid-run.
+    ///
+    /// True when `interrupt_behavior()` is `Cancel`. The TUI uses this to
+    /// decide whether pressing Enter during a running turn should abort the
+    /// turn and submit the queued message immediately, rather than only
+    /// queueing it until the turn finishes on its own.
+    fn is_interruptible(&self) -> bool {
+        self.interrupt_behavior() == InterruptBehavior::Cancel
+    }
+
     // ── Rendering hooks (Phase 1.5) ─────────────────────────────────
     //
     // All have default implementations so existing tools don't break.
@@ -603,6 +613,7 @@ mod tests {
         assert!(!tool.requires_confirmation());
         assert!(matches!(tool.source(), ToolSource::BuiltIn));
         assert_eq!(tool.interrupt_behavior(), InterruptBehavior::Cancel);
+        assert!(tool.is_interruptible());
     }
 
     #[test]

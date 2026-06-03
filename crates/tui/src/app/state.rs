@@ -262,4 +262,8 @@ pub struct ActiveToolInfo {
     pub name: String,
     pub input: serde_json::Value,
     pub progress: Option<crab_core::tool::ToolProgress>,
+    /// Whether this in-flight tool can be safely aborted mid-run, cached from
+    /// `Tool::is_interruptible()` at `ToolStart`. Defaults to `true` when the
+    /// tool is not found in the registry.
+    pub interruptible: bool,
 }

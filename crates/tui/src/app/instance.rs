@@ -113,6 +113,16 @@ pub struct App {
     /// Which key initiated the current pending exit window. Read by the
     /// bottom bar to pick the correct keyName in the hint.
     pub(super) last_interrupt_key: Option<ExitKey>,
+    /// Timestamp of the most recent printable/edit keystroke into the input
+    /// box. Used to defer surfacing an incoming permission prompt while the
+    /// user is actively typing, so a stray key cannot answer a prompt the user
+    /// has not read yet (see `Self::PROMPT_SUPPRESSION`).
+    pub(super) last_input_keystroke: Option<Instant>,
+    /// Permission cards that arrived while the user was typing. Held back out
+    /// of `approval_queue` (so the inline card stays hidden and keys cannot
+    /// answer it) until the suppression window elapses, then promoted into
+    /// `approval_queue` on a `Tick`.
+    pub(super) pending_suppressed: Vec<crate::components::permission::PermissionCard>,
     /// Current permission mode (cycled via Shift+Tab).
     pub permission_mode: crab_core::permission::PermissionMode,
     /// Session-level "always allow" grants (tool names granted via 'a' key).
@@ -188,6 +198,8 @@ impl App {
             input_mode: PromptInputMode::Prompt,
             last_interrupt: None,
             last_interrupt_key: None,
+            last_input_keystroke: None,
+            pending_suppressed: Vec::new(),
             permission_mode: crab_core::permission::PermissionMode::Default,
             session_grants: std::collections::HashSet::new(),
             messages: Vec::new(),
@@ -203,6 +215,42 @@ impl App {
             finalized_history: Vec::new(),
             last_scrollback_width: None,
         }
+    }
+
+    /// How long after the last keystroke an incoming permission prompt is held
+    /// back so a stray key cannot answer a prompt the user has not yet read.
+    /// Promoted on the first `Tick` once this window elapses.
+    pub(super) const PROMPT_SUPPRESSION: Duration = Duration::from_millis(1500);
+
+    /// Record a printable/edit keystroke into the input box for the
+    /// permission-prompt suppression window. Only meaningful while the input
+    /// is non-empty (matches the active-typing signal).
+    pub(super) fn note_input_keystroke(&mut self) {
+        if !self.input.is_empty() {
+            self.last_input_keystroke = Some(Instant::now());
+        }
+    }
+
+    /// Whether an incoming permission prompt should currently be deferred
+    /// because the user is actively typing.
+    pub(super) fn is_input_suppressing(&self) -> bool {
+        !self.input.is_empty()
+            && self
+                .last_input_keystroke
+                .is_some_and(|t| t.elapsed() < Self::PROMPT_SUPPRESSION)
+    }
+
+    /// Move any held-back permission cards into the live approval queue and
+    /// enter `Confirming`. Called from the `Tick` handler once the suppression
+    /// window has elapsed.
+    pub(super) fn promote_suppressed_permissions(&mut self) {
+        if self.pending_suppressed.is_empty() {
+            return;
+        }
+        for card in self.pending_suppressed.drain(..) {
+            self.approval_queue.push(card);
+        }
+        self.state = AppState::Confirming;
     }
 
     /// Mark every assistant cell as no-longer-streaming. Called at stream
@@ -338,6 +386,14 @@ impl App {
         self.session_id = id.into();
     }
 
+    /// Seed the input box with text at startup (from `--prefill`) without
+    /// submitting it. The cursor lands at the end of the seeded text.
+    pub fn seed_input(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.input.set_text(text);
+        }
+    }
+
     /// Reset app state for a new session (clear messages, input, counters).
     ///
     /// Preserves any `Welcome` cell at the front — it's ambient context,
@@ -358,6 +414,8 @@ impl App {
         self.scroll_anchor = None;
         self.unseen_message_count = 0;
         self.command_queue.clear();
+        self.pending_suppressed.clear();
+        self.last_input_keystroke = None;
         self.finalized_history.clear();
         self.last_scrollback_width = None;
     }
@@ -696,7 +754,8 @@ mod tests {
         messages.iter().any(|m| match m {
             ChatMessage::User { text }
             | ChatMessage::Assistant { text, .. }
-            | ChatMessage::System { text, .. } => text.contains(needle),
+            | ChatMessage::System { text, .. }
+            | ChatMessage::Thinking { text, .. } => text.contains(needle),
             ChatMessage::ToolUse { name, .. } => name.contains(needle),
             ChatMessage::ToolResult {
                 tool_name, output, ..
@@ -709,7 +768,6 @@ mod tests {
             ChatMessage::ToolRejected {
                 tool_name, summary, ..
             } => tool_name.contains(needle) || summary.contains(needle),
-            ChatMessage::Thinking { text, .. } => text.contains(needle),
             ChatMessage::CompactBoundary { .. }
             | ChatMessage::PlanStep { .. }
             | ChatMessage::Welcome { .. } => false,
@@ -1177,6 +1235,7 @@ mod tests {
                 name: "bash".into(),
                 input: serde_json::Value::Null,
                 progress: None,
+                interruptible: true,
             },
         );
 
@@ -1202,6 +1261,7 @@ mod tests {
                 name: "bash".into(),
                 input: serde_json::Value::Null,
                 progress: None,
+                interruptible: true,
             },
         );
 
@@ -1806,7 +1866,7 @@ mod tests {
     }
 
     /// Regression test: `ToolFinished` resolves the tool name from
-    /// `active_tools` by tool_use_id, producing the correct `ChatMessage::ToolResult`.
+    /// `active_tools` by `tool_use_id`, producing the correct `ChatMessage::ToolResult`.
     #[test]
     fn apply_event_tool_finished_resolves_name_from_active_tools() {
         use crate::app_event::AppEvent;
@@ -1830,7 +1890,7 @@ mod tests {
             output: ToolOutput::success("ok"),
         });
 
-        assert!(app.active_tools.get("tu_1").is_none());
+        assert!(!app.active_tools.contains_key("tu_1"));
 
         let last = app.messages.last().expect("expected a message");
         match last {
@@ -1971,5 +2031,165 @@ mod tests {
         app.reset_for_new_session();
         assert_eq!(app.messages.len(), 1);
         assert!(matches!(app.messages[0], ChatMessage::Welcome { .. }));
+    }
+
+    #[test]
+    fn enter_during_processing_with_interruptible_tool_interrupts() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.active_tools.insert(
+            "tu_1".into(),
+            ActiveToolInfo {
+                name: "sleep".into(),
+                input: serde_json::Value::Null,
+                progress: None,
+                interruptible: true,
+            },
+        );
+        app.handle_event(key(KeyCode::Char('h')));
+        app.handle_event(key(KeyCode::Char('i')));
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(action, AppAction::InterruptProcessing);
+        assert_eq!(app.command_queue.len(), 1);
+    }
+
+    #[test]
+    fn enter_during_processing_with_blocking_tool_only_queues() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.active_tools.insert(
+            "tu_1".into(),
+            ActiveToolInfo {
+                name: "apply".into(),
+                input: serde_json::Value::Null,
+                progress: None,
+                interruptible: false,
+            },
+        );
+        app.handle_event(key(KeyCode::Char('h')));
+        let action = app.handle_event(key(KeyCode::Enter));
+        assert_eq!(action, AppAction::None);
+        assert_eq!(app.command_queue.len(), 1);
+        assert_eq!(app.state, AppState::Processing);
+    }
+
+    #[test]
+    fn permission_request_deferred_while_typing() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.handle_event(key(KeyCode::Char('h')));
+        assert!(!app.input.is_empty());
+
+        app.handle_event(TuiEvent::Agent {
+            epoch: 0,
+            event: crab_core::event::Event::PermissionRequest {
+                tool_name: "bash".into(),
+                input_summary: "rm -rf /tmp".into(),
+                request_id: "req_1".into(),
+                tool_input: serde_json::json!({"command": "rm -rf /tmp"}),
+            },
+        });
+
+        assert_ne!(app.state, AppState::Confirming);
+        assert!(app.approval_queue.is_empty());
+        assert!(!app.pending_suppressed.is_empty());
+    }
+
+    #[test]
+    fn suppressed_permission_promoted_on_tick() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.input.set_text("draft");
+        app.last_input_keystroke =
+            Some(Instant::now().checked_sub(Duration::from_secs(2)).unwrap());
+        app.pending_suppressed.push(PermissionCard::from_event(
+            "bash",
+            "rm -rf /tmp",
+            "req_1".into(),
+            &serde_json::Value::Null,
+        ));
+
+        app.handle_event(TuiEvent::Tick);
+
+        assert_eq!(app.state, AppState::Confirming);
+        assert!(!app.approval_queue.is_empty());
+        assert!(app.pending_suppressed.is_empty());
+    }
+
+    #[test]
+    fn granted_tool_not_deferred_while_typing() {
+        let mut app = App::new("test");
+        app.state = AppState::Processing;
+        app.session_grants.insert("bash".to_string());
+        app.handle_event(key(KeyCode::Char('h')));
+
+        let action = app.handle_event(TuiEvent::Agent {
+            epoch: 0,
+            event: crab_core::event::Event::PermissionRequest {
+                tool_name: "bash".into(),
+                input_summary: "ls".into(),
+                request_id: "req_1".into(),
+                tool_input: serde_json::Value::Null,
+            },
+        });
+
+        assert_eq!(
+            action,
+            AppAction::PermissionResponse {
+                request_id: "req_1".into(),
+                allowed: true,
+                feedback: None,
+            }
+        );
+        assert!(app.pending_suppressed.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_idle_with_queue_restores_input() {
+        let mut app = App::new("test");
+        app.state = AppState::Idle;
+        app.command_queue.push("queued cmd".into());
+
+        let action = app.handle_event(ctrl_key('c'));
+        assert_eq!(action, AppAction::None);
+        assert!(app.command_queue.is_empty());
+        assert_eq!(app.input.text(), "queued cmd");
+        assert!(app.last_interrupt.is_none());
+    }
+
+    #[test]
+    fn esc_idle_with_queue_restores_input() {
+        let mut app = App::new("test");
+        app.state = AppState::Idle;
+        app.command_queue.push("queued cmd".into());
+
+        let action = app.handle_event(key(KeyCode::Esc));
+        assert_eq!(action, AppAction::None);
+        assert!(app.command_queue.is_empty());
+        assert_eq!(app.input.text(), "queued cmd");
+    }
+
+    #[test]
+    fn ctrl_c_idle_empty_queue_still_arms_exit() {
+        let mut app = App::new("test");
+        app.state = AppState::Idle;
+        let first = app.handle_event(ctrl_key('c'));
+        assert_eq!(first, AppAction::None);
+        assert!(!app.should_quit);
+        assert!(app.last_interrupt.is_some());
+        let second = app.handle_event(ctrl_key('c'));
+        assert_eq!(second, AppAction::Quit);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn restore_queued_input_prepends_to_current() {
+        let mut app = App::new("test");
+        app.command_queue.push("a".into());
+        app.command_queue.push("b".into());
+        app.input.set_text("typed");
+        app.restore_queued_input();
+        assert_eq!(app.input.text(), "a\nb\ntyped");
+        assert!(app.command_queue.is_empty());
     }
 }

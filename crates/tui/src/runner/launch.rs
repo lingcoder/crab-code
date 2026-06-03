@@ -36,6 +36,9 @@ pub struct TuiConfig {
     pub mcp_servers: Option<serde_json::Value>,
     /// Validation warnings from settings loading (shown as toasts after init).
     pub settings_warnings: Vec<String>,
+    /// Text to seed the input box with at startup (from `--prefill`), without
+    /// submitting it. `None` leaves the input empty.
+    pub prefill: Option<String>,
 }
 
 /// Run the interactive TUI REPL. This is the main entry point for interactive mode.
@@ -136,6 +139,7 @@ mod tests {
             skill_dirs: vec![],
             mcp_servers: None,
             settings_warnings: vec![],
+            prefill: None,
         };
         assert_eq!(config.session_config.session_id, "test");
         assert!(config.skill_dirs.is_empty());

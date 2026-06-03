@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -28,6 +29,32 @@ pub fn coordinator_mode_enabled() -> bool {
 
 fn coordinator_mode_from(lookup: impl Fn(&str) -> Option<String>) -> bool {
     lookup("CRAB_COORDINATOR_MODE").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+}
+
+/// How to launch when no positional prompt and no `-p` were given.
+///
+/// The interactive TUI may only run when both stdout and stdin are real
+/// terminals. A piped stdout/stdin forces the headless path, matching how
+/// other agentic CLIs behave when their output is captured or their input
+/// is fed from a pipe.
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchMode {
+    /// Both stdout and stdin are terminals — start the interactive TUI.
+    Interactive,
+    /// stdin is piped — read it as the headless prompt.
+    HeadlessFromStdin,
+    /// stdout is not a terminal but stdin is — there is no prompt source.
+    NoPromptSource,
+}
+
+fn launch_mode(stdout_is_tty: bool, stdin_is_tty: bool) -> LaunchMode {
+    if stdout_is_tty && stdin_is_tty {
+        LaunchMode::Interactive
+    } else if !stdin_is_tty {
+        LaunchMode::HeadlessFromStdin
+    } else {
+        LaunchMode::NoPromptSource
+    }
 }
 
 /// Resolve well-known model aliases to their full model IDs.
@@ -426,7 +453,8 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         default_shell: settings.default_shell_kind().as_str().to_string(),
     };
 
-    // Determine the effective prompt: positional arg, or stdin if -p with no prompt
+    // A positional arg or `-p` keeps the existing behavior; otherwise TTY
+    // status decides interactive-vs-headless (see `launch_mode`).
     let effective_prompt = if let Some(ref prompt) = cli.prompt {
         Some(prompt.clone())
     } else if cli.print {
@@ -436,7 +464,24 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         std::io::stdin().read_to_string(&mut buf)?;
         Some(buf)
     } else {
-        None
+        match launch_mode(
+            std::io::stdout().is_terminal(),
+            std::io::stdin().is_terminal(),
+        ) {
+            LaunchMode::Interactive => None,
+            LaunchMode::HeadlessFromStdin => {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                Some(buf)
+            }
+            LaunchMode::NoPromptSource => {
+                anyhow::bail!(
+                    "No prompt provided and stdout is not a terminal. \
+                     Pass a prompt or pipe input, e.g. `crab -p \"...\"` or `echo ... | crab`."
+                );
+            }
+        }
     };
 
     if let Some(prompt) = effective_prompt {
@@ -472,6 +517,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 skill_dirs,
                 mcp_servers: settings.mcp_servers.clone(),
                 settings_warnings,
+                prefill: cli.prefill.clone(),
             };
             let exit_info = crab_tui::run(tui_config).await?;
             print_exit_info(&exit_info);
@@ -884,6 +930,25 @@ mod tests {
                 "value {v:?} should not enable coordinator"
             );
         }
+    }
+
+    #[test]
+    fn launch_mode_interactive_only_when_both_tty() {
+        assert_eq!(launch_mode(true, true), LaunchMode::Interactive);
+    }
+
+    #[test]
+    fn launch_mode_piped_stdout_has_no_prompt_source() {
+        // `crab | cat`: stdout captured, keyboard still attached to stdin.
+        assert_eq!(launch_mode(false, true), LaunchMode::NoPromptSource);
+    }
+
+    #[test]
+    fn launch_mode_piped_stdin_reads_stdin() {
+        // `echo hi | crab`: stdin is the prompt source.
+        assert_eq!(launch_mode(true, false), LaunchMode::HeadlessFromStdin);
+        // Both piped (e.g. in a script) also reads stdin.
+        assert_eq!(launch_mode(false, false), LaunchMode::HeadlessFromStdin);
     }
 
     #[test]

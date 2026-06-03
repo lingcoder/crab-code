@@ -79,6 +79,23 @@ impl App {
         Some(text)
     }
 
+    /// Restore queued command type-ahead back into the input box, draining the
+    /// queue. Queued commands are prepended (oldest first) ahead of whatever
+    /// the user has already typed. Used by the idle Esc / Ctrl+C path. No-op
+    /// when the queue is empty.
+    pub fn restore_queued_input(&mut self) {
+        let queued = self.command_queue.drain_all();
+        if queued.is_empty() {
+            return;
+        }
+        let mut parts = queued;
+        let current = self.input.text();
+        if !current.is_empty() {
+            parts.push(current);
+        }
+        self.input.set_text(&parts.join("\n"));
+    }
+
     /// Toggle `collapsed` on the last `ToolResult` in the message list.
     pub(super) fn toggle_last_tool_result_collapsed(&mut self) {
         for msg in self.messages.iter_mut().rev() {
@@ -201,6 +218,16 @@ impl App {
         if let Some(action) = resolved_action {
             match action {
                 Action::Quit => {
+                    // When idle with queued type-ahead, Ctrl+C restores the
+                    // queue into the input instead of arming exit. Ctrl+D is
+                    // excluded so it always quits.
+                    if matches!(key.code, KeyCode::Char('c'))
+                        && matches!(self.state, AppState::Idle | AppState::WaitingForInput)
+                        && !self.command_queue.is_empty()
+                    {
+                        self.restore_queued_input();
+                        return AppAction::None;
+                    }
                     let now = Instant::now();
                     let pressed_key = if matches!(key.code, KeyCode::Char('d')) {
                         ExitKey::CtrlD
@@ -237,6 +264,14 @@ impl App {
                         });
                         return AppAction::InterruptProcessing;
                     }
+                    return AppAction::None;
+                }
+                // Esc restores queued type-ahead into the input when idle.
+                Action::Cancel
+                    if matches!(self.state, AppState::Idle | AppState::WaitingForInput)
+                        && !self.command_queue.is_empty() =>
+                {
+                    self.restore_queued_input();
                     return AppAction::None;
                 }
                 Action::NewSession if self.state != AppState::Confirming => {
@@ -627,10 +662,12 @@ impl App {
                         }
                         VimAction::Ignored => {
                             self.input.handle_key(key);
+                            self.note_input_keystroke();
                         }
                     }
                 } else {
                     self.input.handle_key(key);
+                    self.note_input_keystroke();
                 }
 
                 // Auto-trigger slash command completion as the user types
@@ -689,12 +726,21 @@ impl App {
                 let text = self.input.submit();
                 self.input_history_list.push(text.clone());
                 self.command_queue.push(text);
+                // Abort only when every in-flight tool is interruptible; the
+                // runner then dequeues this message immediately instead of
+                // after the turn finishes on its own.
+                if !self.active_tools.is_empty()
+                    && self.active_tools.values().all(|t| t.interruptible)
+                {
+                    return AppAction::InterruptProcessing;
+                }
                 self.notifications
                     .info(format!("Queued ({} pending)", self.command_queue.len()));
             }
             return AppAction::None;
         }
         self.input.handle_key(key);
+        self.note_input_keystroke();
         AppAction::None
     }
 
@@ -939,6 +985,9 @@ impl App {
                 {
                     self.thinking = ThinkingState::Idle;
                 }
+                if !self.is_input_suppressing() {
+                    self.promote_suppressed_permissions();
+                }
                 AppAction::None
             }
             AppEvent::Resize(..) => AppAction::None,
@@ -998,12 +1047,15 @@ impl App {
                     .and_then(|reg| reg.get(&name));
                 let summary = tool_ref.and_then(|t| t.format_use_summary(&input));
                 let color = tool_ref.map(|t| t.display_color());
+                // Unknown tools default to interruptible.
+                let interruptible = tool_ref.is_none_or(|t| t.is_interruptible());
                 self.active_tools.insert(
                     id,
                     ActiveToolInfo {
                         name: name.clone(),
                         input,
                         progress: None,
+                        interruptible,
                     },
                 );
                 let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
@@ -1187,13 +1239,17 @@ impl App {
                         feedback: None,
                     }
                 } else {
-                    self.state = AppState::Confirming;
-                    self.approval_queue.push(PermissionCard::from_event(
-                        &tool_name,
-                        &summary,
-                        request_id,
-                        &tool_input,
-                    ));
+                    let card =
+                        PermissionCard::from_event(&tool_name, &summary, request_id, &tool_input);
+                    if self.is_input_suppressing() {
+                        // Hold the card back while the user is typing so a stray
+                        // key cannot answer a prompt they have not read; a Tick
+                        // promotes it once the window elapses.
+                        self.pending_suppressed.push(card);
+                    } else {
+                        self.state = AppState::Confirming;
+                        self.approval_queue.push(card);
+                    }
                     AppAction::None
                 }
             }
@@ -1355,6 +1411,7 @@ impl App {
             // Processing-state command-queue type-ahead works too.
             AppEvent::Paste(text) => {
                 self.input.insert_text(&text);
+                self.note_input_keystroke();
                 AppAction::None
             }
             // Genuine no-op: the renderer always draws on the next frame, so

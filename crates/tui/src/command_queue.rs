@@ -27,6 +27,13 @@ impl CommandQueue {
         self.queue.pop_front()
     }
 
+    /// Drain every queued command in FIFO order (oldest first), emptying the
+    /// queue. Used by the idle Esc / Ctrl+C path to restore all queued
+    /// type-ahead back into the input box at once.
+    pub fn drain_all(&mut self) -> Vec<String> {
+        self.queue.drain(..).collect()
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
@@ -70,5 +77,16 @@ mod tests {
         q.push("b".into());
         q.clear();
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn drain_all_returns_fifo_and_empties() {
+        let mut q = CommandQueue::new();
+        q.push("a".into());
+        q.push("b".into());
+        q.push("c".into());
+        assert_eq!(q.drain_all(), vec!["a", "b", "c"]);
+        assert!(q.is_empty());
+        assert!(q.drain_all().is_empty());
     }
 }

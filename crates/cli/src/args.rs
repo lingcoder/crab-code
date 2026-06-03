@@ -101,6 +101,11 @@ pub struct Cli {
     #[arg(long)]
     pub resume: Option<String>,
 
+    /// Pre-fill the interactive prompt input with text without submitting it.
+    /// Ignored in print / single-shot mode.
+    #[arg(long)]
+    pub prefill: Option<String>,
+
     /// Print mode: run a single prompt and print the result (non-interactive).
     /// If no prompt is given, reads from stdin.
     #[arg(short = 'p', long)]
@@ -1063,5 +1068,17 @@ mod tests {
     fn cli_setting_sources_default_is_none() {
         let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
         assert!(cli.setting_sources.is_none());
+    }
+
+    #[test]
+    fn cli_parses_prefill() {
+        let cli = Cli::try_parse_from(["crab", "--prefill", "draft text"]).unwrap();
+        assert_eq!(cli.prefill.as_deref(), Some("draft text"));
+    }
+
+    #[test]
+    fn cli_prefill_default_is_none() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(cli.prefill.is_none());
     }
 }

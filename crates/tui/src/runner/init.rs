@@ -104,6 +104,9 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
     if let Some(memory_dir) = config.session_config.memory_dir.clone() {
         app.set_memory_dir(memory_dir);
     }
+    if let Some(prefill) = config.prefill.as_deref() {
+        app.seed_input(prefill);
+    }
 
     // Slash command tab completion is set up in run_loop() once the
     // CommandRegistry is constructed, so it stays in sync automatically.
