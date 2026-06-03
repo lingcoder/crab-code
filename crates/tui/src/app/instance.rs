@@ -264,6 +264,22 @@ impl App {
         }
     }
 
+    /// Whether a periodic `Tick` can still change what is on screen, so the
+    /// run loop must keep redrawing every tick rather than idling. True while
+    /// any time-driven element is live: the spinner, an unexpired toast, the
+    /// thinking label, the double-press exit-hint window, or a permission card
+    /// held back behind the typing-suppression window.
+    #[must_use]
+    pub fn has_active_animation(&self) -> bool {
+        self.spinner.is_active()
+            || self.notifications.has_active()
+            || !matches!(self.thinking, ThinkingState::Idle)
+            || self
+                .last_interrupt
+                .is_some_and(|t| t.elapsed() < Duration::from_millis(800))
+            || !self.pending_suppressed.is_empty()
+    }
+
     /// Commit any newly-completed lines from the most recent streaming
     /// assistant cell into `pending_history` so streaming output flows into
     /// terminal scrollback line by line instead of being repainted in the
@@ -2191,5 +2207,74 @@ mod tests {
         app.restore_queued_input();
         assert_eq!(app.input.text(), "a\nb\ntyped");
         assert!(app.command_queue.is_empty());
+    }
+
+    #[test]
+    fn has_active_animation_false_when_idle() {
+        let app = App::new("test");
+        assert!(!app.has_active_animation());
+    }
+
+    #[test]
+    fn has_active_animation_true_while_spinner_active() {
+        let mut app = App::new("test");
+        app.spinner.start("Working");
+        assert!(app.has_active_animation());
+    }
+
+    #[test]
+    fn has_active_animation_true_with_pending_permission() {
+        let mut app = App::new("test");
+        app.pending_suppressed.push(PermissionCard::from_event(
+            "bash",
+            "ls",
+            "req_1".into(),
+            &serde_json::Value::Null,
+        ));
+        assert!(app.has_active_animation());
+    }
+
+    #[test]
+    fn restore_cancelled_prompt_pops_user_and_restores_input() {
+        let mut app = App::new("test");
+        app.messages.push(ChatMessage::User {
+            text: "draft prompt".into(),
+        });
+        app.messages.push(ChatMessage::System {
+            text: "Interrupted".into(),
+            kind: crate::history::cells::SystemKind::Info,
+        });
+        app.input_history_list.push("draft prompt".into());
+
+        app.restore_cancelled_prompt();
+
+        assert!(
+            !app.messages
+                .iter()
+                .any(|m| matches!(m, ChatMessage::User { .. }))
+        );
+        assert_eq!(app.input.text(), "draft prompt");
+        assert!(app.input_history_list.is_empty());
+        // The Interrupted system cell stays.
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| matches!(m, ChatMessage::System { .. }))
+        );
+    }
+
+    #[test]
+    fn shift_tab_cycles_permission_mode_and_syncs() {
+        use crab_core::permission::PermissionMode;
+        let mut app = App::new("test");
+        let action = app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.permission_mode, PermissionMode::AcceptEdits);
+        assert_eq!(
+            action,
+            AppAction::SyncPermissionMode(PermissionMode::AcceptEdits)
+        );
     }
 }

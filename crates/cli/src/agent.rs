@@ -263,8 +263,22 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     let backend = Arc::new(crab_api::create_backend(&effective_settings));
     let mut registry = create_default_registry();
 
-    // Connect to MCP servers and register their tools
-    let mcp_manager = if let Some(ref mcp_value) = settings.mcp_servers {
+    // Only the headless/single-shot path connects MCP synchronously — it needs
+    // tools before the one turn runs. The interactive TUI connects MCP in the
+    // background via AgentRuntime::init, so pre-connecting here would just block
+    // startup and throw the result away.
+    let want_headless = cli.prompt.is_some()
+        || cli.print
+        || !matches!(
+            launch_mode(
+                std::io::stdout().is_terminal(),
+                std::io::stdin().is_terminal(),
+            ),
+            LaunchMode::Interactive,
+        );
+
+    // Connect to MCP servers and register their tools (headless only).
+    let mcp_manager = if want_headless && let Some(ref mcp_value) = settings.mcp_servers {
         let mut mgr = crab_mcp::McpManager::new();
         let failed = mgr.start_all(mcp_value).await.unwrap_or_else(|e| {
             eprintln!("Warning: failed to parse MCP config: {e}");

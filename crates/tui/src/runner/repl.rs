@@ -53,6 +53,9 @@ pub(super) async fn run_loop(
     let mut conv_return: Option<tokio::sync::oneshot::Receiver<crab_agents::QueryTaskResult>> =
         None;
     let mut cancel = tokio_util::sync::CancellationToken::new();
+    // Set by a Ctrl+C interrupt; consumed in the conv_return arm to rewind a
+    // no-progress turn and restore the cancelled prompt into the input box.
+    let mut pending_user_cancel_restore = false;
     // Monotonically incremented for every spawned query. The REPL discards
     // any `TuiEvent::Agent` whose tagged epoch does not match. This guards
     // the main loop against stale events from a query that was cancelled
@@ -68,6 +71,9 @@ pub(super) async fn run_loop(
     // would bounce y up and down each frame. Reset on Idle so the next
     // turn can shrink back to its natural size.
     let mut sticky_height: u16 = 0;
+    // Dirty flag: skip the full layout+render+diff pass when nothing visible
+    // changed. Starts true so the first frame always paints.
+    let mut needs_redraw = true;
 
     loop {
         let width = terminal.size()?.width.max(1);
@@ -80,19 +86,26 @@ pub(super) async fn run_loop(
             app.rebuild_scrollback(width);
         }
 
-        app.drain_finalized_into_pending(width);
-        app.flush_streaming_assistant_lines(width);
-        if !app.pending_history.is_empty() {
-            let lines = app.pending_history.take();
-            crate::insert_history::insert_history_lines_with_mode(terminal, &lines, insert_mode)?;
+        if needs_redraw {
+            app.drain_finalized_into_pending(width);
+            app.flush_streaming_assistant_lines(width);
+            if !app.pending_history.is_empty() {
+                let lines = app.pending_history.take();
+                crate::insert_history::insert_history_lines_with_mode(
+                    terminal,
+                    &lines,
+                    insert_mode,
+                )?;
+            }
+            if matches!(app.state, crate::app::AppState::Idle) {
+                sticky_height = 0;
+            }
+            let _viewport = compute_inline_viewport(terminal, app, &mut sticky_height)?;
+            terminal.draw(|frame| {
+                app.render(frame.area(), frame.buffer_mut());
+            })?;
+            needs_redraw = false;
         }
-        if matches!(app.state, crate::app::AppState::Idle) {
-            sticky_height = 0;
-        }
-        let _viewport = compute_inline_viewport(terminal, app, &mut sticky_height)?;
-        terminal.draw(|frame| {
-            app.render(frame.area(), frame.buffer_mut());
-        })?;
 
         let event = tokio::select! {
             ev = tui_rx.recv() => {
@@ -102,6 +115,7 @@ pub(super) async fn run_loop(
                 }
             }
             _ = frame_rx.recv() => {
+                needs_redraw = true;
                 continue;
             }
             // Wait for background init to complete
@@ -152,6 +166,7 @@ pub(super) async fn run_loop(
                     app.notifications.warn("Background initialization failed".to_string());
                     app.state = crate::app::AppState::Idle;
                 }
+                needs_redraw = true;
                 continue;
             }
             // Wait for agent task to return conversation
@@ -166,6 +181,22 @@ pub(super) async fn run_loop(
                     match result {
                         Ok(agent_result) => {
                             rt.restore_conversation(agent_result.conversation);
+                            // Quick user-cancel before the model replied: undo
+                            // the submit — drop the user turn from the
+                            // conversation and put its text back in the input.
+                            if std::mem::take(&mut pending_user_cancel_restore)
+                                && app.command_queue.is_empty()
+                                && app.input.is_empty()
+                                && rt.conversation().last().is_some_and(|m| {
+                                    m.role == crab_core::message::Role::User
+                                        || (m.role == crab_core::message::Role::Assistant
+                                            && m.text().trim().is_empty()
+                                            && !m.has_tool_use())
+                                })
+                            {
+                                rt.conversation_mut().pop_last_turn();
+                                app.restore_cancelled_prompt();
+                            }
                             rt.merge_cost(&agent_result.cost);
                             app.total_cost_usd = rt.cost().total_cost_usd;
                             if let Err(e) = agent_result.result {
@@ -244,6 +275,7 @@ pub(super) async fn run_loop(
                         }
                     }
                 }
+                needs_redraw = true;
                 continue;
             }
             // Filesystem watch events (settings/skills changed)
@@ -284,12 +316,14 @@ pub(super) async fn run_loop(
                         }
                     }
                 }
+                needs_redraw = true;
                 continue;
             }
             () = sigcont_stream.recv() => {
                 let _ = enable_raw_mode();
                 let _ = execute!(io::stdout(), EnableBracketedPaste);
                 terminal.clear()?;
+                needs_redraw = true;
                 continue;
             }
         };
@@ -305,7 +339,13 @@ pub(super) async fn run_loop(
         {
             continue;
         }
+        // A bare Tick only changes the screen while an animation is live;
+        // anything else (key, resize, paste, agent delta) always redraws.
+        let is_tick = matches!(event, crate::event::TuiEvent::Tick);
         let action = app.handle_event(event);
+        if !is_tick || app.has_active_animation() {
+            needs_redraw = true;
+        }
 
         match action {
             AppAction::Quit => {
@@ -387,6 +427,7 @@ pub(super) async fn run_loop(
             AppAction::InterruptProcessing => {
                 cancel.cancel();
                 app.clear_streaming_assistant_flag();
+                pending_user_cancel_restore = true;
             }
             AppAction::NewSession => {
                 if let Some(ref mut rt) = state {
@@ -440,6 +481,16 @@ pub(super) async fn run_loop(
                         Some(session_id),
                         Some(std::path::Path::new(&project_path)),
                     );
+                }
+            }
+            AppAction::SyncPermissionMode(mode) => {
+                if let Some(ref mut rt) = state {
+                    rt.tool_ctx_mut().permission_mode = mode;
+                }
+            }
+            AppAction::SyncModel(model) => {
+                if let Some(ref mut rt) = state {
+                    rt.loop_config_mut().model = crab_core::model::ModelId::from(model.as_str());
                 }
             }
             AppAction::None => {}

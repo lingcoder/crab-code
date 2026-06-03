@@ -98,6 +98,13 @@ pub enum AppAction {
     /// can run one-shot setup (install dependencies, materialize config,
     /// …) the first time Crab Code is trusted there.
     FireSetupHook { project_path: String },
+    /// Permission mode changed via a keyboard shortcut (Shift+Tab). The
+    /// runner mirrors it into the runtime's tool context so the new mode
+    /// actually governs execution, not just the footer label.
+    SyncPermissionMode(crab_core::permission::PermissionMode),
+    /// Model changed via the model picker overlay. The runner mirrors it
+    /// into the runtime's loop config so the next turn routes to it.
+    SyncModel(String),
 }
 
 /// Which key initiated the current double-press exit window.

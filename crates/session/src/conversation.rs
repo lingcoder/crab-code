@@ -76,6 +76,17 @@ impl Conversation {
         self.inner.messages()
     }
 
+    /// Get the last message, if any (delegates to core).
+    pub fn last(&self) -> Option<&Message> {
+        self.inner.last()
+    }
+
+    /// Remove the most recent turn — the last user message and everything
+    /// after it. Undoes a cancelled prompt (delegates to core).
+    pub fn pop_last_turn(&mut self) {
+        self.inner.pop_last_turn();
+    }
+
     /// Mutable access to the underlying messages vec.
     pub fn messages_mut(&mut self) -> &mut Vec<Message> {
         self.inner.messages_mut()

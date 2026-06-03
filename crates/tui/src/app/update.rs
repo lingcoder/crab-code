@@ -96,6 +96,34 @@ impl App {
         self.input.set_text(&parts.join("\n"));
     }
 
+    /// Undo a just-submitted prompt after a quick user-cancel: drop the
+    /// trailing `User` cell (plus an empty assistant placeholder if the cancel
+    /// landed mid-stream), put the prompt text back in the input box, and undo
+    /// its history entry so Up-arrow does not show it twice.
+    pub fn restore_cancelled_prompt(&mut self) {
+        let Some(idx) = self
+            .messages
+            .iter()
+            .rposition(|m| matches!(m, ChatMessage::User { .. }))
+        else {
+            return;
+        };
+        let ChatMessage::User { text } = self.messages.remove(idx) else {
+            return;
+        };
+        let drop_empty_assistant = matches!(
+            self.messages.get(idx),
+            Some(ChatMessage::Assistant { text: at, .. }) if at.trim().is_empty()
+        );
+        if drop_empty_assistant {
+            self.messages.remove(idx);
+        }
+        if self.input_history_list.last() == Some(&text) {
+            self.input_history_list.pop();
+        }
+        self.input.set_text(&text);
+    }
+
     /// Toggle `collapsed` on the last `ToolResult` in the message list.
     pub(super) fn toggle_last_tool_result_collapsed(&mut self) {
         for msg in self.messages.iter_mut().rev() {
@@ -344,7 +372,7 @@ impl App {
                         // All other modes cycle back to Default
                         _ => PermissionMode::Default,
                     };
-                    return AppAction::None;
+                    return AppAction::SyncPermissionMode(self.permission_mode);
                 }
                 // Redraw: handled by outer loop on next frame.
                 Action::Redraw => {
@@ -1291,7 +1319,7 @@ impl App {
                     PermissionMode::AcceptEdits => PermissionMode::Plan,
                     _ => PermissionMode::Default,
                 };
-                AppAction::None
+                AppAction::SyncPermissionMode(self.permission_mode)
             }
             AppEvent::OpenSearch => {
                 self.search.activate();
@@ -1306,10 +1334,10 @@ impl App {
             AppEvent::SwitchModel(model) => {
                 self.messages.push(ChatMessage::System {
                     text: format!("[model switched to {model}]"),
-            kind: SystemKind::Info,
+                    kind: SystemKind::Info,
                 });
-                self.model_name = model;
-                AppAction::None
+                self.model_name.clone_from(&model);
+                AppAction::SyncModel(model)
             }
             AppEvent::Quit => {
                 self.should_quit = true;

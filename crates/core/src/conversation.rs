@@ -112,6 +112,18 @@ impl Conversation {
         self.messages.iter().map(Message::estimated_tokens).sum()
     }
 
+    /// Remove the most recent turn — the last `User` message and everything
+    /// after it (including an empty assistant placeholder left by a cancelled
+    /// turn). Undoes a just-submitted prompt when the user cancels before the
+    /// model replied. No-op when there is no user turn to remove.
+    pub fn pop_last_turn(&mut self) {
+        let Some(start) = self.messages.iter().rposition(|m| m.role == Role::User) else {
+            return;
+        };
+        self.messages.truncate(start);
+        self.turns.retain(|range| range.start < start);
+    }
+
     /// Remove messages from the beginning to stay within a token budget.
     ///
     /// Keeps at least the most recent turn. Returns the number of messages removed.
@@ -397,6 +409,38 @@ mod tests {
     #[test]
     fn conversation_default() {
         let conv = Conversation::default();
+        assert!(conv.is_empty());
+        assert_eq!(conv.turn_count(), 0);
+    }
+
+    #[test]
+    fn pop_last_turn_removes_trailing_user_turn() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("first"));
+        conv.push(Message::assistant("answer"));
+        conv.push(Message::user("second"));
+        assert_eq!(conv.len(), 3);
+
+        conv.pop_last_turn();
+        assert_eq!(conv.len(), 2);
+        assert_eq!(conv.turn_count(), 1);
+        assert_eq!(conv.last().unwrap().text(), "answer");
+
+        conv.pop_last_turn();
+        assert!(conv.is_empty());
+        assert_eq!(conv.turn_count(), 0);
+
+        // No-op on empty.
+        conv.pop_last_turn();
+        assert!(conv.is_empty());
+    }
+
+    #[test]
+    fn pop_last_turn_strips_trailing_empty_assistant() {
+        let mut conv = Conversation::new();
+        conv.push(Message::user("hi"));
+        conv.push(Message::new(Role::Assistant, vec![]));
+        conv.pop_last_turn();
         assert!(conv.is_empty());
         assert_eq!(conv.turn_count(), 0);
     }
