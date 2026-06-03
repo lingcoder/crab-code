@@ -11,6 +11,10 @@ use crate::components::input::InputBox;
 use crate::theme::accents::CLAUDE_DARK as CRAB_COLOR;
 use crate::traits::Renderable;
 
+/// Bash-mode prompt accent — green, to distinguish a shell line from a normal
+/// prompt.
+const BASH_COLOR: ratatui::style::Color = ratatui::style::Color::Rgb(126, 191, 130);
+
 /// Input area: `❯` prompt + input box, with optional mode indicator.
 pub struct InputArea<'a> {
     pub input: &'a InputBox,
@@ -37,22 +41,22 @@ impl Renderable for InputArea<'_> {
 }
 
 /// Render input with `❯` prompt — no border box (matches CC's flat style).
+/// In `Bash` mode the chevron becomes a `!` indicator in a distinct color so
+/// the user sees the line will run as a shell command.
 #[allow(clippy::cast_possible_truncation)]
-fn render_input_with_prompt(
-    input: &InputBox,
-    _mode: PromptInputMode,
-    area: Rect,
-    buf: &mut Buffer,
-) {
+fn render_input_with_prompt(input: &InputBox, mode: PromptInputMode, area: Rect, buf: &mut Buffer) {
     if area.height == 0 || area.width < 4 {
         Widget::render(input, area, buf);
         return;
     }
 
-    // Prompt chevron
+    let (glyph, color) = match mode {
+        PromptInputMode::Bash => ("! ", BASH_COLOR),
+        _ => ("\u{276f} ", CRAB_COLOR),
+    };
     let prompt_span = Span::styled(
-        "\u{276f} ",
-        Style::default().fg(CRAB_COLOR).add_modifier(Modifier::BOLD),
+        glyph,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
     );
     let prompt_area = Rect {
         x: area.x,
@@ -95,5 +99,32 @@ mod tests {
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         ia.render(area, &mut buf);
+    }
+
+    #[test]
+    fn bash_mode_renders_bang_glyph() {
+        let mut input = InputBox::new();
+        input.insert_text("ls -la");
+        let ia = InputArea {
+            input: &input,
+            mode: PromptInputMode::Bash,
+        };
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        ia.render(area, &mut buf);
+        assert_eq!(buf[(0, 0)].symbol(), "!");
+    }
+
+    #[test]
+    fn prompt_mode_renders_chevron_glyph() {
+        let input = InputBox::new();
+        let ia = InputArea {
+            input: &input,
+            mode: PromptInputMode::Prompt,
+        };
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        ia.render(area, &mut buf);
+        assert_eq!(buf[(0, 0)].symbol(), "\u{276f}");
     }
 }

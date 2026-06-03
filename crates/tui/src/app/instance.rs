@@ -156,6 +156,9 @@ pub struct App {
     /// The terminal width at which `finalized_history` was last flushed into
     /// scrollback. When the width changes, the scrollback must be rebuilt.
     pub(super) last_scrollback_width: Option<u16>,
+    /// Registry of large pastes collapsed into `[Pasted text #N +K lines]`
+    /// reference tokens, expanded back to full content at submit.
+    pub(super) paste_registry: super::PastedContents,
 }
 
 impl App {
@@ -214,6 +217,7 @@ impl App {
             pending_history: crate::history::PendingHistory::new(),
             finalized_history: Vec::new(),
             last_scrollback_width: None,
+            paste_registry: super::PastedContents::new(),
         }
     }
 
@@ -434,6 +438,7 @@ impl App {
         self.last_input_keystroke = None;
         self.finalized_history.clear();
         self.last_scrollback_width = None;
+        self.paste_registry.clear();
     }
 
     /// Rebuild the message list from a loaded conversation.
@@ -490,10 +495,20 @@ impl App {
         // Separators
         crate::components::header::render_separator(layout.separator_top, buf);
 
-        // Input — delegated to InputArea Renderable
+        // Input — delegated to InputArea Renderable. A leading `!` puts the
+        // line into bash mode (the submit path runs it as a shell command), so
+        // derive the indicator from the text unless a special mode is pinned.
+        let render_mode = match self.input_mode {
+            PromptInputMode::Prompt | PromptInputMode::Bash
+                if self.input.text().starts_with('!') =>
+            {
+                PromptInputMode::Bash
+            }
+            other => other,
+        };
         let input_area = InputArea {
             input: &self.input,
-            mode: self.input_mode,
+            mode: render_mode,
         };
         input_area.render(layout.input, buf);
 
@@ -1845,8 +1860,9 @@ mod tests {
     }
 
     #[test]
-    fn render_input_no_mode_prefix() {
-        // Mode indicator was removed — all modes render the same ❯ prompt
+    fn render_bash_mode_shows_bang_indicator() {
+        // Bash mode swaps the `❯` chevron for a `!` indicator, without any
+        // bracketed `[bash]` text label.
         let input = InputBox::new();
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
@@ -1860,7 +1876,8 @@ mod tests {
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         assert!(!text.contains("[bash]"));
-        assert!(text.contains('❯'));
+        assert!(text.contains('!'));
+        assert!(!text.contains('❯'));
     }
 
     #[test]

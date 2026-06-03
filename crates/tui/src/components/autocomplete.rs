@@ -23,6 +23,8 @@ pub enum CompletionContext {
     SlashCommand,
     /// Completing a file path.
     FilePath,
+    /// Completing an `@member` teammate name.
+    AtMention,
     /// No completion context detected.
     None,
 }
@@ -31,6 +33,9 @@ pub enum CompletionContext {
 pub struct AutoComplete {
     /// Available slash commands for completion.
     commands: Vec<CommandInfo>,
+    /// Teammate names for `@member` completion, refreshed from the team
+    /// snapshot.
+    members: Vec<String>,
     /// Current list of completion candidates.
     candidates: Vec<Completion>,
     /// Index of the currently selected candidate (None = no selection).
@@ -56,6 +61,7 @@ impl AutoComplete {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             commands: Vec::new(),
+            members: Vec::new(),
             candidates: Vec::new(),
             selected: None,
             completing_token: String::new(),
@@ -66,6 +72,11 @@ impl AutoComplete {
     /// Register available slash commands.
     pub fn set_commands(&mut self, commands: Vec<CommandInfo>) {
         self.commands = commands;
+    }
+
+    /// Register teammate names for `@member` completion.
+    pub fn set_members(&mut self, members: Vec<String>) {
+        self.members = members;
     }
 
     /// Update the working directory.
@@ -84,6 +95,17 @@ impl AutoComplete {
             .rfind(char::is_whitespace)
             .map_or(0, |i| i + 1);
         let token = &before_cursor[token_start..];
+
+        // `@member`: starts with `@` and the rest is a plain name token
+        // (letters, digits, `-`, `_`), distinguishing teammate mentions from
+        // `@path/to/file` references.
+        if token.starts_with('@')
+            && token[1..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return CompletionContext::AtMention;
+        }
 
         // Slash command: starts with `/` and the rest is purely alphabetic
         // (no further `/` or `\` which would indicate a file path).
@@ -129,6 +151,9 @@ impl AutoComplete {
             }
             CompletionContext::FilePath => {
                 self.complete_file_paths(token);
+            }
+            CompletionContext::AtMention => {
+                self.complete_members(token);
             }
             CompletionContext::None => {}
         }
@@ -218,6 +243,20 @@ impl AutoComplete {
                 self.candidates.push(Completion {
                     text: format!("/{}", cmd.name),
                     description: cmd.description.clone(),
+                    is_directory: false,
+                });
+            }
+        }
+        self.candidates.sort_by_key(|a| a.text.len());
+    }
+
+    fn complete_members(&mut self, token: &str) {
+        let prefix = token.strip_prefix('@').unwrap_or(token).to_lowercase();
+        for name in &self.members {
+            if name.to_lowercase().starts_with(&prefix) {
+                self.candidates.push(Completion {
+                    text: format!("@{name}"),
+                    description: "teammate".into(),
                     is_directory: false,
                 });
             }
@@ -359,6 +398,44 @@ mod tests {
             AutoComplete::detect_context("~/doc", 5),
             CompletionContext::FilePath
         );
+    }
+
+    #[test]
+    fn detect_at_mention() {
+        assert_eq!(
+            AutoComplete::detect_context("@re", 3),
+            CompletionContext::AtMention
+        );
+        assert_eq!(
+            AutoComplete::detect_context("ping @re", 8),
+            CompletionContext::AtMention
+        );
+        // A slash inside the token is a path, not a mention.
+        assert_eq!(
+            AutoComplete::detect_context("@dir/file", 9),
+            CompletionContext::FilePath
+        );
+    }
+
+    #[test]
+    fn complete_members_filters_by_prefix() {
+        let mut ac = AutoComplete::new(".");
+        ac.set_members(vec!["researcher".into(), "reviewer".into(), "lead".into()]);
+        let count = ac.complete("@re", 3);
+        assert_eq!(count, 2);
+        let texts: Vec<&str> = ac.candidates().iter().map(|c| c.text.as_str()).collect();
+        assert!(texts.contains(&"@researcher"));
+        assert!(texts.contains(&"@reviewer"));
+    }
+
+    #[test]
+    fn accept_member_inserts_name() {
+        let mut ac = AutoComplete::new(".");
+        ac.set_members(vec!["researcher".into()]);
+        ac.complete("@re", 3);
+        let (token, text) = ac.accept().unwrap();
+        assert_eq!(token, "@re");
+        assert_eq!(text, "@researcher");
     }
 
     #[test]

@@ -96,6 +96,14 @@ impl App {
         self.input.set_text(&parts.join("\n"));
     }
 
+    /// Expand `[Pasted text #N +K lines]` reference tokens back to their stored
+    /// originals before the prompt is sent to the model. The transcript and
+    /// history keep the collapsed token; only the turn value carries the full
+    /// content.
+    fn expand_paste_refs(&self, text: &str) -> String {
+        self.paste_registry.expand(text)
+    }
+
     /// Undo a just-submitted prompt after a quick user-cancel: drop the
     /// trailing `User` cell (plus an empty assistant placeholder if the cancel
     /// landed mid-stream), put the prompt text back in the input box, and undo
@@ -688,12 +696,14 @@ impl App {
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     if !self.input.is_empty() {
                         let text = self.input.submit();
-                        // Track in history for Ctrl+R history search
+                        let expanded = self.expand_paste_refs(&text);
+                        // History + transcript keep the collapsed token; the
+                        // turn receives the expanded full content.
                         self.input_history_list.push(text.clone());
-                        self.messages.push(ChatMessage::User { text: text.clone() });
+                        self.messages.push(ChatMessage::User { text });
                         self.state = AppState::Processing;
                         self.spinner.start_with_random_verb();
-                        return AppAction::Submit(text);
+                        return AppAction::Submit(expanded);
                     }
                     return AppAction::None;
                 }
@@ -704,11 +714,12 @@ impl App {
                         VimAction::Submit => {
                             if !self.input.is_empty() {
                                 let text = self.input.submit();
+                                let expanded = self.expand_paste_refs(&text);
                                 self.input_history_list.push(text.clone());
-                                self.messages.push(ChatMessage::User { text: text.clone() });
+                                self.messages.push(ChatMessage::User { text });
                                 self.state = AppState::Processing;
                                 self.spinner.start_with_random_verb();
-                                return AppAction::Submit(text);
+                                return AppAction::Submit(expanded);
                             }
                         }
                         VimAction::Ignored => {
@@ -733,10 +744,21 @@ impl App {
         use crate::components::autocomplete::CompletionContext;
         let text = self.input.text();
         let (_, col) = self.input.cursor();
-        if CompletionContext::SlashCommand == AutoComplete::detect_context(&text, col) {
-            self.autocomplete.complete(&text, col);
-        } else {
-            self.autocomplete.dismiss();
+        match AutoComplete::detect_context(&text, col) {
+            CompletionContext::SlashCommand => {
+                self.autocomplete.complete(&text, col);
+            }
+            CompletionContext::AtMention => {
+                let names = self
+                    .team_snapshot
+                    .members
+                    .iter()
+                    .map(|m| m.name.clone())
+                    .collect();
+                self.autocomplete.set_members(names);
+                self.autocomplete.complete(&text, col);
+            }
+            _ => self.autocomplete.dismiss(),
         }
     }
 
@@ -782,8 +804,9 @@ impl App {
         if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
             if !self.input.is_empty() {
                 let text = self.input.submit();
-                self.input_history_list.push(text.clone());
-                self.command_queue.push(text);
+                let expanded = self.expand_paste_refs(&text);
+                self.input_history_list.push(text);
+                self.command_queue.push(expanded);
                 // Abort only when every in-flight tool is interruptible; the
                 // runner then dequeues this message immediately instead of
                 // after the turn finishes on its own.
@@ -1473,7 +1496,14 @@ impl App {
             // Bracketed paste: insert at cursor regardless of AppState so the
             // Processing-state command-queue type-ahead works too.
             AppEvent::Paste(text) => {
-                self.input.insert_text(&text);
+                // Collapse a large paste into a reference token so the input
+                // box stays compact; expand it back at submit.
+                if text.lines().count() >= super::PASTE_COLLAPSE_MIN_LINES {
+                    let token = self.paste_registry.store(text);
+                    self.input.insert_text(&token);
+                } else {
+                    self.input.insert_text(&text);
+                }
                 self.note_input_keystroke();
                 AppAction::None
             }
