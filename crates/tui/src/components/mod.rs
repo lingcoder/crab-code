@@ -24,6 +24,7 @@ pub mod memory_browser;
 pub mod message_actions;
 pub mod message_list;
 pub mod message_pill;
+pub mod message_selector;
 pub mod model_picker;
 pub mod notification;
 pub mod notification_banner;

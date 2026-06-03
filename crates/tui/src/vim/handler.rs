@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::mode::VimMode;
 use super::motion::{CursorPos, Motion};
+use super::operator::{Operator, parse_operator};
 use crate::components::input::InputBox;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +15,10 @@ pub enum VimAction {
 pub struct VimHandler {
     mode: VimMode,
     enabled: bool,
+    /// Operator awaiting a motion (set after d/c/y in Normal mode).
+    pending_operator: Option<Operator>,
+    /// Last yanked or deleted text (vim unnamed register), pasted by `p`.
+    register: String,
 }
 
 impl VimHandler {
@@ -22,6 +27,8 @@ impl VimHandler {
         Self {
             mode: VimMode::Normal,
             enabled: false,
+            pending_operator: None,
+            register: String::new(),
         }
     }
 
@@ -46,6 +53,7 @@ impl VimHandler {
 
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+        self.pending_operator = None;
         if !enabled {
             self.mode = VimMode::Insert;
         }
@@ -75,7 +83,12 @@ impl VimHandler {
 
     fn handle_normal(&mut self, key: KeyEvent, input: &mut InputBox) -> VimAction {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.pending_operator = None;
             return VimAction::Ignored;
+        }
+
+        if let Some(op) = self.pending_operator.take() {
+            return self.complete_operator(op, key, input);
         }
 
         match key.code {
@@ -155,6 +168,16 @@ impl VimHandler {
                 apply_motion(input, Motion::WordBackward);
                 VimAction::Consumed
             }
+            KeyCode::Char('p') => {
+                if !self.register.is_empty() {
+                    input.insert_text(&self.register);
+                }
+                VimAction::Consumed
+            }
+            KeyCode::Char(ch) if parse_operator(ch).is_some() => {
+                self.pending_operator = parse_operator(ch);
+                VimAction::Consumed
+            }
             KeyCode::Char('G') => {
                 apply_motion(input, Motion::BufferBottom);
                 VimAction::Consumed
@@ -163,6 +186,79 @@ impl VimHandler {
             KeyCode::Enter => VimAction::Submit,
 
             _ => VimAction::Ignored,
+        }
+    }
+
+    /// Apply a pending operator to the target the next key selects: a doubled
+    /// operator key (dd/cc/yy) acts linewise on the current line; a charwise
+    /// motion on the same row deletes/yanks the spanned columns; a cross-line
+    /// motion is treated linewise. Change re-uses delete then enters insert.
+    fn complete_operator(
+        &mut self,
+        op: Operator,
+        key: KeyEvent,
+        input: &mut InputBox,
+    ) -> VimAction {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return VimAction::Ignored;
+        }
+
+        let (row, col) = input.cursor();
+
+        if let KeyCode::Char(ch) = key.code
+            && ch == op.key()
+        {
+            self.apply_linewise_span(op, row, row, input);
+            return VimAction::Consumed;
+        }
+
+        let Some(motion) = motion_for_key(key.code) else {
+            // Unknown target cancels the operator; the key is dropped, never
+            // inserted as literal text.
+            return VimAction::Consumed;
+        };
+
+        let target = motion_target(input, motion);
+        if target.row != row {
+            self.apply_linewise_span(op, row, target.row, input);
+            return VimAction::Consumed;
+        }
+
+        let (start, end) = if target.col >= col {
+            (col, target.col)
+        } else {
+            (target.col, col)
+        };
+        if matches!(op, Operator::Yank) {
+            self.register = input.slice_range(row, start, row, end);
+        } else {
+            self.register = input.delete_range(row, start, row, end);
+            if op.enters_insert() {
+                self.mode = VimMode::Insert;
+            }
+        }
+        VimAction::Consumed
+    }
+
+    fn apply_linewise_span(
+        &mut self,
+        op: Operator,
+        row_a: usize,
+        row_b: usize,
+        input: &mut InputBox,
+    ) {
+        let (first, last) = if row_a <= row_b {
+            (row_a, row_b)
+        } else {
+            (row_b, row_a)
+        };
+        if matches!(op, Operator::Yank) {
+            self.register = input.slice_lines(first, last);
+            return;
+        }
+        self.register = input.delete_lines(first, last);
+        if op.enters_insert() {
+            self.mode = VimMode::Insert;
         }
     }
 
@@ -200,6 +296,30 @@ fn apply_motion(input: &mut InputBox, motion: Motion) {
 
 fn collect_lines(input: &InputBox) -> Vec<String> {
     input.text().lines().map(String::from).collect()
+}
+
+/// Compute where `motion` would land without moving the cursor.
+fn motion_target(input: &InputBox, motion: Motion) -> CursorPos {
+    let (row, col) = input.cursor();
+    let lines = collect_lines(input);
+    let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    motion.apply(CursorPos { row, col }, &line_refs)
+}
+
+/// Map a key to the motion an operator can act over.
+fn motion_for_key(code: KeyCode) -> Option<Motion> {
+    match code {
+        KeyCode::Char('w') => Some(Motion::WordForward),
+        KeyCode::Char('b') => Some(Motion::WordBackward),
+        KeyCode::Char('h') | KeyCode::Left => Some(Motion::Left),
+        KeyCode::Char('l') | KeyCode::Right => Some(Motion::Right),
+        KeyCode::Char('0') => Some(Motion::LineStart),
+        KeyCode::Char('$') => Some(Motion::LineEnd),
+        KeyCode::Char('^') => Some(Motion::FirstNonBlank),
+        KeyCode::Char('j') | KeyCode::Down => Some(Motion::Down),
+        KeyCode::Char('k') | KeyCode::Up => Some(Motion::Up),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -352,5 +472,75 @@ mod tests {
         assert_eq!(input.cursor().0, 1);
         vh.handle_key(key(KeyCode::Char('k')), &mut input);
         assert_eq!(input.cursor().0, 0);
+    }
+
+    #[test]
+    fn dd_deletes_current_line() {
+        let (mut vh, mut input) = make();
+        input.set_text("aaa\nbbb\nccc");
+        input.set_cursor_pos(1, 0);
+        vh.handle_key(key(KeyCode::Char('d')), &mut input);
+        vh.handle_key(key(KeyCode::Char('d')), &mut input);
+        assert_eq!(input.text(), "aaa\nccc");
+    }
+
+    #[test]
+    fn yy_does_not_modify() {
+        let (mut vh, mut input) = make();
+        input.set_text("aaa\nbbb");
+        input.set_cursor_pos(0, 0);
+        vh.handle_key(key(KeyCode::Char('y')), &mut input);
+        vh.handle_key(key(KeyCode::Char('y')), &mut input);
+        assert_eq!(input.text(), "aaa\nbbb");
+        assert_eq!(vh.mode(), VimMode::Normal);
+    }
+
+    #[test]
+    fn dw_deletes_word() {
+        let (mut vh, mut input) = make();
+        input.set_text("hello world");
+        input.set_cursor_pos(0, 0);
+        vh.handle_key(key(KeyCode::Char('d')), &mut input);
+        vh.handle_key(key(KeyCode::Char('w')), &mut input);
+        assert_eq!(input.text(), "world");
+    }
+
+    #[test]
+    fn cw_changes_word_and_enters_insert() {
+        let (mut vh, mut input) = make();
+        input.set_text("hello world");
+        input.set_cursor_pos(0, 0);
+        vh.handle_key(key(KeyCode::Char('c')), &mut input);
+        vh.handle_key(key(KeyCode::Char('w')), &mut input);
+        assert_eq!(vh.mode(), VimMode::Insert);
+        assert_eq!(input.text(), "world");
+    }
+
+    #[test]
+    fn d_then_unknown_key_is_consumed_not_inserted() {
+        let (mut vh, mut input) = make();
+        input.set_text("abc");
+        input.set_cursor_pos(0, 0);
+        assert_eq!(
+            vh.handle_key(key(KeyCode::Char('d')), &mut input),
+            VimAction::Consumed
+        );
+        assert_eq!(
+            vh.handle_key(key(KeyCode::Char('z')), &mut input),
+            VimAction::Consumed
+        );
+        assert_eq!(input.text(), "abc");
+    }
+
+    #[test]
+    fn dw_then_p_pastes_deleted_text() {
+        let (mut vh, mut input) = make();
+        input.set_text("hello world");
+        input.set_cursor_pos(0, 0);
+        vh.handle_key(key(KeyCode::Char('d')), &mut input);
+        vh.handle_key(key(KeyCode::Char('w')), &mut input);
+        assert_eq!(input.text(), "world");
+        vh.handle_key(key(KeyCode::Char('p')), &mut input);
+        assert_eq!(input.text(), "hello world");
     }
 }

@@ -102,14 +102,59 @@ impl InputBox {
 
     /// Handle a key event. Returns `true` if the event was consumed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // Save undo state before text-modifying keys
+        // Save undo state before plain text-modifying keys. Control/alt edit
+        // combos checkpoint themselves inside their own arms.
+        let plain_or_shift = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match key.code {
-            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter => {
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter
+                if plain_or_shift =>
+            {
                 self.save_undo();
             }
             _ => {}
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            // Readline cursor movement (no undo checkpoint — no mutation).
+            KeyCode::Char('a') if ctrl => {
+                self.cursor_col = 0;
+                true
+            }
+            KeyCode::Char('e') if ctrl => {
+                self.cursor_col = self.current_line().len();
+                true
+            }
+            KeyCode::Char('b') if alt => {
+                self.move_word_left();
+                true
+            }
+            KeyCode::Char('f') if alt => {
+                self.move_word_right();
+                true
+            }
+            // Readline kill ops (checkpoint here since the guard above skips
+            // control/alt combos).
+            KeyCode::Char('w') if ctrl => {
+                self.save_undo();
+                self.exit_history_browse();
+                self.kill_word_backward();
+                true
+            }
+            KeyCode::Char('d') if alt => {
+                self.save_undo();
+                self.exit_history_browse();
+                self.kill_word_forward();
+                true
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.save_undo();
+                self.exit_history_browse();
+                self.kill_to_line_start();
+                true
+            }
             KeyCode::Char(c) => {
                 self.exit_history_browse();
                 self.insert_char(c);
@@ -217,6 +262,97 @@ impl InputBox {
         self.lines[self.cursor_row].push_str(&tail);
     }
 
+    /// Delete the half-open range `[(start_row,start_col), (end_row,end_col))`
+    /// and return the removed text. The cursor lands at the range start.
+    pub fn delete_range(
+        &mut self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> String {
+        if start_row >= self.lines.len() {
+            return String::new();
+        }
+        self.save_undo();
+        let removed = self.slice_range(start_row, start_col, end_row, end_col);
+        if start_row == end_row {
+            let line = &mut self.lines[start_row];
+            let s = start_col.min(line.len());
+            let e = end_col.min(line.len());
+            line.replace_range(s..e.max(s), "");
+        } else {
+            let er = end_row.min(self.lines.len() - 1);
+            let s = start_col.min(self.lines[start_row].len());
+            let e = end_col.min(self.lines[er].len());
+            let tail = self.lines[er][e..].to_string();
+            self.lines[start_row].truncate(s);
+            self.lines[start_row].push_str(&tail);
+            self.lines.drain(start_row + 1..=er);
+        }
+        self.cursor_row = start_row;
+        self.cursor_col = start_col.min(self.lines[start_row].len());
+        removed
+    }
+
+    /// Read (without removing) the half-open range
+    /// `[(start_row,start_col), (end_row,end_col))`.
+    #[must_use]
+    pub fn slice_range(
+        &self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> String {
+        if start_row == end_row {
+            let line = &self.lines[start_row];
+            let s = start_col.min(line.len());
+            let e = end_col.min(line.len());
+            return line[s..e.max(s)].to_string();
+        }
+        let mut out = String::new();
+        let s = start_col.min(self.lines[start_row].len());
+        out.push_str(&self.lines[start_row][s..]);
+        for row in (start_row + 1)..end_row.min(self.lines.len()) {
+            out.push('\n');
+            out.push_str(&self.lines[row]);
+        }
+        if end_row < self.lines.len() {
+            out.push('\n');
+            let e = end_col.min(self.lines[end_row].len());
+            out.push_str(&self.lines[end_row][..e]);
+        }
+        out
+    }
+
+    /// Delete whole lines `[first, last]` (inclusive) and return them joined by
+    /// newlines. Always leaves at least one (possibly empty) line.
+    pub fn delete_lines(&mut self, first: usize, last: usize) -> String {
+        let last = last.min(self.lines.len().saturating_sub(1));
+        if first > last {
+            return String::new();
+        }
+        self.save_undo();
+        let removed: Vec<String> = self.lines.drain(first..=last).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.cursor_row = first.min(self.lines.len() - 1);
+        self.cursor_col = 0;
+        removed.join("\n")
+    }
+
+    /// Read (without removing) whole lines `[first, last]` (inclusive).
+    #[must_use]
+    pub fn slice_lines(&self, first: usize, last: usize) -> String {
+        let last = last.min(self.lines.len().saturating_sub(1));
+        if first > last {
+            return String::new();
+        }
+        self.lines[first..=last].join("\n")
+    }
+
     // ── Internal helpers ──
 
     fn current_line(&self) -> &str {
@@ -305,6 +441,77 @@ impl InputBox {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
             self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+        }
+    }
+
+    /// Byte offset of the start of the word at or before the cursor on the
+    /// current line. Skips trailing whitespace, then the word characters.
+    fn word_start_offset(&self) -> usize {
+        let line = self.current_line();
+        let bytes = line.as_bytes();
+        let mut idx = self.cursor_col.min(line.len());
+        while idx > 0 && bytes[idx - 1].is_ascii_whitespace() {
+            idx -= 1;
+        }
+        while idx > 0 && !bytes[idx - 1].is_ascii_whitespace() {
+            idx -= 1;
+        }
+        idx
+    }
+
+    /// Byte offset of the end of the word at or after the cursor on the
+    /// current line. Skips leading whitespace, then the word characters.
+    fn word_end_offset(&self) -> usize {
+        let line = self.current_line();
+        let bytes = line.as_bytes();
+        let len = line.len();
+        let mut idx = self.cursor_col.min(len);
+        while idx < len && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        while idx < len && !bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        idx
+    }
+
+    fn move_word_left(&mut self) {
+        if self.cursor_col > 0 {
+            self.cursor_col = self.word_start_offset();
+        } else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.cursor_col = self.lines[self.cursor_row].len();
+        }
+    }
+
+    fn move_word_right(&mut self) {
+        if self.cursor_col < self.current_line().len() {
+            self.cursor_col = self.word_end_offset();
+        } else if self.cursor_row + 1 < self.lines.len() {
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        }
+    }
+
+    fn kill_word_backward(&mut self) {
+        let start = self.word_start_offset();
+        if start < self.cursor_col {
+            self.lines[self.cursor_row].replace_range(start..self.cursor_col, "");
+            self.cursor_col = start;
+        }
+    }
+
+    fn kill_word_forward(&mut self) {
+        let end = self.word_end_offset();
+        if end > self.cursor_col {
+            self.lines[self.cursor_row].replace_range(self.cursor_col..end, "");
+        }
+    }
+
+    fn kill_to_line_start(&mut self) {
+        if self.cursor_col > 0 {
+            self.lines[self.cursor_row].replace_range(..self.cursor_col, "");
+            self.cursor_col = 0;
         }
     }
 
@@ -693,5 +900,150 @@ mod tests {
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         assert!(content.contains("hello"));
+    }
+
+    // ── Readline editing keys ──
+
+    #[test]
+    fn ctrl_a_moves_to_line_start() {
+        let mut input = InputBox::new();
+        input.set_text("hello");
+        input.handle_key(key_with(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn ctrl_e_moves_to_line_end() {
+        let mut input = InputBox::new();
+        input.set_text("hello");
+        input.set_cursor_pos(0, 0);
+        input.handle_key(key_with(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(input.cursor(), (0, 5));
+    }
+
+    #[test]
+    fn alt_b_moves_word_left() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.handle_key(key_with(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(input.cursor(), (0, 4));
+        input.handle_key(key_with(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn alt_f_moves_word_right() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.set_cursor_pos(0, 0);
+        input.handle_key(key_with(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(input.cursor(), (0, 3));
+        input.handle_key(key_with(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(input.cursor(), (0, 7));
+    }
+
+    #[test]
+    fn ctrl_w_kills_word_backward() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.handle_key(key_with(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        assert_eq!(input.text(), "foo ");
+        assert_eq!(input.cursor(), (0, 4));
+    }
+
+    #[test]
+    fn alt_d_kills_word_forward() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.set_cursor_pos(0, 0);
+        input.handle_key(key_with(KeyCode::Char('d'), KeyModifiers::ALT));
+        assert_eq!(input.text(), " bar");
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn ctrl_u_kills_to_line_start() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.set_cursor_pos(0, 4);
+        input.handle_key(key_with(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(input.text(), "bar");
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn ctrl_w_supports_single_undo() {
+        let mut input = InputBox::new();
+        input.set_text("foo bar");
+        input.set_cursor_pos(0, 7);
+        input.handle_key(key_with(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        assert_eq!(input.text(), "foo ");
+        input.undo();
+        assert_eq!(input.text(), "foo bar");
+    }
+
+    #[test]
+    fn ctrl_combos_do_not_insert_literal() {
+        let mut input = InputBox::new();
+        input.handle_key(key_with(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(input.is_empty());
+    }
+
+    // ── Range helpers (used by vim operators) ──
+
+    #[test]
+    fn delete_range_same_line() {
+        let mut input = InputBox::new();
+        input.set_text("hello world");
+        let removed = input.delete_range(0, 0, 0, 6);
+        assert_eq!(removed, "hello ");
+        assert_eq!(input.text(), "world");
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn delete_range_cross_line_merges() {
+        let mut input = InputBox::new();
+        input.set_text("abc\ndef\nghi");
+        let removed = input.delete_range(0, 1, 2, 1);
+        assert_eq!(input.text(), "ahi");
+        assert!(removed.contains("bc"));
+    }
+
+    #[test]
+    fn slice_range_does_not_mutate() {
+        let mut input = InputBox::new();
+        input.set_text("hello");
+        assert_eq!(input.slice_range(0, 0, 0, 3), "hel");
+        assert_eq!(input.text(), "hello");
+    }
+
+    #[test]
+    fn delete_lines_inclusive() {
+        let mut input = InputBox::new();
+        input.set_text("a\nb\nc");
+        let removed = input.delete_lines(0, 1);
+        assert_eq!(removed, "a\nb");
+        assert_eq!(input.text(), "c");
+        assert_eq!(input.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn delete_lines_all_keeps_empty() {
+        let mut input = InputBox::new();
+        input.set_text("a\nb");
+        input.delete_lines(0, 1);
+        assert!(input.is_empty());
+        assert_eq!(input.line_count(), 1);
+    }
+
+    #[test]
+    fn delete_range_supports_undo() {
+        let mut input = InputBox::new();
+        input.set_text("hello");
+        input.delete_range(0, 0, 0, 2);
+        assert_eq!(input.text(), "llo");
+        input.undo();
+        assert_eq!(input.text(), "hello");
     }
 }

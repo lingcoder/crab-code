@@ -390,6 +390,13 @@ impl App {
                     self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }
+                Action::OpenGlobalSearch if self.state != AppState::Confirming => {
+                    let overlay = crate::components::global_search::GlobalSearchOverlay::new(
+                        self.messages.clone(),
+                    );
+                    self.overlay_stack.push(Box::new(overlay));
+                    return AppAction::None;
+                }
                 Action::ToggleTranscript if self.state != AppState::Confirming => {
                     let overlay = crate::components::transcript_overlay::TranscriptOverlay::new(
                         &self.messages,
@@ -554,6 +561,17 @@ impl App {
                         text: "[image paste: clipboard image not available]".into(),
                         kind: SystemKind::Info,
                     });
+                    return AppAction::None;
+                }
+                Action::EnterSelectionMode if self.state != AppState::Confirming => {
+                    if self.messages.is_empty() {
+                        self.notifications.warn("No messages to select".to_string());
+                        return AppAction::None;
+                    }
+                    let overlay = crate::components::message_selector::MessageSelectorOverlay::new(
+                        self.messages.clone(),
+                    );
+                    self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }
                 _ => {} // Fall through for non-matching states

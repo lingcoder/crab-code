@@ -2353,4 +2353,29 @@ mod tests {
         assert!(!app.search.is_active());
         assert!(app.search.query().is_empty());
     }
+
+    // Alt+V resolves to EnterSelectionMode in the Chat context; on Windows the
+    // Input context binds Alt+V to image paste, which shadows it (focus chain
+    // checks Input before Chat). Selection mode is therefore reachable via
+    // Alt+V only on non-Windows.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn alt_v_opens_message_selector() {
+        let mut app = App::new("test");
+        app.messages.push(ChatMessage::User { text: "hi".into() });
+        app.handle_event(TuiEvent::Key(KeyEvent::new(
+            KeyCode::Char('v'),
+            KeyModifiers::ALT,
+        )));
+        assert!(!app.overlay_stack.is_empty());
+    }
+
+    #[test]
+    fn ctrl_k_ctrl_s_opens_global_search() {
+        let mut app = App::new("test");
+        app.messages.push(ChatMessage::User { text: "hi".into() });
+        app.handle_event(ctrl_key('k'));
+        app.handle_event(ctrl_key('s'));
+        assert!(!app.overlay_stack.is_empty());
+    }
 }
