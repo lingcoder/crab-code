@@ -193,21 +193,26 @@ impl App {
 
     #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
-        // Overlay stack gets first priority
-        if !self.overlay_stack.is_empty() {
-            if let Some(action) = self.overlay_stack.handle_key(key) {
-                match action {
-                    crate::overlay::OverlayAction::Execute(app_event) => {
-                        return self.apply_event(app_event);
-                    }
-                    crate::overlay::OverlayAction::Consumed
-                    | crate::overlay::OverlayAction::Dismiss => {
-                        return AppAction::None;
-                    }
-                    crate::overlay::OverlayAction::Passthrough => {}
+        // Overlay stack gets first priority. Only the topmost overlay sees the
+        // key; when it declines (Passthrough, which OverlayStack maps to None)
+        // we fall through to the resolver/input section below. active_contexts()
+        // already feeds the overlay's contexts into the focus chain, so a
+        // passed-through key resolves with topmost-overlay priority.
+        if !self.overlay_stack.is_empty()
+            && let Some(action) = self.overlay_stack.handle_key(key)
+        {
+            match action {
+                crate::overlay::OverlayAction::Execute(app_event) => {
+                    return self.apply_event(app_event);
                 }
+                crate::overlay::OverlayAction::Consumed
+                | crate::overlay::OverlayAction::Dismiss => {
+                    return AppAction::None;
+                }
+                // Mapped to None by OverlayStack::handle_key; the None branch
+                // of the let-chain falls through instead of reaching this arm.
+                crate::overlay::OverlayAction::Passthrough => {}
             }
-            return AppAction::None;
         }
 
         // Search mode intercepts all keys except Esc and Enter
@@ -718,16 +723,23 @@ impl App {
     }
 
     /// Handle keystrokes in search mode.
+    ///
+    /// Search stays active across Enter so the user can cycle through every
+    /// match without re-triggering Ctrl+F: Enter advances to the next match,
+    /// Shift+Enter steps back, and only Esc leaves search mode. The current
+    /// position and total are surfaced live by `render_search_bar`.
     fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) -> AppAction {
         match key.code {
             KeyCode::Esc => {
                 self.search.deactivate();
             }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.search.prev_match();
+                self.scroll_to_search_match();
+            }
             KeyCode::Enter => {
-                // Move to next match and exit search mode
                 self.search.next_match();
                 self.scroll_to_search_match();
-                self.search.deactivate();
             }
             KeyCode::Backspace => {
                 self.search.pop_char();
@@ -1008,6 +1020,11 @@ impl App {
             AppEvent::Tick => {
                 self.spinner.tick();
                 self.notifications.tick();
+                // Expire an armed chord prefix once its deadline passes so a
+                // half-entered chord (e.g. Ctrl+K) does not stay armed forever
+                // and the bottom-bar hint clears. The Timeout outcome only
+                // clears hint state, so the result is discarded.
+                let _ = self.keybindings.tick();
                 if let ThinkingState::ThoughtFor { finished_at, .. } = self.thinking
                     && finished_at.elapsed() >= ThinkingState::DISPLAY_DURATION
                 {

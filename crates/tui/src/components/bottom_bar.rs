@@ -274,7 +274,7 @@ fn render_bottom_bar(
 ) {
     let line = if search_active {
         Line::from(Span::styled(
-            "Enter: next match | Esc: close | type to search",
+            "Enter: next | Shift+Enter: prev | Esc: close | type to search",
             Style::default().fg(Color::DarkGray),
         ))
     } else {

@@ -2277,4 +2277,80 @@ mod tests {
             AppAction::SyncPermissionMode(PermissionMode::AcceptEdits)
         );
     }
+
+    #[test]
+    fn overlay_passthrough_falls_through_to_input() {
+        let mut app = App::new("test");
+        app.overlay_stack.push(Box::new(
+            crate::components::shortcut_hint::HelpOverlay::new(),
+        ));
+        // The help overlay declines 'z' (Passthrough), so it must reach the
+        // input box instead of being swallowed by the overlay block.
+        app.handle_event(key(KeyCode::Char('z')));
+        assert_eq!(app.state, AppState::WaitingForInput);
+        assert_eq!(app.input.text(), "z");
+    }
+
+    #[test]
+    fn overlay_consumed_key_does_not_reach_input() {
+        let mut app = App::new("test");
+        app.overlay_stack.push(Box::new(
+            crate::components::shortcut_hint::HelpOverlay::new(),
+        ));
+        app.handle_event(key(KeyCode::Esc));
+        assert!(app.input.is_empty());
+        assert_eq!(app.state, AppState::Idle);
+    }
+
+    #[test]
+    fn tick_keeps_fresh_chord_prefix_armed() {
+        let mut app = App::new("test");
+        // Ctrl+K is both a binding and a chord prefix, so it arms a pending
+        // prefix; a Tick well within the timeout must keep it armed.
+        app.handle_event(ctrl_key('k'));
+        assert!(app.keybindings.pending_chord().is_some());
+        app.handle_event(TuiEvent::Tick);
+        assert!(app.keybindings.pending_chord().is_some());
+    }
+
+    #[test]
+    fn ctrl_f_search_stays_active_and_cycles_on_enter() {
+        let mut app = App::new("test");
+        app.content_buffer = "x a\nx b\nx c\n".into();
+        app.handle_event(ctrl_key('f'));
+        app.handle_event(key(KeyCode::Char('x')));
+        assert!(app.search.is_active());
+        assert_eq!(app.search.match_count(), 3);
+        app.handle_event(key(KeyCode::Enter));
+        assert!(app.search.is_active());
+        assert_eq!(app.search.current_match_index(), 1);
+        app.handle_event(key(KeyCode::Enter));
+        assert_eq!(app.search.current_match_index(), 2);
+        app.handle_event(key(KeyCode::Enter));
+        assert_eq!(app.search.current_match_index(), 0);
+        assert!(app.search.is_active());
+    }
+
+    #[test]
+    fn search_shift_enter_steps_back() {
+        let mut app = App::new("test");
+        app.content_buffer = "x a\nx b\nx c\n".into();
+        app.handle_event(ctrl_key('f'));
+        app.handle_event(key(KeyCode::Char('x')));
+        let shift_enter = TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        app.handle_event(shift_enter);
+        assert_eq!(app.search.current_match_index(), 2);
+        assert!(app.search.is_active());
+    }
+
+    #[test]
+    fn search_esc_exits() {
+        let mut app = App::new("test");
+        app.content_buffer = "x a\nx b\n".into();
+        app.handle_event(ctrl_key('f'));
+        app.handle_event(key(KeyCode::Char('x')));
+        app.handle_event(key(KeyCode::Esc));
+        assert!(!app.search.is_active());
+        assert!(app.search.query().is_empty());
+    }
 }

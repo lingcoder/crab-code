@@ -301,9 +301,9 @@ impl ShortcutHintBar {
             HintMode::Search,
             vec![
                 BindingGroup::new("Search")
-                    .with("Esc", "Cancel")
-                    .with("Enter", "Confirm")
-                    .with("n/N", "Next/Prev match"),
+                    .with("Enter", "Next match")
+                    .with("Shift+Enter", "Prev match")
+                    .with("Esc", "Close"),
             ],
         );
 
