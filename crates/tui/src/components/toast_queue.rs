@@ -213,7 +213,7 @@ mod tests {
         queue.toasts.push_back(Toast {
             message: "old".into(),
             level: ToastLevel::Info,
-            created_at: Instant::now() - Duration::from_secs(60),
+            created_at: Instant::now().checked_sub(Duration::from_secs(60)).unwrap(),
             ttl: Duration::from_secs(1),
         });
         queue.push_info("fresh");

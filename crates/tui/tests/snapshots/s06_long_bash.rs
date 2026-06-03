@@ -1,5 +1,5 @@
 //! Bash tool call with output long enough to trigger the collapsed
-//! ToolResultCell path with the Ctrl+O hint.
+//! `ToolResultCell` path with the Ctrl+O hint.
 
 use crab_core::tool::ToolDisplayStyle;
 use crab_tui::app::ToolCallStatus;

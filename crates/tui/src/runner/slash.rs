@@ -423,10 +423,10 @@ mod tests {
     struct StubPowerShell;
 
     impl crab_core::tool::Tool for StubPowerShell {
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "PowerShell"
         }
-        fn description(&self) -> &str {
+        fn description(&self) -> &'static str {
             ""
         }
         fn input_schema(&self) -> serde_json::Value {

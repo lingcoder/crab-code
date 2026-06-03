@@ -15,8 +15,7 @@ use std::path::PathBuf;
 pub fn render_lines_to_text(lines: &[Line<'static>], width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let mut y = 0u16;
-    for line in lines {
+    for (y, line) in (0u16..).zip(lines) {
         if y >= height {
             break;
         }
@@ -30,7 +29,6 @@ pub fn render_lines_to_text(lines: &[Line<'static>], width: u16, height: u16) ->
                 x += 1;
             }
         }
-        y += 1;
     }
     buf_to_text(&buf, width, height)
 }
@@ -86,6 +84,7 @@ fn snap_path(name: &str) -> PathBuf {
 }
 
 fn simple_diff(expected: &str, actual: &str) -> String {
+    use std::fmt::Write as _;
     let exp_lines: Vec<&str> = expected.lines().collect();
     let act_lines: Vec<&str> = actual.lines().collect();
     let max = exp_lines.len().max(act_lines.len());
@@ -94,10 +93,10 @@ fn simple_diff(expected: &str, actual: &str) -> String {
         let e = exp_lines.get(i).copied().unwrap_or("<EOF>");
         let a = act_lines.get(i).copied().unwrap_or("<EOF>");
         if e == a {
-            out.push_str(&format!("    {e}\n"));
+            let _ = writeln!(out, "    {e}");
         } else {
-            out.push_str(&format!("  - {e}\n"));
-            out.push_str(&format!("  + {a}\n"));
+            let _ = writeln!(out, "  - {e}");
+            let _ = writeln!(out, "  + {a}");
         }
     }
     out

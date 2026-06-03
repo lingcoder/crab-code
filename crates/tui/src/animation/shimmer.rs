@@ -90,7 +90,7 @@ mod tests {
         let t0 = Instant::now();
         for ms in [0, 40, 400, 4000, 40000] {
             let p = s.phase(t0 + Duration::from_millis(ms));
-            assert!(p >= 0.0 && p < 1.0, "phase {p} out of range");
+            assert!((0.0..1.0).contains(&p), "phase {p} out of range");
         }
     }
 

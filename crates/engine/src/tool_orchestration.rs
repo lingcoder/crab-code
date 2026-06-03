@@ -425,7 +425,7 @@ mod tests {
             session_id: String::new(),
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
-            ext: Default::default(),
+            ext: crab_core::tool::ToolContextExt::default(),
         };
         let (event_tx, _event_rx) = mpsc::channel(64);
         let cancel = CancellationToken::new();

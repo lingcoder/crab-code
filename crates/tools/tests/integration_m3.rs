@@ -562,7 +562,7 @@ fn register_all_builtins_produces_expected_tools() {
 }
 
 /// Expected total tool count. PowerShell is opt-in on Windows via
-/// `CRAB_USE_POWERSHELL_TOOL`. ComputerUse is always on Windows, conditional
+/// `CRAB_USE_POWERSHELL_TOOL`. `ComputerUse` is always on Windows, conditional
 /// on `DISPLAY`/`WAYLAND_DISPLAY` elsewhere.
 fn expected_builtin_count() -> usize {
     let ps_enabled = cfg!(windows)

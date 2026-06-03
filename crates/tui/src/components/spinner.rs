@@ -668,7 +668,11 @@ mod tests {
         let mut spinner = Spinner::new();
         spinner.start("Working");
         // Simulate: started 5 seconds ago
-        spinner.started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        spinner.started_at = Some(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(5))
+                .unwrap(),
+        );
         // Pause for 3 seconds
         spinner.total_paused = std::time::Duration::from_secs(3);
         // Active elapsed should be ~2 seconds
@@ -684,7 +688,6 @@ mod tests {
         assert!(spinner.paused_at.is_some());
         spinner.resume();
         assert!(spinner.paused_at.is_none());
-        assert!(spinner.total_paused > std::time::Duration::ZERO || true);
     }
 
     #[test]

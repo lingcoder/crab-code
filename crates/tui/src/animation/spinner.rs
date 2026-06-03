@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Spinner frames must not be empty")]
     fn empty_custom_panics() {
         static E: &[&str] = &[];
         let _ = Spinner::custom(E, Duration::from_millis(50));

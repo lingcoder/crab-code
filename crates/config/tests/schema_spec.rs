@@ -33,7 +33,7 @@ fn fixtures_dir() -> PathBuf {
 #[test]
 fn example_configs_conform_to_schema() {
     let dir = fixtures_dir();
-    assert!(dir.is_dir(), "fixtures dir is missing: {}", dir.display(),);
+    assert!(dir.is_dir(), "fixtures dir is missing: {}", dir.display());
 
     let mut checked = 0usize;
     for entry in fs::read_dir(&dir).expect("read fixtures dir") {
@@ -135,15 +135,10 @@ fn rust_defaults_match_schema_defaults() {
         let rust_value = json_pointer_get(&rust, path).cloned();
 
         match (rust_value, schema_default) {
-            // Schema says null, Rust has the field absent (None) — fine.
-            (None, serde_json::Value::Null) => {}
-            // Schema says null, Rust has it explicitly null — fine.
-            (Some(serde_json::Value::Null), serde_json::Value::Null) => {}
-            // Schema-declared default for a sub-property of an Option<T>
-            // that defaults to None: Rust collapses the parent to null,
-            // so the path is absent. The schema's default still serves as
-            // documentation. Accept this asymmetry.
-            (None, _) => {}
+            // No drift: the Rust field is absent/None (any schema default —
+            // a sub-property of an Option<T> that collapses to null), or both
+            // sides are explicitly null.
+            (None, _) | (Some(serde_json::Value::Null), serde_json::Value::Null) => {}
             // Same value — drift-free.
             (Some(rv), sv) if &rv == sv => {}
             // Anything else is a real mismatch.

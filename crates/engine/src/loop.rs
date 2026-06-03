@@ -1337,6 +1337,7 @@ mod tests {
     // ─── recovery constants tests ───
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn recovery_constants_reasonable() {
         assert!(MAX_PTL_RETRIES >= 1);
         assert!(MAX_PTL_RETRIES <= 5);

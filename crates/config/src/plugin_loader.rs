@@ -202,7 +202,7 @@ mod tests {
         assert!(!table.contains_key("missing"));
         assert_eq!(table.get("model").unwrap().as_str(), Some("haiku"));
         let list = table.get("list").unwrap().as_array().unwrap();
-        let ints: Vec<i64> = list.iter().filter_map(|v| v.as_integer()).collect();
+        let ints: Vec<i64> = list.iter().filter_map(toml::Value::as_integer).collect();
         assert_eq!(ints, vec![1, 2]);
     }
 

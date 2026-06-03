@@ -459,11 +459,11 @@ model = "test"
 
     #[test]
     fn parse_toml_with_table() {
-        let toml_str = r#"
+        let toml_str = r"
 [git_context]
 enabled = false
 max_diff_lines = 50
-"#;
+";
         let s = parse_toml(toml_str).unwrap();
         let git_ctx = s.git_context.unwrap();
         assert!(!git_ctx.enabled);

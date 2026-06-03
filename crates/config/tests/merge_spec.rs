@@ -43,19 +43,19 @@ fn empty_overlay_does_not_clear_base() {
 #[test]
 fn table_deep_merge_two_levels() {
     let mut base = parse(
-        r#"
+        r"
 [gitContext]
 enabled = true
 maxDiffLines = 200
-"#,
+",
     );
     merge_toml_values(
         &mut base,
         parse(
-            r#"
+            r"
 [gitContext]
 maxDiffLines = 50
-"#,
+",
         ),
     );
     let g = base.get("gitContext").unwrap().as_table().unwrap();

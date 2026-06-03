@@ -544,9 +544,7 @@ mod tests {
     #[test]
     fn config_dir_uses_cli_flag_when_present() {
         let env: HashMap<String, String> =
-            [("CRAB_CONFIG_DIR".to_string(), "/from-env".to_string())]
-                .into_iter()
-                .collect();
+            std::iter::once(("CRAB_CONFIG_DIR".to_string(), "/from-env".to_string())).collect();
         let cli = PathBuf::from("/from-cli");
         let resolved = config_dir(Some(&cli), &env);
         assert_eq!(resolved, PathBuf::from("/from-cli"));
@@ -555,18 +553,15 @@ mod tests {
     #[test]
     fn config_dir_falls_back_to_env() {
         let env: HashMap<String, String> =
-            [("CRAB_CONFIG_DIR".to_string(), "/from-env".to_string())]
-                .into_iter()
-                .collect();
+            std::iter::once(("CRAB_CONFIG_DIR".to_string(), "/from-env".to_string())).collect();
         let resolved = config_dir(None, &env);
         assert_eq!(resolved, PathBuf::from("/from-env"));
     }
 
     #[test]
     fn config_dir_ignores_empty_env() {
-        let env: HashMap<String, String> = [("CRAB_CONFIG_DIR".to_string(), String::new())]
-            .into_iter()
-            .collect();
+        let env: HashMap<String, String> =
+            std::iter::once(("CRAB_CONFIG_DIR".to_string(), String::new())).collect();
         let resolved = config_dir(None, &env);
         // empty env value should NOT win — fall back to default.
         assert_eq!(resolved, global_config_dir());
@@ -582,9 +577,8 @@ mod tests {
 
     #[test]
     fn resolve_config_dir_via_context_chain() {
-        let env: HashMap<String, String> = [("CRAB_CONFIG_DIR".to_string(), "/x".to_string())]
-            .into_iter()
-            .collect();
+        let env: HashMap<String, String> =
+            std::iter::once(("CRAB_CONFIG_DIR".to_string(), "/x".to_string())).collect();
         let ctx = ResolveContext::new().with_env(env).resolve_config_dir(None);
         assert_eq!(ctx.config_dir, PathBuf::from("/x"));
 

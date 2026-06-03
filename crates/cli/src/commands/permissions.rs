@@ -97,7 +97,7 @@ mod tests {
     fn run_audit_with_empty_store_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("permissions.json");
-        let mut ruleset = PermissionRuleSet::new(path.clone());
+        let mut ruleset = PermissionRuleSet::new(path);
         assert_eq!(ruleset.audit_log_len(), 0);
         let _ = ruleset.load();
         assert_eq!(ruleset.audit_log_len(), 0);

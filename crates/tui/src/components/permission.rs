@@ -1781,7 +1781,11 @@ mod tests {
 
     #[test]
     fn classify_write_new_file_preview_capped_at_10_lines() {
-        let long_content: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        use std::fmt::Write as _;
+        let mut long_content = String::new();
+        for i in 0..20 {
+            let _ = writeln!(long_content, "line {i}");
+        }
         let input = serde_json::json!({
             "file_path": "/nonexistent/long.txt",
             "content": long_content,

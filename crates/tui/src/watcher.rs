@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn watch_event_clone() {
         let e = WatchEvent::SettingsChanged;
-        let _ = e.clone();
+        let _ = e;
     }
 
     #[test]

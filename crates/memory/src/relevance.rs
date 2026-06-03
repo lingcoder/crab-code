@@ -136,7 +136,7 @@ impl MemorySelector {
             0.0
         };
 
-        (keyword_score * 0.6 + type_bonus * 0.3 + name_bonus * 0.1).min(1.0)
+        (type_bonus.mul_add(0.3, keyword_score * 0.6) + name_bonus * 0.1).min(1.0)
     }
 }
 

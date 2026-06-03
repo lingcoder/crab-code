@@ -487,8 +487,8 @@ mod tests {
             text.contains("│"),
             "horizontal table should have box-drawing borders"
         );
-        assert!(text.contains("A"));
-        assert!(text.contains("1"));
+        assert!(text.contains('A'));
+        assert!(text.contains('1'));
     }
 
     #[test]

@@ -271,7 +271,7 @@ max_tokens = 4096
 
     #[test]
     fn unknown_top_level_field_fails() {
-        let value: toml::Value = toml::from_str(r#"unknownField = true"#).unwrap();
+        let value: toml::Value = toml::from_str(r"unknownField = true").unwrap();
         let errors = validate_config_value(&value);
         assert!(!errors.is_empty());
         assert!(
@@ -284,7 +284,7 @@ max_tokens = 4096
 
     #[test]
     fn bad_max_tokens_range_rejected() {
-        let value: toml::Value = toml::from_str(r#"max_tokens = 0"#).unwrap();
+        let value: toml::Value = toml::from_str(r"max_tokens = 0").unwrap();
         let errors = validate_config_value(&value);
         assert!(!errors.is_empty(), "expected range violation");
     }
