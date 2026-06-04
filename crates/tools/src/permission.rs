@@ -87,6 +87,27 @@ fn decide(
         return PermissionDecision::Deny(format!("tool '{tool_name}' is denied by policy"));
     }
 
+    // 1b. Per-segment deny for compound Bash: a deny rule like
+    //     Bash(command:rm*) must catch a denied subcommand even when chained
+    //     behind a safe one (`echo ok && rm -rf x`), which the whole-command
+    //     match above misses.
+    if tool_name == BASH_TOOL_NAME
+        && let Some(command) = input.get("command").and_then(|v| v.as_str())
+    {
+        let segments = split_shell_segments(command);
+        if segments.len() > 1 {
+            for seg in &segments {
+                let stripped = strip_env_prefix(seg);
+                let seg_input = serde_json::json!({ "command": stripped });
+                if policy.is_denied_by_filter(tool_name, &seg_input) {
+                    return PermissionDecision::Deny(format!(
+                        "tool '{tool_name}' is denied by policy (segment: {stripped})"
+                    ));
+                }
+            }
+        }
+    }
+
     // 2. Allowed whitelist — if non-empty, only whitelisted tools may run
     if !policy.allowed_tools.is_empty() && !policy.is_allowed_by_whitelist(tool_name, input) {
         return PermissionDecision::Deny(format!(
@@ -245,6 +266,81 @@ fn is_file_edit_tool(tool_name: &str) -> bool {
         tool_name,
         WRITE_TOOL_NAME | EDIT_TOOL_NAME | NOTEBOOK_EDIT_TOOL_NAME
     )
+}
+
+/// Maximum shell segments split before a command is treated as a single blob.
+const MAX_SHELL_SEGMENTS: usize = 50;
+
+/// Split a shell command into top-level segments on `&&`, `||`, `;`, and `|`,
+/// ignoring operators inside single or double quotes. Capped at
+/// [`MAX_SHELL_SEGMENTS`]; any remainder collapses into the final segment.
+fn split_shell_segments(command: &str) -> Vec<String> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            current.push(c);
+            i += 1;
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+            current.push(c);
+            i += 1;
+        } else if !in_single
+            && !in_double
+            && ((c == '&' && chars.get(i + 1) == Some(&'&'))
+                || (c == '|' && chars.get(i + 1) == Some(&'|')))
+        {
+            segments.push(std::mem::take(&mut current));
+            i += 2;
+        } else if !in_single && !in_double && (c == ';' || c == '|') {
+            segments.push(std::mem::take(&mut current));
+            i += 1;
+        } else {
+            current.push(c);
+            i += 1;
+        }
+
+        if segments.len() >= MAX_SHELL_SEGMENTS {
+            current.extend(&chars[i..]);
+            break;
+        }
+    }
+    segments.push(current);
+    segments
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Strip leading `VAR=value` environment-variable assignments from a segment so
+/// a deny rule matches the underlying command (`FOO=bar rm -rf` -> `rm -rf`).
+fn strip_env_prefix(segment: &str) -> &str {
+    let mut rest = segment.trim_start();
+    while let Some(eq) = rest.find('=') {
+        let name = &rest[..eq];
+        let is_assignment = !name.is_empty()
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !is_assignment {
+            break;
+        }
+        let after_eq = &rest[eq + 1..];
+        match after_eq.find(char::is_whitespace) {
+            Some(ws) => rest = after_eq[ws..].trim_start(),
+            None => return "",
+        }
+    }
+    rest
 }
 
 /// Check if the tool input contains a dangerous command pattern.
@@ -992,6 +1088,74 @@ mod tests {
             cwd(),
         );
         assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    // ─── Compound-command deny tests ───
+
+    #[test]
+    fn split_shell_segments_respects_quotes() {
+        let segs = split_shell_segments("echo 'a && b' && rm -rf x");
+        assert_eq!(segs, vec!["echo 'a && b'", "rm -rf x"]);
+    }
+
+    #[test]
+    fn split_shell_segments_handles_pipe_and_semicolon() {
+        let segs = split_shell_segments("cat x | grep y ; ls");
+        assert_eq!(segs, vec!["cat x", "grep y", "ls"]);
+    }
+
+    #[test]
+    fn strip_env_prefix_removes_assignments() {
+        assert_eq!(strip_env_prefix("FOO=bar rm -rf x"), "rm -rf x");
+        assert_eq!(strip_env_prefix("A=1 B=2 ls"), "ls");
+        assert_eq!(strip_env_prefix("ls -la"), "ls -la");
+    }
+
+    #[test]
+    fn compound_deny_catches_chained_subcommand() {
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        let result = check_permission(
+            &p,
+            "Bash",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"command": "echo ok && rm -rf x"}),
+            cwd(),
+        );
+        assert!(
+            matches!(result, PermissionDecision::Deny(_)),
+            "chained denied subcommand should be denied, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn compound_deny_catches_piped_and_env_prefixed_subcommand() {
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        let result = check_permission(
+            &p,
+            "Bash",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"command": "cat x | FOO=bar rm -rf x"}),
+            cwd(),
+        );
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn compound_split_does_not_over_deny_safe_chain() {
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        // No segment matches rm*, so the deny rule must not fire (falls through
+        // to the normal Default prompt).
+        let result = check_permission(
+            &p,
+            "Bash",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"command": "echo ok && ls -la"}),
+            cwd(),
+        );
+        assert!(matches!(result, PermissionDecision::AskUser(_)));
     }
 
     // ─── Plan mode MCP tests ───

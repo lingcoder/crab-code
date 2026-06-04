@@ -1,13 +1,13 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
+use crate::builtin::bash::resolve_timeout;
 use crate::str_utils::truncate_chars;
 
 /// `PowerShell` command execution tool (Windows + cross-platform via `pwsh`).
@@ -81,9 +81,7 @@ impl Tool for PowerShellTool {
                 return Ok(ToolOutput::error("command is required"));
             }
 
-            let timeout = timeout_ms
-                .map(Duration::from_millis)
-                .or(Some(Duration::from_secs(120)));
+            let timeout = Some(resolve_timeout(timeout_ms));
 
             let (prog, args) = resolve_powershell(&command);
 

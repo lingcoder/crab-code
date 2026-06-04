@@ -15,6 +15,22 @@ use crate::str_utils::truncate_chars;
 /// Shell command execution tool.
 pub const BASH_TOOL_NAME: &str = "Bash";
 
+/// Default command timeout when the model omits one.
+const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
+
+/// Hard ceiling on a model-supplied timeout, enforcing the schema's documented
+/// "max 600000" so a runaway value cannot pin the foreground turn.
+const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+
+/// Resolve a model-supplied timeout (in ms), applying the default and clamping
+/// to [`MAX_BASH_TIMEOUT_MS`]. Shared by the `PowerShell` tool, which carries
+/// the same documented ceiling.
+pub(crate) fn resolve_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(
+        timeout_ms.map_or(DEFAULT_BASH_TIMEOUT_MS, |ms| ms.min(MAX_BASH_TIMEOUT_MS)),
+    )
+}
+
 /// Error message used when no suitable POSIX shell is on the host.
 const NO_SHELL_ERROR: &str = "No suitable shell found. Bash tool requires a \
 POSIX shell (bash or zsh). On Windows, install Git Bash \
@@ -148,9 +164,7 @@ impl Tool for BashTool {
                 return Ok(ToolOutput::error("command is required"));
             }
 
-            let timeout = timeout_ms
-                .map(Duration::from_millis)
-                .or(Some(Duration::from_secs(120)));
+            let timeout = Some(resolve_timeout(timeout_ms));
 
             let Some((prog, args)) = shell_invocation(command) else {
                 return Ok(ToolOutput::error(NO_SHELL_ERROR));
@@ -339,7 +353,7 @@ impl BashTool {
             return Ok(ToolOutput::error("command is required"));
         }
 
-        let timeout = timeout_ms.map_or(Duration::from_secs(120), Duration::from_millis);
+        let timeout = resolve_timeout(timeout_ms);
 
         let Some((prog, args)) = shell_invocation(command) else {
             return Ok(ToolOutput::error(NO_SHELL_ERROR));
@@ -633,6 +647,20 @@ mod tests {
         let schema = BashTool.input_schema();
         let required = schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "command"));
+    }
+
+    #[test]
+    fn resolve_timeout_applies_default_and_clamp() {
+        assert_eq!(
+            resolve_timeout(None),
+            Duration::from_millis(DEFAULT_BASH_TIMEOUT_MS)
+        );
+        assert_eq!(resolve_timeout(Some(5_000)), Duration::from_millis(5_000));
+        // Oversized values clamp to the documented ceiling.
+        assert_eq!(
+            resolve_timeout(Some(99_999_999)),
+            Duration::from_millis(MAX_BASH_TIMEOUT_MS)
+        );
     }
 
     #[tokio::test]
