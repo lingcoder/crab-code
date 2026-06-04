@@ -44,7 +44,20 @@ impl Coordinator {
     /// overlay appends unconditionally, so callers should not call `apply`
     /// twice on the same prompt.
     pub fn apply(&self, registry: &mut ToolRegistry, system_prompt: &mut String) {
+        self.apply_registry(registry);
+        self.apply_prompt(system_prompt);
+    }
+
+    /// Reduce the registry to the coordinator allow-list (the registry half of
+    /// [`apply`](Self::apply)). Split out for call sites where the registry and
+    /// system prompt are finalized at different points (e.g. the TUI runtime).
+    pub fn apply_registry(&self, registry: &mut ToolRegistry) {
         registry.retain_names(tool_acl::COORDINATOR_TOOLS);
+    }
+
+    /// Append the anti-pattern prompt overlay (the prompt half of
+    /// [`apply`](Self::apply)).
+    pub fn apply_prompt(&self, system_prompt: &mut String) {
         prompt::append_to(system_prompt);
     }
 
@@ -165,6 +178,29 @@ mod tests {
         let coord = Coordinator::from_config(&config_with(true)).unwrap();
         assert_eq!(coord.allowed_tools(), tool_acl::COORDINATOR_TOOLS);
         assert_eq!(coord.worker_denied_tools(), tool_acl::WORKER_DENIED_TOOLS);
+    }
+
+    #[test]
+    fn apply_halves_match_combined_apply() {
+        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+
+        // Combined apply.
+        let mut reg_a = create_default_registry();
+        let mut prompt_a = String::from("base");
+        coord.apply(&mut reg_a, &mut prompt_a);
+
+        // Split halves.
+        let mut reg_b = create_default_registry();
+        let mut prompt_b = String::from("base");
+        coord.apply_registry(&mut reg_b);
+        coord.apply_prompt(&mut prompt_b);
+
+        assert_eq!(reg_a.len(), reg_b.len());
+        assert_eq!(prompt_a, prompt_b);
+        // The registry is reduced to exactly the coordinator allow-list.
+        assert_eq!(reg_b.len(), tool_acl::COORDINATOR_TOOLS.len());
+        // The prompt grew (overlay appended).
+        assert!(prompt_b.len() > "base".len());
     }
 
     #[test]

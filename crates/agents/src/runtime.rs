@@ -97,6 +97,12 @@ pub struct AgentRuntime {
     /// [`SessionConfig::default_shell`].
     default_shell: crab_config::DefaultShell,
     skill_dirs: Vec<PathBuf>,
+    /// Coordinator Mode activation, `Some` only when `coordinator_mode` was set.
+    /// Workers it spawns get a clean (overlay-free) registry/prompt.
+    coordinator: Option<crate::coordinator::Coordinator>,
+    /// The system prompt *before* the Coordinator overlay — workers use this so
+    /// they don't inherit the "you do not execute code" guardrail.
+    worker_base_prompt: String,
 }
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
@@ -144,6 +150,13 @@ impl AgentRuntime {
     pub async fn init(config: RuntimeInitConfig) -> (Self, RuntimeInitMeta) {
         let mut registry = create_default_registry();
 
+        // Coordinator Mode (Layer 2b): strip the leader's registry to the
+        // coordinator allow-list and overlay its prompt. `None` for plain
+        // sessions. Applied in two halves because the registry and system
+        // prompt are finalized at different points below.
+        let coordinator =
+            crate::coordinator::Coordinator::from_flag(config.session_config.coordinator_mode);
+
         let mut mcp_failures = Vec::new();
         let mcp_manager = if let Some(ref mcp_value) = config.mcp_servers {
             let mut mgr = McpManager::new();
@@ -171,6 +184,13 @@ impl AgentRuntime {
         } else {
             None
         };
+
+        // Strip the registry to the coordinator allow-list before the schemas
+        // are computed, so the leader model only sees the 3 coordinator tools.
+        if let Some(coord) = &coordinator {
+            coord.apply_registry(&mut registry);
+            tracing::info!(allowed_tools = ?coord.allowed_tools(), "Coordinator Mode active");
+        }
 
         let registry = Arc::new(registry);
         let tool_schemas = registry.tool_schemas();
@@ -214,6 +234,13 @@ impl AgentRuntime {
                 let _ = writeln!(system_prompt, "{}", mem.body);
                 system_prompt.push('\n');
             }
+        }
+
+        // Snapshot the worker base prompt before overlaying the coordinator
+        // guardrail, then append the overlay to the leader's prompt.
+        let worker_base_prompt = system_prompt.clone();
+        if let Some(coord) = &coordinator {
+            coord.apply_prompt(&mut system_prompt);
         }
 
         let session_id = config.session_config.session_id.clone();
@@ -381,6 +408,8 @@ impl AgentRuntime {
             file_history: Some(file_history),
             default_shell,
             skill_dirs,
+            coordinator,
+            worker_base_prompt,
         };
 
         let meta = RuntimeInitMeta {
@@ -435,6 +464,10 @@ impl AgentRuntime {
         let task_executor = Arc::clone(&self.executor);
         let task_ctx = self.tool_ctx.clone();
         let task_config = self.loop_config.clone();
+        // In Coordinator Mode, sub-agent workers get a clean (overlay-free)
+        // registry and prompt instead of the leader's stripped 3-tool registry.
+        let coordinator = self.coordinator;
+        let worker_base_prompt = self.worker_base_prompt.clone();
 
         // Persist the user turn to the crash log before running: the engine
         // loop persists assistant + tool-result messages, but never the user
@@ -469,8 +502,18 @@ impl AgentRuntime {
             if !markers.is_empty() {
                 let mut pool =
                     crate::teams::WorkerPool::new(task_conversation.id.clone(), "main".into());
-                let parent_prompt = task_conversation.system_prompt.clone();
-                let worker_registry = task_executor.registry_arc();
+                // Coordinator workers get the clean registry/prompt; plain
+                // sessions inherit the parent's.
+                let (worker_registry, parent_prompt) = match coordinator {
+                    Some(coord) => (
+                        Arc::new(coord.build_worker_registry()),
+                        worker_base_prompt.clone(),
+                    ),
+                    None => (
+                        task_executor.registry_arc(),
+                        task_conversation.system_prompt.clone(),
+                    ),
+                };
                 let mut spawned = false;
                 for marker in &markers {
                     if crate::teams::spawn::spawn_worker_from_marker(
