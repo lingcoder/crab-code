@@ -103,14 +103,40 @@ impl AssistantCell {
     }
 }
 
-fn has_unclosed_code_fence(text: &str) -> bool {
-    let mut open = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            open = !open;
+/// If `line` is a fenced-code-block marker — a run of >=3 of the same fence
+/// char (backtick or tilde) after optional indentation — return
+/// `(fence_char, has_info_string)`. A *closing* fence (per the `CommonMark`
+/// spec) uses the same char and carries no info string, so `has_info` lets
+/// callers tell an opener from a closer.
+fn fence_marker(line: &str) -> Option<(char, bool)> {
+    let trimmed = line.trim_start();
+    for fence in ['`', '~'] {
+        let run = trimmed.chars().take_while(|&c| c == fence).count();
+        if run >= 3 {
+            // Fence chars are ASCII, so the char run length equals its byte
+            // length and this slice is on a char boundary.
+            let has_info = !trimmed[run..].trim().is_empty();
+            return Some((fence, has_info));
         }
     }
-    open
+    None
+}
+
+fn has_unclosed_code_fence(text: &str) -> bool {
+    let mut open: Option<char> = None;
+    for line in text.lines() {
+        if let Some((ch, has_info)) = fence_marker(line) {
+            match open {
+                None => open = Some(ch),
+                // Close only on a matching-char fence with no info string; a
+                // different fence char (or an info-string line) is just content
+                // inside the open block, not a closer.
+                Some(open_ch) if ch == open_ch && !has_info => open = None,
+                Some(_) => {}
+            }
+        }
+    }
+    open.is_some()
 }
 
 /// If a markdown table is still incomplete (header present but no delimiter,
@@ -119,22 +145,26 @@ fn has_unclosed_code_fence(text: &str) -> bool {
 /// must not be committed to scrollback because column widths may change as
 /// new rows arrive.
 fn find_unclosed_table_start(text: &str) -> Option<usize> {
-    let mut in_fence = false;
+    let mut fence: Option<char> = None;
     let mut pending_header: Option<usize> = None;
     let mut confirmed_table_start: Option<usize> = None;
 
     for (line_idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            if in_fence {
-                pending_header = None;
+        if let Some((ch, has_info)) = fence_marker(line) {
+            match fence {
+                None => {
+                    fence = Some(ch);
+                    pending_header = None;
+                }
+                Some(open_ch) if ch == open_ch && !has_info => fence = None,
+                Some(_) => {}
             }
             continue;
         }
-        if in_fence {
+        if fence.is_some() {
             continue;
         }
+        let trimmed = line.trim_start();
 
         if is_table_delimiter_line(trimmed) {
             if pending_header.is_some() {
@@ -311,6 +341,43 @@ mod tests {
         let cell = AssistantCell::new("the **answer** is 42");
         let needle = "the";
         assert!(cell.search_text().contains(needle));
+    }
+
+    // -- Fence holdback tests --
+
+    #[test]
+    fn backtick_fence_holdback() {
+        assert!(has_unclosed_code_fence("```rust\nfn main() {}\n"));
+        assert!(!has_unclosed_code_fence("```rust\nfn main() {}\n```\n"));
+    }
+
+    #[test]
+    fn tilde_fence_held_back_until_closed() {
+        // A `~~~` block (commonly used when the code itself contains backticks)
+        // must be held back until its matching `~~~` closer.
+        assert!(has_unclosed_code_fence("~~~\nsome code\n"));
+        assert!(!has_unclosed_code_fence("~~~\nsome code\n~~~\n"));
+    }
+
+    #[test]
+    fn backtick_inside_tilde_fence_does_not_close_it() {
+        // A ``` line inside an open ~~~ block is content, not a closer.
+        let text = "~~~\nhere is a ``` inside\nstill code\n";
+        assert!(has_unclosed_code_fence(text));
+        // Closing with the matching tilde fence finally closes it.
+        assert!(!has_unclosed_code_fence(&format!("{text}~~~\n")));
+    }
+
+    #[test]
+    fn closing_fence_with_info_string_is_not_a_closer() {
+        // Only a bare closing fence (no info string) closes the block.
+        assert!(has_unclosed_code_fence("```\ncode\n```rust\n"));
+    }
+
+    #[test]
+    fn table_inside_tilde_fence_ignored() {
+        let text = "intro\n~~~\n| Name | Age |\n| --- | --- |\n~~~\n";
+        assert_eq!(find_unclosed_table_start(text), None);
     }
 
     // -- Table holdback tests --

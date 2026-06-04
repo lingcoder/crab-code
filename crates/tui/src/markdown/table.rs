@@ -6,6 +6,7 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
@@ -148,8 +149,11 @@ pub fn render_vertical_table(
     lines
 }
 
+/// Terminal display width of a string — counts CJK/wide glyphs as 2 cells and
+/// zero-width combining marks as 0, so columns align and over-wide tables are
+/// detected correctly (a plain `chars().count()` mis-measures both).
 fn display_width(s: &str) -> usize {
-    s.chars().count()
+    UnicodeWidthStr::width(s)
 }
 
 fn pad_right(s: &str, target: usize) -> String {
@@ -246,5 +250,37 @@ mod tests {
         let header = TableRow::new(vec!["X".into()]);
         let lines = render_vertical_table(&header, &[], &theme);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn display_width_counts_wide_glyphs_as_two() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("中文"), 4);
+        assert_eq!(display_width("a中"), 3);
+    }
+
+    #[test]
+    fn pad_right_pads_by_display_width_not_char_count() {
+        // "中" is one char but two display columns; padding to width 4 must add
+        // 2 spaces so the column aligns visually.
+        let padded = pad_right("中", 4);
+        assert_eq!(display_width(&padded), 4);
+        assert!(padded.starts_with('中'));
+    }
+
+    #[test]
+    fn cjk_body_widens_column_in_rendered_table() {
+        // A CJK body cell (display width 4) must widen the column past the
+        // narrower ASCII header so rows stay aligned — the header "x" is padded
+        // to width 4 (three trailing spaces).
+        let theme = Theme::dark();
+        let header = TableRow::new(vec!["x".into()]);
+        let body = [TableRow::new(vec!["中文".into()])];
+        let lines = render_gfm_table(&header, &body, &theme);
+        let header_line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            header_line.contains("x   "),
+            "header column not widened for CJK body: {header_line:?}"
+        );
     }
 }
