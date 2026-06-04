@@ -187,8 +187,26 @@ impl SessionHistory {
         };
         let json = serde_json::to_string_pretty(&file)
             .map_err(|e| crab_core::Error::Other(format!("serialize session: {e}")))?;
-        std::fs::write(self.session_path(session_id), json)?;
+        atomic_write(&self.session_path(session_id), json.as_bytes())?;
         Ok(())
+    }
+
+    /// Read and parse a session file. A corrupt file is quarantined and treated
+    /// as missing (`Ok(None)`) rather than a hard error, so one bad file cannot
+    /// poison every future load/list/resume.
+    fn read_session_file(&self, session_id: &str) -> crab_core::Result<Option<SessionFile>> {
+        let path = self.session_path(session_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = std::fs::read_to_string(&path)?;
+        match serde_json::from_str::<SessionFile>(&data) {
+            Ok(file) => Ok(Some(file)),
+            Err(e) => {
+                quarantine_corrupt(&path, &e);
+                Ok(None)
+            }
+        }
     }
 
     /// Save messages plus session-level grants in one call.
@@ -205,16 +223,11 @@ impl SessionHistory {
         self.save_with_metadata(session_id, None, None, messages, grants)
     }
 
-    /// Load a session transcript from disk. Returns `None` if the file doesn't exist.
+    /// Load a session transcript from disk. Returns `None` if the file doesn't
+    /// exist or is corrupt (corrupt files are quarantined, not surfaced as
+    /// errors, so resume can fall back to a fresh conversation).
     pub fn load(&self, session_id: &str) -> crab_core::Result<Option<Vec<Message>>> {
-        let path = self.session_path(session_id);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = std::fs::read_to_string(&path)?;
-        let file: SessionFile = serde_json::from_str(&data)
-            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
-        Ok(Some(file.messages))
+        Ok(self.read_session_file(session_id)?.map(|f| f.messages))
     }
 
     /// Load both messages and session-level grants from disk.
@@ -226,27 +239,18 @@ impl SessionHistory {
         &self,
         session_id: &str,
     ) -> crab_core::Result<Option<(Vec<Message>, Vec<String>)>> {
-        let path = self.session_path(session_id);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = std::fs::read_to_string(&path)?;
-        let file: SessionFile = serde_json::from_str(&data)
-            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
-        Ok(Some((file.messages, file.grants)))
+        Ok(self
+            .read_session_file(session_id)?
+            .map(|f| (f.messages, f.grants)))
     }
 
     /// Load only the session-level grants. Returns an empty `Vec` when the
-    /// session file is missing or the grants field is absent.
+    /// session file is missing, corrupt, or the grants field is absent.
     pub fn load_grants(&self, session_id: &str) -> crab_core::Result<Vec<String>> {
-        let path = self.session_path(session_id);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let data = std::fs::read_to_string(&path)?;
-        let file: SessionFile = serde_json::from_str(&data)
-            .map_err(|e| crab_core::Error::Other(format!("parse session: {e}")))?;
-        Ok(file.grants)
+        Ok(self
+            .read_session_file(session_id)?
+            .map(|f| f.grants)
+            .unwrap_or_default())
     }
 
     /// List all saved session IDs (sorted by name).
@@ -470,6 +474,49 @@ impl SessionPersister for BoundSessionPersister {
 }
 
 // ── Helper functions ───────────────────────────────────────────────────
+
+/// Atomically write `bytes` to `path` via a sibling temp file + rename, so a
+/// crash mid-write cannot truncate or corrupt an existing session file.
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> crab_core::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+        // Best-effort durability before the rename; not fatal if unsupported.
+        let _ = f.sync_all();
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Move a corrupt session file aside (`{path}.corrupt-{secs}`) so it stops
+/// poisoning every future list/load, logging the reason.
+fn quarantine_corrupt(path: &std::path::Path, err: &dyn std::fmt::Display) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut quarantined = path.as_os_str().to_owned();
+    quarantined.push(format!(".corrupt-{secs}"));
+    if std::fs::rename(path, PathBuf::from(quarantined)).is_ok() {
+        eprintln!(
+            "[session] quarantined corrupt session file {}: {err}",
+            path.display()
+        );
+    } else {
+        eprintln!(
+            "[session] failed to read corrupt session file {}: {err}",
+            path.display()
+        );
+    }
+}
 
 /// Extract searchable text from a content block.
 fn block_text(block: &ContentBlock) -> Option<&str> {
@@ -778,12 +825,36 @@ mod tests {
     }
 
     #[test]
-    fn load_corrupt_json_returns_error() {
+    fn load_corrupt_json_recovers_and_quarantines() {
+        // A corrupt file must not be a hard error: it is quarantined aside and
+        // load returns Ok(None) so resume can fall back to a fresh session.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("bad.json"), "not valid json").unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
-        let result = history.load("bad");
-        assert!(result.is_err());
+
+        let result = history.load("bad").unwrap();
+        assert!(result.is_none(), "corrupt load should recover to None");
+        // The original file is moved aside, not left in place.
+        assert!(!dir.path().join("bad.json").exists());
+        let quarantined = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("bad.json.corrupt-")
+            });
+        assert!(quarantined, "corrupt file should be quarantined aside");
+    }
+
+    #[test]
+    fn save_is_atomic_no_tmp_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.save("s1", &[Message::user("hi")]).unwrap();
+        // The temp file used for the atomic rename must not linger.
+        assert!(!dir.path().join("s1.json.tmp").exists());
+        assert!(dir.path().join("s1.json").exists());
     }
 
     #[test]

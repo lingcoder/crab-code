@@ -177,14 +177,17 @@ pub struct SessionSummary {
     pub message_count: usize,
     /// First user message text (truncated preview).
     pub preview: String,
-    /// File size in bytes (proxy for recency / activity).
+    /// File size in bytes (informational).
     pub file_size: u64,
+    /// Last modification time, used to rank the list most-recent-first.
+    #[serde(skip)]
+    pub modified: Option<std::time::SystemTime>,
 }
 
 /// List recent sessions with preview summaries for quick resume.
 ///
-/// Returns up to `limit` sessions, sorted by file size descending (as a
-/// rough proxy for most active / most recent sessions).
+/// Returns up to `limit` sessions, sorted by modification time descending
+/// (most recently active first).
 ///
 /// # Errors
 ///
@@ -198,7 +201,9 @@ pub fn quick_resume_list(
 
     for sid in &session_ids {
         let path = history.base_dir.join(format!("{sid}.json"));
-        let file_size = path.metadata().map_or(0, |m| m.len());
+        let meta = path.metadata().ok();
+        let file_size = meta.as_ref().map_or(0, std::fs::Metadata::len);
+        let modified = meta.and_then(|m| m.modified().ok());
 
         let preview = match history.load(sid)? {
             Some(messages) => {
@@ -223,6 +228,7 @@ pub fn quick_resume_list(
                     message_count,
                     preview,
                     file_size,
+                    modified,
                 }
             }
             None => continue,
@@ -230,8 +236,8 @@ pub fn quick_resume_list(
         summaries.push(preview);
     }
 
-    // Sort by file size descending (largest / most active first)
-    summaries.sort_by_key(|s| std::cmp::Reverse(s.file_size));
+    // Most recently active first.
+    summaries.sort_by_key(|s| std::cmp::Reverse(s.modified));
     summaries.truncate(limit);
     Ok(summaries)
 }
@@ -422,21 +428,22 @@ mod tests {
     }
 
     #[test]
-    fn quick_resume_sorted_by_file_size_desc() {
+    fn quick_resume_sorted_by_recency_desc() {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
 
-        // s1 = small, s2 = large
-        history.save("s1", &[Message::user("hi")]).unwrap();
+        // Save a large session first, then a small one later: recency (not
+        // size) must decide order, so the small-but-newer session ranks first.
         let big_msgs: Vec<Message> = (0..20)
             .map(|i| Message::user(format!("msg {i} with some longer content to increase size")))
             .collect();
-        history.save("s2", &big_msgs).unwrap();
+        history.save("s_old_big", &big_msgs).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        history.save("s_new_small", &[Message::user("hi")]).unwrap();
 
         let summaries = quick_resume_list(&history, 10).unwrap();
         assert_eq!(summaries.len(), 2);
-        // Largest file first
-        assert!(summaries[0].file_size >= summaries[1].file_size);
+        assert_eq!(summaries[0].session_id, "s_new_small");
     }
 
     #[test]
