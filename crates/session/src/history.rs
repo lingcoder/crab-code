@@ -322,6 +322,30 @@ impl SessionHistory {
         self.read_session_file(session_id).ok().flatten()?.name
     }
 
+    /// Path to a session's cost sidecar (`{base_dir}/{session_id}.cost.json`).
+    fn cost_path(&self, session_id: &str) -> PathBuf {
+        self.base_dir.join(format!("{session_id}.cost.json"))
+    }
+
+    /// Persist a session's accumulated cost summary alongside its transcript so
+    /// resume can restore the running cost/token display instead of zeroing it.
+    pub fn save_cost(
+        &self,
+        session_id: &str,
+        cost: &crate::cost::CostSummary,
+    ) -> crab_core::Result<()> {
+        self.ensure_dir()?;
+        crate::cost::save_cost_summary(&self.cost_path(session_id), cost)
+    }
+
+    /// Load a session's persisted cost summary, if present.
+    #[must_use]
+    pub fn load_cost(&self, session_id: &str) -> Option<crate::cost::CostSummary> {
+        crate::cost::load_cost_summary(&self.cost_path(session_id))
+            .ok()
+            .flatten()
+    }
+
     /// Delete session files (`.json` / `.jsonl` and quarantined `.corrupt-*`)
     /// whose modification time is older than `days`, bounding the growth of the
     /// sessions directory. `days == 0` is a no-op (retention disabled). Returns
@@ -1613,6 +1637,31 @@ mod tests {
         history.append_jsonl("s1", &Message::user("x")).unwrap();
         history.truncate_jsonl("s1").unwrap();
         assert!(history.load_jsonl("s1").unwrap().is_none());
+    }
+
+    #[test]
+    fn save_and_load_cost_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        let cost = crate::cost::CostSummary {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: 10,
+            cache_creation_tokens: 5,
+            total_cost_usd: 0.0123,
+            api_calls: 3,
+        };
+        history.save_cost("s1", &cost).unwrap();
+        let loaded = history.load_cost("s1").expect("cost should load");
+        assert_eq!(loaded.input_tokens, 100);
+        assert_eq!(loaded.api_calls, 3);
+    }
+
+    #[test]
+    fn load_cost_missing_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        assert!(history.load_cost("nope").is_none());
     }
 
     #[test]

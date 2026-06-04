@@ -280,6 +280,20 @@ impl CostAccumulator {
         }
     }
 
+    /// Rebuild an accumulator from a persisted [`CostSummary`] — used to seed
+    /// the running cost/token display when a session is resumed.
+    #[must_use]
+    pub fn from_summary(summary: &CostSummary) -> Self {
+        Self {
+            total_input_tokens: summary.input_tokens,
+            total_output_tokens: summary.output_tokens,
+            total_cache_read_tokens: summary.cache_read_tokens,
+            total_cache_creation_tokens: summary.cache_creation_tokens,
+            total_cost_usd: summary.total_cost_usd,
+            api_calls: summary.api_calls,
+        }
+    }
+
     /// Format as a compact summary line for TUI display.
     pub fn summary_line(&self) -> String {
         format!(

@@ -237,6 +237,17 @@ impl AgentRuntime {
             })
             .unwrap_or_default();
 
+        // Seed the cost accumulator from the resumed session so the cost/token
+        // display continues from where it left off instead of restarting at 0.
+        let resumed_cost = config
+            .session_config
+            .resume_session_id
+            .as_ref()
+            .zip(session_history.as_ref())
+            .and_then(|(resume_id, history)| history.load_cost(resume_id))
+            .map(|summary| CostAccumulator::from_summary(&summary))
+            .unwrap_or_default();
+
         // Build a session-scoped FileHistory so Edit/Write tools can snapshot
         // pre-edit file contents, and `/rewind` can restore them. The base
         // directory mirrors the sessions dir layout — `<base>/file-history/`
@@ -355,7 +366,7 @@ impl AgentRuntime {
             skill_registry,
             session_history,
             _mcp_manager: mcp_manager,
-            cost: CostAccumulator::default(),
+            cost: resumed_cost,
             memory_dir,
             team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
             compaction_client,
@@ -780,6 +791,10 @@ impl AgentRuntime {
         // holds messages from the next (in-flight) turn.
         if let Err(e) = history.truncate_jsonl(session_id) {
             tracing::warn!(error = %e, "session crash-log truncate failed");
+        }
+        // Persist accumulated cost so resume restores the running total.
+        if let Err(e) = history.save_cost(session_id, &self.cost.summary()) {
+            tracing::warn!(error = %e, "session cost save failed");
         }
     }
 
