@@ -97,8 +97,9 @@ pub struct Cli {
     #[arg(long = "config-dir", value_name = "DIR")]
     pub config_dir: Option<PathBuf>,
 
-    /// Resume a previous session by ID
-    #[arg(long)]
+    /// Resume a previous session by ID. With no ID (`crab --resume`), open a
+    /// picker of recent sessions at startup.
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub resume: Option<String>,
 
     /// Pre-fill the interactive prompt input with text without submitting it.
@@ -1080,5 +1081,25 @@ mod tests {
     fn cli_prefill_default_is_none() {
         let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
         assert!(cli.prefill.is_none());
+    }
+
+    #[test]
+    fn cli_resume_with_id() {
+        let cli = Cli::try_parse_from(["crab", "--resume", "abc123"]).unwrap();
+        assert_eq!(cli.resume.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn cli_resume_bare_is_empty_string() {
+        // Bare `--resume` (no id) parses to Some("") — the agent layer treats
+        // that as "open the startup picker".
+        let cli = Cli::try_parse_from(["crab", "--resume"]).unwrap();
+        assert_eq!(cli.resume.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn cli_resume_absent_is_none() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(cli.resume.is_none());
     }
 }

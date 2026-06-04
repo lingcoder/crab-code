@@ -107,6 +107,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
     if let Some(prefill) = config.prefill.as_deref() {
         app.seed_input(prefill);
     }
+    app.open_resume_picker = config.open_resume_picker;
 
     // Slash command tab completion is set up in run_loop() once the
     // CommandRegistry is constructed, so it stays in sync automatically.

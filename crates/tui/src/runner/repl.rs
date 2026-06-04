@@ -626,6 +626,10 @@ fn push_welcome_if_needed(app: &mut App) {
 ///
 /// Called once after background init completes.
 fn push_startup_overlays(app: &mut App) {
+    // Bare `--resume`: open the session picker now that the list is loaded.
+    if std::mem::take(&mut app.open_resume_picker) {
+        app.open_overlay_by_kind(crab_commands::OverlayKind::Resume);
+    }
     if app.working_dir.is_empty() {
         return;
     }

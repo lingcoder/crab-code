@@ -127,6 +127,9 @@ pub struct App {
     pub permission_mode: crab_core::permission::PermissionMode,
     /// Session-level "always allow" grants (tool names granted via 'a' key).
     pub session_grants: std::collections::HashSet<String>,
+    /// Open the resume picker once the runtime is ready (set from bare
+    /// `--resume`; consumed by `push_startup_overlays`).
+    pub open_resume_picker: bool,
     /// Structured message list — the source of truth for conversation display.
     pub messages: Vec<ChatMessage>,
     /// Queue of user commands submitted while the agent is processing.
@@ -205,6 +208,7 @@ impl App {
             pending_suppressed: Vec::new(),
             permission_mode: crab_core::permission::PermissionMode::Default,
             session_grants: std::collections::HashSet::new(),
+            open_resume_picker: false,
             messages: Vec::new(),
             command_queue: CommandQueue::new(),
             stash: None,

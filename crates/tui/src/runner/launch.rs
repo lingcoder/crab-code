@@ -39,6 +39,8 @@ pub struct TuiConfig {
     /// Text to seed the input box with at startup (from `--prefill`), without
     /// submitting it. `None` leaves the input empty.
     pub prefill: Option<String>,
+    /// Open the resume picker once the session list is ready (bare `--resume`).
+    pub open_resume_picker: bool,
 }
 
 /// Run the interactive TUI REPL. This is the main entry point for interactive mode.
@@ -140,6 +142,7 @@ mod tests {
             mcp_servers: None,
             settings_warnings: vec![],
             prefill: None,
+            open_resume_picker: false,
         };
         assert_eq!(config.session_config.session_id, "test");
         assert!(config.skill_dirs.is_empty());

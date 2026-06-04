@@ -388,6 +388,15 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         }
     }
 
+    // A bare `--resume` (no id) opens the startup resume picker instead of
+    // resuming a specific session.
+    let open_resume_picker = resume_session_id.as_deref() == Some("");
+    let resume_session_id = if open_resume_picker {
+        None
+    } else {
+        resume_session_id
+    };
+
     // Resolve resume ID: explicit --resume > -c (continue latest) > None
     let effective_resume_id = if resume_session_id.is_some() {
         resume_session_id
@@ -548,6 +557,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 mcp_servers: settings.mcp_servers.clone(),
                 settings_warnings,
                 prefill: cli.prefill.clone(),
+                open_resume_picker,
             };
             let exit_info = crab_tui::run(tui_config).await?;
             print_exit_info(&exit_info);
