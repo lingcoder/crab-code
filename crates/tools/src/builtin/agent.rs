@@ -104,10 +104,19 @@ impl Tool for AgentTool {
                 "parent_permission_mode": parent_mode_str,
             });
 
+            // Emit both a Json block (structured consumers) and a Text block
+            // carrying the same payload verbatim — the agent layer scans
+            // conversation tool-result text for the `spawn_agent` marker, and
+            // ToolOutput::text() drops Json blocks.
+            let text = serde_json::to_string(&spawn_request).unwrap_or_default();
+
             Ok(ToolOutput::with_content(
-                vec![ToolOutputContent::Json {
-                    value: spawn_request,
-                }],
+                vec![
+                    ToolOutputContent::Json {
+                        value: spawn_request,
+                    },
+                    ToolOutputContent::Text { text },
+                ],
                 false,
             ))
         })
@@ -225,6 +234,23 @@ mod tests {
         assert_eq!(json_content["model"], "claude-sonnet-4-20250514");
         assert_eq!(json_content["working_dir"], abs_dir_str);
         assert_eq!(json_content["max_turns"], 10);
+    }
+
+    #[tokio::test]
+    async fn execute_emits_text_marker_for_scanning() {
+        let ctx = test_ctx();
+        let output = AgentTool
+            .execute(json!({"task": "do it"}), &ctx)
+            .await
+            .unwrap();
+        // The Text block must carry the spawn_agent marker so the agent layer's
+        // tool-result scan finds it (Json blocks are dropped by text()).
+        let text = output.text();
+        assert!(
+            text.contains("\"action\":\"spawn_agent\""),
+            "marker missing from text output: {text}"
+        );
+        assert!(text.contains("\"task\":\"do it\""));
     }
 
     #[tokio::test]

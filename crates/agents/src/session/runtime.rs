@@ -324,6 +324,10 @@ impl AgentSession {
         // so the teammate backend can spawn before the next turn needs them.
         self.process_team_markers(starting_len).await;
 
+        // Intercept `spawn_agent` markers: run each requested sub-agent to
+        // completion and fold its result back into the conversation.
+        self.process_spawn_requests(starting_len).await;
+
         // Auto-save session after each interaction
         self.auto_save_session().await;
 
@@ -390,6 +394,59 @@ impl AgentSession {
             if let Err(e) = self.team_coordinator.process_tool_result(&payload).await {
                 tracing::warn!(error = %e, "team coordinator failed to spawn teammate");
             }
+        }
+    }
+
+    /// Run any `spawn_agent` requests emitted during the last turn to
+    /// completion, then fold each worker's output back into the conversation
+    /// as an `<agent-result>` user message so the model sees it next turn.
+    ///
+    /// Workers are spawned into a turn-local [`WorkerPool`] and collected
+    /// synchronously (the turn does not finish until they do), which keeps the
+    /// borrow simple and matches a Task-style "return the final text" model.
+    async fn process_spawn_requests(&mut self, starting_len: usize) {
+        use crab_core::message::ContentBlock;
+
+        let markers: Vec<serde_json::Value> = self
+            .conversation
+            .messages()
+            .iter()
+            .skip(starting_len)
+            .flat_map(|m| m.content.iter())
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult { content, .. } => {
+                    serde_json::from_str::<serde_json::Value>(content).ok()
+                }
+                _ => None,
+            })
+            .filter(|v| v.get("action").and_then(serde_json::Value::as_str) == Some("spawn_agent"))
+            .collect();
+        if markers.is_empty() {
+            return;
+        }
+
+        let mut pool = WorkerPool::new(self.conversation.id.clone(), "main".into());
+        let mut spawned = false;
+        for marker in &markers {
+            if self.handle_spawn_request(&mut pool, marker).is_some() {
+                spawned = true;
+            }
+        }
+        if !spawned {
+            return;
+        }
+
+        for result in pool.collect_all().await {
+            let status = if result.success {
+                "completed"
+            } else {
+                "failed"
+            };
+            let output = result.output.as_deref().unwrap_or("(no output)");
+            self.conversation.push_user(format!(
+                "<agent-result worker-id=\"{}\" status=\"{status}\">\n{output}\n</agent-result>",
+                result.worker_id
+            ));
         }
     }
 
@@ -646,6 +703,50 @@ mod tests {
                 .contains("Senior Rust dev")
         );
         assert!(session.memory_store.is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_spawn_request_spawns_worker_into_pool() {
+        let session = AgentSession::new(base_config("spawn1"), test_backend(), ToolRegistry::new());
+        let mut pool = WorkerPool::new("main".into(), "main".into());
+        let req = serde_json::json!({
+            "action": "spawn_agent",
+            "task": "do something",
+            "max_turns": 1,
+        });
+        let id = session.handle_spawn_request(&mut pool, &req);
+        assert!(id.is_some(), "spawn_agent marker should spawn a worker");
+        assert_eq!(pool.running_count(), 1);
+        // Cancel so the worker does not linger on the unreachable test backend.
+        pool.cancel_all();
+    }
+
+    #[tokio::test]
+    async fn handle_spawn_request_ignores_non_spawn_action() {
+        let session = AgentSession::new(base_config("spawn2"), test_backend(), ToolRegistry::new());
+        let mut pool = WorkerPool::new("main".into(), "main".into());
+        let req = serde_json::json!({"action": "team_created", "team_name": "x"});
+        assert!(session.handle_spawn_request(&mut pool, &req).is_none());
+        assert_eq!(pool.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn process_spawn_requests_noop_without_marker() {
+        let mut session =
+            AgentSession::new(base_config("nospawn"), test_backend(), ToolRegistry::new());
+        let start = session.conversation.messages().len();
+        session
+            .conversation
+            .push(Message::assistant("plain text, no spawn"));
+        session.process_spawn_requests(start).await;
+        // No <agent-result> message is injected when there is no marker.
+        assert!(
+            !session
+                .conversation
+                .messages()
+                .iter()
+                .any(|m| m.text().contains("<agent-result"))
+        );
     }
 
     #[test]
