@@ -265,6 +265,10 @@ impl AgentRuntime {
             })
         };
 
+        // Session-scoped read-state tracker so Read records reads and Edit/Write
+        // can enforce read-before-edit and detect out-of-band changes.
+        let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
+
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
             permission_mode: config.session_config.permission_policy.mode,
@@ -273,6 +277,8 @@ impl AgentRuntime {
             permission_policy: config.session_config.permission_policy,
             ext: crab_core::tool::ToolContextExt {
                 track_edit: Some(track_edit),
+                record_read: Some(record_read),
+                read_state: Some(read_state),
                 ..Default::default()
             },
         };

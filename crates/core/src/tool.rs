@@ -302,6 +302,58 @@ pub struct ToolContext {
 /// receives the absolute file path and the current on-disk contents.
 pub type TrackEditFn = Arc<dyn Fn(&Path, &[u8]) + Send + Sync>;
 
+/// A recorded read of a file, used to gate edits on a prior read.
+#[derive(Clone, Debug)]
+pub struct ReadRecord {
+    /// File modification time at read time, if it could be stat'd. Used to
+    /// detect a change between the read and a subsequent edit.
+    pub mtime: Option<std::time::SystemTime>,
+}
+
+/// Records that a file was read (Read tool, and after a successful Write/Edit).
+pub type RecordReadFn = Arc<dyn Fn(&Path, ReadRecord) + Send + Sync>;
+
+/// Looks up the last recorded read of a file, used by Edit/Write to enforce
+/// read-before-edit.
+pub type ReadStateFn = Arc<dyn Fn(&Path) -> Option<ReadRecord> + Send + Sync>;
+
+/// Canonical key for read-state tracking: the canonicalized path, falling back
+/// to the path as-given when it cannot be resolved (e.g. a not-yet-created
+/// file). Record and lookup must use the same key.
+#[must_use]
+pub fn canonical_read_key(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Build a fresh session-scoped read-state tracker, returning the
+/// `(record, lookup)` closure pair to wire into [`ToolContextExt`]. Both share
+/// one in-memory store keyed by canonicalized path.
+#[must_use]
+pub fn new_read_state_tracker() -> (RecordReadFn, ReadStateFn) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    let store: Arc<Mutex<HashMap<PathBuf, ReadRecord>>> = Arc::new(Mutex::new(HashMap::new()));
+    let record: RecordReadFn = {
+        let store = Arc::clone(&store);
+        Arc::new(move |path: &Path, record: ReadRecord| {
+            if let Ok(mut map) = store.lock() {
+                map.insert(canonical_read_key(path), record);
+            }
+        })
+    };
+    let lookup: ReadStateFn = {
+        let store = Arc::clone(&store);
+        Arc::new(move |path: &Path| {
+            store
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&canonical_read_key(path)).cloned())
+        })
+    };
+    (record, lookup)
+}
+
 /// Extended tool context fields — populated by the agent loop when available.
 ///
 /// These fields are optional enrichment data. Tools that need them should
@@ -317,6 +369,12 @@ pub struct ToolContextExt {
     /// Snapshot a file before editing. Called by Edit/Write tools with the
     /// absolute path and current file contents; `None` disables tracking.
     pub track_edit: Option<TrackEditFn>,
+    /// Record that a file was read. Called by the Read tool (and after a
+    /// successful Write/Edit); `None` disables read-before-edit tracking.
+    pub record_read: Option<RecordReadFn>,
+    /// Look up the last recorded read of a file. Used by Edit/Write to gate on
+    /// a prior read; `None` disables the gate (edits proceed unchecked).
+    pub read_state: Option<ReadStateFn>,
 }
 
 impl std::fmt::Debug for ToolContextExt {
@@ -326,6 +384,8 @@ impl std::fmt::Debug for ToolContextExt {
             .field("conversation_summary", &self.conversation_summary)
             .field("mcp_server_names", &self.mcp_server_names)
             .field("track_edit", &self.track_edit.as_ref().map(|_| "<fn>"))
+            .field("record_read", &self.record_read.as_ref().map(|_| "<fn>"))
+            .field("read_state", &self.read_state.as_ref().map(|_| "<fn>"))
             .finish()
     }
 }

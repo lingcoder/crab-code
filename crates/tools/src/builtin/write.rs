@@ -59,6 +59,8 @@ impl Tool for WriteTool {
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let track_edit = ctx.ext.track_edit.clone();
+        let read_state = ctx.ext.read_state.clone();
+        let record_read = ctx.ext.record_read.clone();
         Box::pin(async move {
             let file_path = input
                 .get("file_path")
@@ -100,6 +102,16 @@ impl Tool for WriteTool {
                 })?;
             }
 
+            // Overwriting an existing file requires having read it first (so a
+            // blind overwrite cannot clobber unseen changes). New files pass
+            // straight through — there is nothing to read or rewind.
+            if path.exists()
+                && let Some(block) =
+                    super::read_gate::check_read_before_edit(read_state.as_ref(), path)
+            {
+                return Ok(block);
+            }
+
             // Snapshot pre-overwrite contents when the target already exists.
             // New files are skipped — there is nothing to rewind to.
             if path.exists()
@@ -113,6 +125,10 @@ impl Tool for WriteTool {
             tokio::fs::write(path, content).await.map_err(|e| {
                 crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
+
+            // Refresh the read baseline to the just-written contents so a
+            // follow-up edit in the same turn is not blocked.
+            super::read_gate::record_after_write(record_read.as_ref(), path);
 
             let bytes = content.len();
             Ok(ToolOutput::success(format!(
@@ -229,12 +245,47 @@ mod tests {
         }
     }
 
+    fn gated_ctx() -> ToolContext {
+        let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
+        let mut ctx = test_ctx();
+        ctx.ext.record_read = Some(record_read);
+        ctx.ext.read_state = Some(read_state);
+        ctx
+    }
+
     #[test]
     fn tool_metadata() {
         let tool = WriteTool;
         assert_eq!(tool.name(), "Write");
         assert!(!tool.is_read_only());
         assert!(tool.requires_confirmation());
+    }
+
+    #[tokio::test]
+    async fn overwrite_existing_without_read_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("existing.txt");
+        std::fs::write(&file, "original").unwrap();
+        let ctx = gated_ctx();
+
+        let input = json!({ "file_path": file.to_str().unwrap(), "content": "overwritten" });
+        let out = WriteTool.execute(input, &ctx).await.unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("has not been read"));
+        // Original contents preserved.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn write_new_file_without_read_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("brand_new.txt");
+        let ctx = gated_ctx();
+
+        let input = json!({ "file_path": file.to_str().unwrap(), "content": "fresh" });
+        let out = WriteTool.execute(input, &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.text());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fresh");
     }
 
     #[test]

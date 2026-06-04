@@ -185,8 +185,9 @@ impl Tool for ReadTool {
     fn execute(
         &self,
         input: Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let record_read = ctx.ext.record_read.clone();
         let file_path = input["file_path"].as_str().unwrap_or("").to_owned();
         // offset is 1-based line number; default 1
         #[allow(clippy::cast_possible_truncation)]
@@ -262,6 +263,15 @@ impl Tool for ReadTool {
             for (i, line) in selected.iter().enumerate() {
                 let line_num = start + i + 1; // 1-based
                 let _ = writeln!(output, "{line_num:6}\t{line}");
+            }
+
+            // Record the read so Edit/Write can enforce read-before-edit and
+            // detect changes made after this read.
+            if let Some(record_read) = record_read.as_ref() {
+                let mtime = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
+                record_read(&path, crab_core::tool::ReadRecord { mtime });
             }
 
             Ok(ToolOutput::success(output))

@@ -65,6 +65,8 @@ impl Tool for EditTool {
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let track_edit = ctx.ext.track_edit.clone();
+        let read_state = ctx.ext.read_state.clone();
+        let record_read = ctx.ext.record_read.clone();
         Box::pin(async move {
             let file_path = input
                 .get("file_path")
@@ -163,6 +165,13 @@ impl Tool for EditTool {
                 return Ok(ToolOutput::success(out));
             }
 
+            // Gate on a prior read: refuse to edit a file that was not read
+            // first, or that changed on disk since it was read.
+            if let Some(block) = super::read_gate::check_read_before_edit(read_state.as_ref(), path)
+            {
+                return Ok(block);
+            }
+
             // Snapshot pre-edit contents before mutating the file.
             if let Some(track) = track_edit.as_ref() {
                 track(path, content.as_bytes());
@@ -172,6 +181,10 @@ impl Tool for EditTool {
             tokio::fs::write(path, &new_content).await.map_err(|e| {
                 crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
+
+            // The file now matches what the model just wrote — refresh the read
+            // baseline so a follow-up edit in the same turn is not blocked.
+            super::read_gate::record_after_write(record_read.as_ref(), path);
 
             let mut msg = if replace_all {
                 format!("Replaced {effective_count} occurrence(s) in {file_path}")
@@ -432,12 +445,68 @@ mod tests {
         }
     }
 
+    /// A context with the read-before-edit tracker wired, plus the closures so
+    /// tests can pre-seed a read.
+    fn gated_ctx() -> (
+        ToolContext,
+        crab_core::tool::RecordReadFn,
+        crab_core::tool::ReadStateFn,
+    ) {
+        let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
+        let mut ctx = test_ctx();
+        ctx.ext.record_read = Some(record_read.clone());
+        ctx.ext.read_state = Some(read_state.clone());
+        (ctx, record_read, read_state)
+    }
+
     #[test]
     fn tool_metadata() {
         let tool = EditTool;
         assert_eq!(tool.name(), "Edit");
         assert!(!tool.is_read_only());
         assert!(tool.requires_confirmation());
+    }
+
+    #[tokio::test]
+    async fn edit_without_prior_read_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gate.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let (ctx, _record, _state) = gated_ctx();
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn a",
+            "new_string": "fn b"
+        });
+        let out = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("has not been read"));
+        // The file must be untouched.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn a() {}\n");
+    }
+
+    #[tokio::test]
+    async fn edit_after_recorded_read_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gate2.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let (ctx, record, _state) = gated_ctx();
+
+        // Simulate a prior read of the file.
+        let mtime = std::fs::metadata(&file)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        record(&file, crab_core::tool::ReadRecord { mtime });
+
+        let input = json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "fn a",
+            "new_string": "fn b"
+        });
+        let out = EditTool.execute(input, &ctx).await.unwrap();
+        assert!(!out.is_error, "{}", out.text());
+        assert!(std::fs::read_to_string(&file).unwrap().contains("fn b"));
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub mod plan_mode;
 #[cfg(target_os = "windows")]
 pub mod powershell;
 pub mod read;
+pub(crate) mod read_gate;
 pub mod registry;
 pub mod remote_trigger;
 pub mod send_message;
