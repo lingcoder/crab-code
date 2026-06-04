@@ -506,20 +506,23 @@ impl AgentSession {
         //              so workers can Bash/Edit/Read but cannot spawn nested
         //              teams or message peers directly.
         // Regular sessions inherit both from the parent unchanged.
-        let (parent_prompt, worker_executor) = if let Some(ctx) = &self.coordinator_ctx {
-            let worker_reg = ctx.coordinator.build_worker_registry();
-            let exec = Arc::new(ToolExecutor::new(Arc::new(worker_reg)));
-            (ctx.worker_base_prompt.clone(), exec)
+        let (parent_prompt, worker_registry) = if let Some(ctx) = &self.coordinator_ctx {
+            (
+                ctx.worker_base_prompt.clone(),
+                Arc::new(ctx.coordinator.build_worker_registry()),
+            )
         } else {
-            let exec = Arc::new(ToolExecutor::new(self.executor.registry_arc()));
-            (self.conversation.system_prompt.clone(), exec)
+            (
+                self.conversation.system_prompt.clone(),
+                self.executor.registry_arc(),
+            )
         };
 
         crate::teams::spawn::spawn_worker_from_marker(
             coordinator,
             spawn_request,
             &self.backend,
-            worker_executor,
+            worker_registry,
             &parent_prompt,
             &self.tool_ctx,
             &self.config,

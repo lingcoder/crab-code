@@ -452,16 +452,14 @@ impl AgentRuntime {
                 let mut pool =
                     crate::teams::WorkerPool::new(task_conversation.id.clone(), "main".into());
                 let parent_prompt = task_conversation.system_prompt.clone();
-                let worker_executor = Arc::new(crab_tools::executor::ToolExecutor::new(
-                    task_executor.registry_arc(),
-                ));
+                let worker_registry = task_executor.registry_arc();
                 let mut spawned = false;
                 for marker in &markers {
                     if crate::teams::spawn::spawn_worker_from_marker(
                         &mut pool,
                         marker,
                         &task_backend,
-                        Arc::clone(&worker_executor),
+                        Arc::clone(&worker_registry),
                         &parent_prompt,
                         &task_ctx,
                         &task_config,

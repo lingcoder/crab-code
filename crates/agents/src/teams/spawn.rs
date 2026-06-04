@@ -59,7 +59,7 @@ pub fn spawn_worker_from_marker(
     pool: &mut WorkerPool,
     marker: &serde_json::Value,
     backend: &Arc<LlmBackend>,
-    worker_executor: Arc<ToolExecutor>,
+    worker_registry: Arc<ToolRegistry>,
     parent_prompt: &str,
     tool_ctx: &ToolContext,
     loop_config: &QueryConfig,
@@ -84,19 +84,26 @@ pub fn spawn_worker_from_marker(
         .and_then(|v| v.as_str())
         .and_then(|t| builtin_agents().into_iter().find(|d| d.agent_type == t));
 
-    let (system_prompt, executor) = match &def {
-        Some(d) => {
-            let filtered = build_def_registry(worker_executor.registry(), d);
-            (
-                d.system_prompt.clone(),
-                Arc::new(ToolExecutor::new(Arc::new(filtered))),
-            )
-        }
-        None => (
+    let (system_prompt, registry) = if let Some(d) = &def {
+        (
+            d.system_prompt.clone(),
+            Arc::new(build_def_registry(&worker_registry, d)),
+        )
+    } else {
+        (
             format!("You are a sub-agent worker. Complete the assigned task.\n\n{parent_prompt}"),
-            worker_executor,
-        ),
+            worker_registry,
+        )
     };
+
+    // A spawned worker has no interactive permission handler, so without this
+    // it would fail closed (tp-7) and could not run any write/exec tool. The
+    // spawn itself was user-confirmed (the Agent tool requires confirmation)
+    // and the worker runs under the parent's restricted permission mode
+    // (`restrict_to` below), so unattended auto-approval is the right posture.
+    let mut exec = ToolExecutor::new(registry);
+    exec.set_allow_unattended(true);
+    let executor = Arc::new(exec);
 
     let mut worker_ctx = tool_ctx.clone();
     if let Some(parent_mode) = marker
