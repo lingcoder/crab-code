@@ -7,5 +7,5 @@
 pub mod spawner;
 pub mod teammate;
 
-pub use spawner::{InProcessBackend, SwarmBackend};
+pub use spawner::{InProcessBackend, SwarmBackend, TeammateRunCtx, TeammateRunner};
 pub use teammate::{Teammate, TeammateConfig, TeammateState};

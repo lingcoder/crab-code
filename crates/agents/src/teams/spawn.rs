@@ -13,7 +13,8 @@ use crab_core::message::{ContentBlock, Message};
 use crab_core::model::ModelId;
 use crab_core::tool::ToolContext;
 use crab_engine::QueryConfig;
-use crab_session::Conversation;
+use crab_session::{Conversation, CostAccumulator};
+use crab_swarm::backend::{TeammateRunCtx, TeammateRunner};
 use crab_tools::executor::ToolExecutor;
 use crab_tools::registry::ToolRegistry;
 use tokio::sync::mpsc;
@@ -157,6 +158,68 @@ fn build_def_registry(parent: &ToolRegistry, def: &AgentDefinition) -> ToolRegis
     let deny: Vec<&str> = def.disallowed_tools.iter().map(String::as_str).collect();
     reg.remove_names(&deny);
     reg
+}
+
+/// Build a teammate runner for the in-process swarm backend.
+///
+/// Each spawned teammate waits for its first inbound message, then runs an
+/// agent loop seeded with its configured system prompt against that message
+/// (looping for any subsequent messages until cancelled). Like sub-agent
+/// workers, teammates run unattended under the inherited permission mode since
+/// they have no interactive handler.
+pub fn teammate_runner(
+    backend: Arc<LlmBackend>,
+    registry: Arc<ToolRegistry>,
+    tool_ctx: ToolContext,
+    loop_config: QueryConfig,
+    event_tx: mpsc::Sender<Event>,
+) -> TeammateRunner {
+    Arc::new(move |ctx: TeammateRunCtx| {
+        let backend = Arc::clone(&backend);
+        let registry = Arc::clone(&registry);
+        let base_ctx = tool_ctx.clone();
+        let mut loop_config = loop_config.clone();
+        loop_config.session_persister = None;
+        let event_tx = event_tx.clone();
+        Box::pin(async move {
+            let TeammateRunCtx {
+                id,
+                config,
+                mut rx,
+                cancel,
+            } = ctx;
+            let mut exec = ToolExecutor::new(registry);
+            exec.set_allow_unattended(true);
+            let mut tool_ctx = base_ctx;
+            if let Some(wd) = &config.working_dir {
+                tool_ctx.working_dir = wd.clone();
+            }
+            loop {
+                let seed = tokio::select! {
+                    () = cancel.cancelled() => break,
+                    msg = rx.recv() => match msg {
+                        Some(s) => s,
+                        None => break,
+                    },
+                };
+                let mut convo =
+                    Conversation::new(id.clone(), config.system_prompt.clone(), 200_000);
+                convo.push(Message::user(seed));
+                let mut cost = CostAccumulator::default();
+                let _ = crab_engine::query_loop(
+                    &mut convo,
+                    &backend,
+                    &exec,
+                    &tool_ctx,
+                    &loop_config,
+                    &mut cost,
+                    event_tx.clone(),
+                    cancel.clone(),
+                )
+                .await;
+            }
+        })
+    })
 }
 
 /// Format a finished worker's output as an `<agent-result>` user message the

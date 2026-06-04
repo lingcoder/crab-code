@@ -7,11 +7,33 @@
 //! parent process.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::teammate::{Teammate, TeammateConfig, TeammateState};
+
+/// Everything a teammate runner needs to drive one teammate task.
+pub struct TeammateRunCtx {
+    /// Backend-assigned teammate id.
+    pub id: String,
+    /// Spawn configuration (name, role, system prompt, working dir).
+    pub config: TeammateConfig,
+    /// Inbound message channel — the runner awaits messages (e.g. tasks) here.
+    pub rx: mpsc::Receiver<String>,
+    /// Cancellation token; the runner must exit promptly when triggered.
+    pub cancel: CancellationToken,
+}
+
+/// A teammate runner: builds and drives a teammate's work loop.
+///
+/// Injected by an upper layer (the agents crate) so this crate stays free of
+/// any LLM/engine dependency — `crab-swarm` only knows how to call the closure.
+pub type TeammateRunner =
+    Arc<dyn Fn(TeammateRunCtx) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// Trait for swarm execution backends.
 ///
@@ -58,15 +80,30 @@ struct InProcessEntry {
 pub struct InProcessBackend {
     entries: HashMap<String, InProcessEntry>,
     next_id: u64,
+    /// Optional runner that drives each teammate's work loop. When unset,
+    /// teammates are passive (drain their channel until cancelled) — the
+    /// previous logging-sink behavior, kept for tests and headless callers.
+    runner: Option<TeammateRunner>,
 }
 
 impl InProcessBackend {
-    /// Create a new empty in-process backend.
+    /// Create a new empty in-process backend with passive teammates.
     #[must_use]
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
             next_id: 0,
+            runner: None,
+        }
+    }
+
+    /// Create a backend whose teammates run the given runner closure.
+    #[must_use]
+    pub fn with_runner(runner: TeammateRunner) -> Self {
+        Self {
+            entries: HashMap::new(),
+            next_id: 0,
+            runner: Some(runner),
         }
     }
 }
@@ -81,28 +118,33 @@ impl SwarmBackend for InProcessBackend {
 
         let (tx, mut rx) = mpsc::channel::<String>(64);
         let cancel = CancellationToken::new();
-        let cancel_clone = cancel.clone();
-        let teammate_id = id.clone();
 
-        let handle = tokio::spawn(async move {
-            tracing::debug!(teammate_id, "in-process teammate started");
-            loop {
-                tokio::select! {
-                    () = cancel_clone.cancelled() => {
-                        tracing::debug!(teammate_id, "in-process teammate cancelled");
-                        break;
-                    }
-                    msg = rx.recv() => {
-                        if let Some(text) = msg {
-                            tracing::debug!(teammate_id, message = %text, "teammate received message");
-                        } else {
-                            tracing::debug!(teammate_id, "teammate channel closed");
-                            break;
+        let handle = if let Some(runner) = &self.runner {
+            // Drive a real teammate work loop via the injected runner.
+            tokio::spawn(runner(TeammateRunCtx {
+                id: id.clone(),
+                config,
+                rx,
+                cancel: cancel.clone(),
+            }))
+        } else {
+            // Passive teammate: drain the channel until cancelled or closed.
+            let cancel_clone = cancel.clone();
+            let teammate_id = id.clone();
+            tokio::spawn(async move {
+                tracing::debug!(teammate_id, "in-process teammate started (passive)");
+                loop {
+                    tokio::select! {
+                        () = cancel_clone.cancelled() => break,
+                        msg = rx.recv() => {
+                            if msg.is_none() {
+                                break;
+                            }
                         }
                     }
                 }
-            }
-        });
+            })
+        };
 
         self.entries.insert(
             id.clone(),
@@ -204,6 +246,33 @@ mod tests {
         backend.kill_teammate(&id1).await.unwrap();
         backend.kill_teammate(&id2).await.unwrap();
         assert!(backend.list_teammates().is_empty());
+    }
+
+    #[tokio::test]
+    async fn with_runner_invokes_runner_on_spawn() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_in = Arc::clone(&ran);
+        let runner: TeammateRunner = Arc::new(move |ctx: TeammateRunCtx| {
+            let ran = Arc::clone(&ran_in);
+            Box::pin(async move {
+                ran.store(true, Ordering::SeqCst);
+                ctx.cancel.cancelled().await;
+            })
+        });
+
+        let mut backend = InProcessBackend::with_runner(runner);
+        let id = backend
+            .spawn_teammate(TeammateConfig::new("A", "reviewer"))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "runner should have been invoked"
+        );
+        backend.kill_teammate(&id).await.unwrap();
     }
 
     #[tokio::test]

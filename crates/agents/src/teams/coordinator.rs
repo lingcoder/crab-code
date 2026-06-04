@@ -33,12 +33,24 @@ impl Default for TeamCoordinator {
 }
 
 impl TeamCoordinator {
-    /// Create a new coordinator with an empty backend and a
-    /// [`PermissionSyncManager`] sized for typical swarm chatter.
+    /// Create a new coordinator with passive teammates (no work runner). Used
+    /// by tests and headless callers that do not drive teammate agent loops.
     #[must_use]
     pub fn new() -> Self {
         Self {
             backend: InProcessBackend::new(),
+            permission_sync: PermissionSyncManager::new(32),
+            seen_teams: HashSet::new(),
+        }
+    }
+
+    /// Create a coordinator whose teammates run the given runner closure (an
+    /// agent loop). The runtime injects this so teammates do real work instead
+    /// of acting as logging sinks.
+    #[must_use]
+    pub fn with_runner(runner: crab_swarm::backend::TeammateRunner) -> Self {
+        Self {
+            backend: InProcessBackend::with_runner(runner),
             permission_sync: PermissionSyncManager::new(32),
             seen_teams: HashSet::new(),
         }

@@ -237,6 +237,16 @@ impl AgentSession {
 
         let (event_tx, event_rx) = mpsc::channel(256);
 
+        // Teammates spawned via TeamCreate run a real agent loop driven by this
+        // runner (built from the session's shared handles).
+        let team_runner = crate::teams::spawn::teammate_runner(
+            Arc::clone(&backend),
+            executor.registry_arc(),
+            tool_ctx.clone(),
+            config.clone(),
+            event_tx.clone(),
+        );
+
         Self {
             conversation,
             backend,
@@ -251,7 +261,7 @@ impl AgentSession {
             cost: CostAccumulator::default(),
             engine: None,
             coordinator_ctx,
-            team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
+            team_coordinator: crate::teams::coordinator::TeamCoordinator::with_runner(team_runner),
             file_history,
         }
     }
