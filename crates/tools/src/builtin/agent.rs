@@ -44,6 +44,10 @@ impl Tool for AgentTool {
                 "max_turns": {
                     "type": "integer",
                     "description": "Maximum number of turns before the sub-agent is stopped (default: 20)"
+                },
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Optional named agent type whose system prompt and tool restrictions the sub-agent adopts (e.g. 'Explore', 'Plan', 'general-purpose')"
                 }
             },
             "required": ["task"]
@@ -93,6 +97,11 @@ impl Tool for AgentTool {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(20);
 
+            let subagent_type = input
+                .get("subagent_type")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
             // Build the spawn request as structured JSON for the agent layer
             let spawn_request = serde_json::json!({
                 "action": "spawn_agent",
@@ -102,6 +111,7 @@ impl Tool for AgentTool {
                 "max_turns": max_turns,
                 "session_id": session_id,
                 "parent_permission_mode": parent_mode_str,
+                "subagent_type": subagent_type,
             });
 
             // Emit both a Json block (structured consumers) and a Text block

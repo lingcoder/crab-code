@@ -10,14 +10,18 @@ use std::sync::Arc;
 use crab_api::LlmBackend;
 use crab_core::event::Event;
 use crab_core::message::{ContentBlock, Message};
+use crab_core::model::ModelId;
 use crab_core::tool::ToolContext;
 use crab_engine::QueryConfig;
 use crab_session::Conversation;
 use crab_tools::executor::ToolExecutor;
+use crab_tools::registry::ToolRegistry;
 use tokio::sync::mpsc;
 
 use super::worker::WorkerResult;
 use super::worker_pool::WorkerPool;
+use crate::builtin::builtin_agents;
+use crate::definition::{AgentDefinition, ToolSet};
 
 /// The marker `action` value the Agent tool emits for a spawn request.
 pub const SPAWN_AGENT_ACTION: &str = "spawn_agent";
@@ -70,8 +74,29 @@ pub fn spawn_worker_from_marker(
         .and_then(serde_json::Value::as_u64)
         .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
 
-    let system_prompt =
-        format!("You are a sub-agent worker. Complete the assigned task.\n\n{parent_prompt}");
+    // An optional named agent definition (`subagent_type`) supplies the
+    // worker's system prompt, restricts its tool registry (read-only /
+    // disallowed / explicit allow-list), and may override the model. When
+    // absent or unknown, fall back to the generic worker prompt + parent
+    // registry so nothing regresses.
+    let def = marker
+        .get("subagent_type")
+        .and_then(|v| v.as_str())
+        .and_then(|t| builtin_agents().into_iter().find(|d| d.agent_type == t));
+
+    let (system_prompt, executor) = match &def {
+        Some(d) => {
+            let filtered = build_def_registry(worker_executor.registry(), d);
+            (
+                d.system_prompt.clone(),
+                Arc::new(ToolExecutor::new(Arc::new(filtered))),
+            )
+        }
+        None => (
+            format!("You are a sub-agent worker. Complete the assigned task.\n\n{parent_prompt}"),
+            worker_executor,
+        ),
+    };
 
     let mut worker_ctx = tool_ctx.clone();
     if let Some(parent_mode) = marker
@@ -86,17 +111,45 @@ pub fn spawn_worker_from_marker(
     // parent session's JSONL crash log.
     let mut worker_config = loop_config.clone();
     worker_config.session_persister = None;
+    if let Some(d) = &def
+        && let Some(model) = &d.model
+    {
+        worker_config.model = ModelId::from(model.clone());
+    }
 
     Some(pool.spawn_worker(
         task,
         system_prompt,
         backend.clone(),
-        worker_executor,
+        executor,
         worker_ctx,
         worker_config,
         event_tx.clone(),
         max_turns,
     ))
+}
+
+/// Build a worker tool registry from `parent`, applying an agent definition's
+/// restrictions: read-only agents keep only read-only tools, an explicit
+/// `ToolSet::Specific` allow-list is retained, and `disallowed_tools` are
+/// removed.
+fn build_def_registry(parent: &ToolRegistry, def: &AgentDefinition) -> ToolRegistry {
+    let mut reg = ToolRegistry::new();
+    for name in parent.tool_names() {
+        if let Some(tool) = parent.get(name) {
+            if def.read_only && !tool.is_read_only() {
+                continue;
+            }
+            reg.register(Arc::clone(tool));
+        }
+    }
+    if let ToolSet::Specific(allowed) = &def.tools {
+        let allow: Vec<&str> = allowed.iter().map(String::as_str).collect();
+        reg.retain_names(&allow);
+    }
+    let deny: Vec<&str> = def.disallowed_tools.iter().map(String::as_str).collect();
+    reg.remove_names(&deny);
+    reg
 }
 
 /// Format a finished worker's output as an `<agent-result>` user message the
@@ -141,6 +194,22 @@ mod tests {
         // starting_len past the message skips it.
         let c2 = convo_with_marker(r#"{"action":"spawn_agent","task":"y"}"#);
         assert!(scan_spawn_markers(&c2, 1).is_empty());
+    }
+
+    #[test]
+    fn explore_agent_def_filters_to_read_only_tools() {
+        let parent = crab_tools::builtin::create_default_registry();
+        let explore = builtin_agents()
+            .into_iter()
+            .find(|d| d.agent_type == "Explore")
+            .expect("Explore agent");
+        let filtered = build_def_registry(&parent, &explore);
+        let names = filtered.tool_names();
+        // A read-only agent keeps read tools but loses write/exec tools.
+        assert!(names.contains(&"Read"), "Read should survive: {names:?}");
+        assert!(!names.contains(&"Write"), "Write must be dropped");
+        assert!(!names.contains(&"Edit"), "Edit must be dropped");
+        assert!(!names.contains(&"Bash"), "Bash must be dropped");
     }
 
     #[test]
