@@ -405,22 +405,7 @@ impl AgentSession {
     /// synchronously (the turn does not finish until they do), which keeps the
     /// borrow simple and matches a Task-style "return the final text" model.
     async fn process_spawn_requests(&mut self, starting_len: usize) {
-        use crab_core::message::ContentBlock;
-
-        let markers: Vec<serde_json::Value> = self
-            .conversation
-            .messages()
-            .iter()
-            .skip(starting_len)
-            .flat_map(|m| m.content.iter())
-            .filter_map(|block| match block {
-                ContentBlock::ToolResult { content, .. } => {
-                    serde_json::from_str::<serde_json::Value>(content).ok()
-                }
-                _ => None,
-            })
-            .filter(|v| v.get("action").and_then(serde_json::Value::as_str) == Some("spawn_agent"))
-            .collect();
+        let markers = crate::teams::spawn::scan_spawn_markers(&self.conversation, starting_len);
         if markers.is_empty() {
             return;
         }
@@ -437,16 +422,8 @@ impl AgentSession {
         }
 
         for result in pool.collect_all().await {
-            let status = if result.success {
-                "completed"
-            } else {
-                "failed"
-            };
-            let output = result.output.as_deref().unwrap_or("(no output)");
-            self.conversation.push_user(format!(
-                "<agent-result worker-id=\"{}\" status=\"{status}\">\n{output}\n</agent-result>",
-                result.worker_id
-            ));
+            self.conversation
+                .push(crate::teams::spawn::agent_result_message(&result));
         }
     }
 
@@ -522,16 +499,6 @@ impl AgentSession {
         coordinator: &mut WorkerPool,
         spawn_request: &serde_json::Value,
     ) -> Option<String> {
-        if spawn_request.get("action")?.as_str()? != "spawn_agent" {
-            return None;
-        }
-
-        let task = spawn_request.get("task")?.as_str()?.to_string();
-        let max_turns = spawn_request
-            .get("max_turns")
-            .and_then(serde_json::Value::as_u64)
-            .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
-
         // Coordinator Mode splits the worker's inputs from the parent session:
         //  - prompt:   use the pre-overlay base (workers must not see the
         //              "You do not execute code" coordinator guardrail).
@@ -542,37 +509,22 @@ impl AgentSession {
         let (parent_prompt, worker_executor) = if let Some(ctx) = &self.coordinator_ctx {
             let worker_reg = ctx.coordinator.build_worker_registry();
             let exec = Arc::new(ToolExecutor::new(Arc::new(worker_reg)));
-            (ctx.worker_base_prompt.as_str(), exec)
+            (ctx.worker_base_prompt.clone(), exec)
         } else {
             let exec = Arc::new(ToolExecutor::new(self.executor.registry_arc()));
-            (self.conversation.system_prompt.as_str(), exec)
+            (self.conversation.system_prompt.clone(), exec)
         };
 
-        let system_prompt =
-            format!("You are a sub-agent worker. Complete the assigned task.\n\n{parent_prompt}");
-
-        let mut worker_tool_ctx = self.tool_ctx.clone();
-        if let Some(parent_mode) = spawn_request
-            .get("parent_permission_mode")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<crab_core::permission::PermissionMode>().ok())
-        {
-            worker_tool_ctx.permission_mode =
-                worker_tool_ctx.permission_mode.restrict_to(parent_mode);
-        }
-
-        let worker_id = coordinator.spawn_worker(
-            task,
-            system_prompt,
-            self.backend.clone(),
+        crate::teams::spawn::spawn_worker_from_marker(
+            coordinator,
+            spawn_request,
+            &self.backend,
             worker_executor,
-            worker_tool_ctx,
-            self.config.clone(),
-            self.event_tx.clone(),
-            max_turns,
-        );
-
-        Some(worker_id)
+            &parent_prompt,
+            &self.tool_ctx,
+            &self.config,
+            &self.event_tx,
+        )
     }
 
     /// Auto-save the current session transcript to disk.

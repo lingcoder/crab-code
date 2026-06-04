@@ -7,6 +7,7 @@
 //! coordinator.
 
 pub mod coordinator;
+pub mod spawn;
 pub mod worker;
 pub mod worker_pool;
 

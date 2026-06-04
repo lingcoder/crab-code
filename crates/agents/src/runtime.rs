@@ -432,6 +432,7 @@ impl AgentRuntime {
 
         tokio::spawn(async move {
             let mut task_cost = CostAccumulator::default();
+            let starting_len = task_conversation.messages().len();
             let result = crab_engine::query_loop(
                 &mut task_conversation,
                 &task_backend,
@@ -439,10 +440,45 @@ impl AgentRuntime {
                 &task_ctx,
                 &task_config,
                 &mut task_cost,
-                event_tx,
+                event_tx.clone(),
                 cancel,
             )
             .await;
+
+            // Run any sub-agents the turn requested via the Agent tool to
+            // completion, folding each result back into the conversation.
+            let markers = crate::teams::spawn::scan_spawn_markers(&task_conversation, starting_len);
+            if !markers.is_empty() {
+                let mut pool =
+                    crate::teams::WorkerPool::new(task_conversation.id.clone(), "main".into());
+                let parent_prompt = task_conversation.system_prompt.clone();
+                let worker_executor = Arc::new(crab_tools::executor::ToolExecutor::new(
+                    task_executor.registry_arc(),
+                ));
+                let mut spawned = false;
+                for marker in &markers {
+                    if crate::teams::spawn::spawn_worker_from_marker(
+                        &mut pool,
+                        marker,
+                        &task_backend,
+                        Arc::clone(&worker_executor),
+                        &parent_prompt,
+                        &task_ctx,
+                        &task_config,
+                        &event_tx,
+                    )
+                    .is_some()
+                    {
+                        spawned = true;
+                    }
+                }
+                if spawned {
+                    for worker_result in pool.collect_all().await {
+                        task_conversation
+                            .push(crate::teams::spawn::agent_result_message(&worker_result));
+                    }
+                }
+            }
 
             let _ = return_tx.send(QueryTaskResult {
                 conversation: task_conversation,
