@@ -469,8 +469,38 @@ impl App {
     pub fn load_session_messages(&mut self, conversation: &crab_agents::Conversation) {
         self.reset_for_new_session();
         self.session_id.clone_from(&conversation.id);
-        for msg in conversation.messages() {
+
+        // Compaction injects its summary back into the conversation as a
+        // synthetic user (+ assistant ack) pair. The live `/compact` flow only
+        // ever shows a boundary divider for it, so collapse the same pair here
+        // to keep resumed sessions consistent with live ones.
+        let messages = conversation.messages();
+        let mut idx = 0;
+        while idx < messages.len() {
+            let msg = &messages[idx];
             let text = msg.text();
+
+            if msg.role == crab_core::message::Role::User
+                && (text.starts_with(crab_agents::COMPACT_SUMMARY_USER_PREFIX)
+                    || text.starts_with(crab_agents::COMPACT_HEURISTIC_USER_PREFIX))
+            {
+                self.messages.push(ChatMessage::CompactBoundary {
+                    strategy: "summary".into(),
+                    after_tokens: 0,
+                    removed_messages: 0,
+                });
+                // Swallow the synthetic assistant acknowledgement that the LLM
+                // summarize path appends right after the summary message.
+                if matches!(messages.get(idx + 1), Some(next)
+                    if next.role == crab_core::message::Role::Assistant
+                        && next.text() == crab_agents::COMPACT_SUMMARY_ACK)
+                {
+                    idx += 1;
+                }
+                idx += 1;
+                continue;
+            }
+
             let chat_msg = match msg.role {
                 crab_core::message::Role::User => ChatMessage::User { text },
                 crab_core::message::Role::Assistant => ChatMessage::Assistant {
@@ -484,6 +514,7 @@ impl App {
                 },
             };
             self.messages.push(chat_msg);
+            idx += 1;
         }
     }
 
@@ -2420,5 +2451,64 @@ mod tests {
         app.handle_event(ctrl_key('k'));
         app.handle_event(ctrl_key('s'));
         assert!(!app.overlay_stack.is_empty());
+    }
+
+    #[test]
+    fn resume_collapses_llm_summary_pair_into_boundary() {
+        let mut conv = crab_agents::Conversation::new("s1".into(), String::new(), 100_000);
+        conv.push_user("hello");
+        conv.push_assistant("hi there");
+        conv.push_user(format!(
+            "{}\nold stuff happened",
+            crab_agents::COMPACT_SUMMARY_USER_PREFIX
+        ));
+        conv.push_assistant(crab_agents::COMPACT_SUMMARY_ACK);
+        conv.push_user("what next?");
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        // The summary user message + assistant ack collapse to one boundary; the
+        // surrounding real turns survive verbatim.
+        let boundaries = app
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::CompactBoundary { .. }))
+            .count();
+        assert_eq!(boundaries, 1);
+        assert!(!messages_contain(
+            &app.messages,
+            crab_agents::COMPACT_SUMMARY_USER_PREFIX
+        ));
+        assert!(!messages_contain(
+            &app.messages,
+            crab_agents::COMPACT_SUMMARY_ACK
+        ));
+        assert!(messages_contain(&app.messages, "what next?"));
+        assert!(messages_contain(&app.messages, "hello"));
+    }
+
+    #[test]
+    fn resume_collapses_heuristic_summary_into_boundary() {
+        let mut conv = crab_agents::Conversation::new("s2".into(), String::new(), 100_000);
+        conv.push_user(format!(
+            "{}\n\nsummary body",
+            crab_agents::COMPACT_HEURISTIC_USER_PREFIX
+        ));
+        conv.push_user("resumed question");
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        assert_eq!(
+            app.messages
+                .iter()
+                .filter(|m| matches!(m, ChatMessage::CompactBoundary { .. }))
+                .count(),
+            1
+        );
+        // No follower ack for the heuristic path, so the next real user message
+        // must remain intact.
+        assert!(messages_contain(&app.messages, "resumed question"));
     }
 }

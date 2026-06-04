@@ -639,8 +639,9 @@ impl AgentRuntime {
 
         self.conversation.clear();
         if !summary_text.is_empty() {
+            let prefix = crate::COMPACT_HEURISTIC_USER_PREFIX;
             self.conversation
-                .push_user(format!("[Previous conversation summary]\n\n{summary_text}"));
+                .push_user(format!("{prefix}\n\n{summary_text}"));
         }
 
         let after_tokens = self.conversation.estimated_tokens();

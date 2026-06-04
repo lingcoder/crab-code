@@ -8,6 +8,27 @@ use crate::conversation::Conversation;
 /// Token threshold above which a tool result is considered "large" for snipping.
 const SNIP_TOKEN_THRESHOLD: u64 = 200;
 
+// ── Compaction boundary sentinels ─────────────────────────────────────
+//
+// After compaction the summary is injected back into the conversation as
+// ordinary messages (the API has no first-class "boundary" role). These
+// prefixes mark those synthetic messages so the resume path can recognize
+// them and render a single boundary divider instead of raw bubbles, matching
+// what the live `/compact` flow shows.
+
+/// Prefix of the synthetic user message carrying an LLM-produced summary
+/// (the `Summarize` / `Hybrid` strategies).
+pub const COMPACT_SUMMARY_USER_PREFIX: &str =
+    "[Context compacted — summary of earlier conversation]";
+
+/// The synthetic assistant acknowledgement that immediately follows
+/// [`COMPACT_SUMMARY_USER_PREFIX`].
+pub const COMPACT_SUMMARY_ACK: &str = "Understood, I have the context from the summary above.";
+
+/// Prefix of the synthetic user message carrying a heuristic (non-LLM)
+/// summary, injected by the runtime's `compact_now` fallback.
+pub const COMPACT_HEURISTIC_USER_PREFIX: &str = "[Previous conversation summary]";
+
 // ── Configurable compaction mode ──────────────────────────────────────
 
 /// High-level compaction mode that can be selected in settings.
@@ -636,18 +657,18 @@ async fn summarize_old_messages_keeping(
     for msg in important_msgs {
         conversation.inner.push(msg);
     }
-    // Insert the summary as a system message so the model has context
+    // Insert the summary as a synthetic user/assistant pair so the model has
+    // context. The sentinel prefix lets the resume path collapse this back
+    // into a boundary divider.
     conversation.inner.push(Message::new(
         Role::User,
         vec![ContentBlock::text(format!(
-            "[Context compacted — summary of earlier conversation]\n{summary}"
+            "{COMPACT_SUMMARY_USER_PREFIX}\n{summary}"
         ))],
     ));
     conversation.inner.push(Message::new(
         Role::Assistant,
-        vec![ContentBlock::text(
-            "Understood, I have the context from the summary above.".to_owned(),
-        )],
+        vec![ContentBlock::text(COMPACT_SUMMARY_ACK.to_owned())],
     ));
     for msg in recent_msgs {
         conversation.inner.push(msg);

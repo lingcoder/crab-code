@@ -18,6 +18,7 @@ pub mod template;
 
 pub use auto_compact::{AutoCompactConfig, AutoCompactState, CompactTrigger, should_auto_compact};
 pub use compaction::{
+    COMPACT_HEURISTIC_USER_PREFIX, COMPACT_SUMMARY_ACK, COMPACT_SUMMARY_USER_PREFIX,
     CompactionClient, CompactionConfig, CompactionMode, CompactionReport, CompactionStrategy,
     CompactionTrigger, compact, compact_with_config,
 };

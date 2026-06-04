@@ -41,8 +41,8 @@ pub use crab_engine::{EffortLevel, QueryConfig};
 pub use crab_hooks::{HookExecutor, HookTrigger};
 pub use crab_mcp::McpManager;
 pub use crab_session::{
-    Conversation, CostAccumulator, FileHistory, SessionHistory, SessionMetadata, Snapshot,
-    SnapshotError,
+    COMPACT_HEURISTIC_USER_PREFIX, COMPACT_SUMMARY_ACK, COMPACT_SUMMARY_USER_PREFIX, Conversation,
+    CostAccumulator, FileHistory, SessionHistory, SessionMetadata, Snapshot, SnapshotError,
 };
 pub use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 pub use crab_tools::executor::{PermissionHandler, ToolExecutor};
