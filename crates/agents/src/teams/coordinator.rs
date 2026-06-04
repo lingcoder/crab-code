@@ -88,18 +88,82 @@ impl TeamCoordinator {
         &mut self,
         payload: &str,
     ) -> crab_core::Result<Option<String>> {
+        let Ok(value) = serde_json::from_str::<Value>(payload) else {
+            return Ok(None);
+        };
+        match value.get("action").and_then(Value::as_str) {
+            Some(TEAM_CREATED_ACTION) => self.spawn_team(payload).await,
+            Some("message_sent") => {
+                self.route_message(&value).await;
+                Ok(None)
+            }
+            Some("team_deleted") => {
+                self.delete_team().await;
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Spawn a single default teammate for a newly-seen team.
+    async fn spawn_team(&mut self, payload: &str) -> crab_core::Result<Option<String>> {
         let Some(team_name) = parse_team_created(payload) else {
             return Ok(None);
         };
         if !self.seen_teams.insert(team_name.clone()) {
             return Ok(Some(team_name));
         }
-        // Spawn a single default teammate per team. Richer wiring (multiple
-        // teammates, roles, etc.) can layer on top of this as the tool
-        // grows — the marker itself only names the team today.
         let config = TeammateConfig::new(format!("{team_name}-lead"), "lead");
         self.backend.spawn_teammate(config).await?;
         Ok(Some(team_name))
+    }
+
+    /// Deliver a `message_sent` marker to the named teammate (or every teammate
+    /// for a `*` broadcast), waking the teammate's agent loop.
+    async fn route_message(&self, value: &Value) {
+        let Some(message) = value.get("message").and_then(Value::as_str) else {
+            return;
+        };
+        let to = value.get("to").and_then(Value::as_str).unwrap_or_default();
+
+        // Resolve target ids up front so the teammate-list borrow is released
+        // before the async sends.
+        let targets: Vec<String> = if to == "*" {
+            self.backend
+                .list_teammates()
+                .iter()
+                .map(|t| t.id.clone())
+                .collect()
+        } else {
+            self.backend
+                .list_teammates()
+                .iter()
+                .filter(|t| t.name == to)
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        for id in targets {
+            if let Err(e) = self.backend.send_message(&id, message).await {
+                tracing::warn!(error = %e, teammate = %id, "failed to deliver message to teammate");
+            }
+        }
+    }
+
+    /// Tear down the whole team: kill every teammate and forget seen teams so a
+    /// later `team_created` re-spawns.
+    async fn delete_team(&mut self) {
+        let ids: Vec<String> = self
+            .backend
+            .list_teammates()
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        for id in ids {
+            if let Err(e) = self.backend.kill_teammate(&id).await {
+                tracing::warn!(error = %e, teammate = %id, "failed to kill teammate");
+            }
+        }
+        self.seen_teams.clear();
     }
 }
 
@@ -151,6 +215,45 @@ mod tests {
         let second = coord.process_tool_result(payload).await.unwrap();
         assert_eq!(second.as_deref(), Some("alpha"));
         assert_eq!(coord.teammate_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn team_deleted_kills_teammates_and_forgets_team() {
+        let mut coord = TeamCoordinator::new();
+        let created = r#"{"action":"team_created","team_name":"alpha","description":""}"#;
+        coord.process_tool_result(created).await.unwrap();
+        assert_eq!(coord.teammate_count(), 1);
+
+        let deleted = r#"{"action":"team_deleted","team_name":"alpha"}"#;
+        coord.process_tool_result(deleted).await.unwrap();
+        assert_eq!(coord.teammate_count(), 0);
+
+        // The team is forgotten, so re-creating it spawns again.
+        coord.process_tool_result(created).await.unwrap();
+        assert_eq!(coord.teammate_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn message_sent_to_known_teammate_is_delivered() {
+        let mut coord = TeamCoordinator::new();
+        coord
+            .process_tool_result(
+                r#"{"action":"team_created","team_name":"alpha","description":""}"#,
+            )
+            .await
+            .unwrap();
+        // The default teammate is named "alpha-lead"; routing to it must not error.
+        let msg = r#"{"action":"message_sent","to":"alpha-lead","message":"do the thing","is_broadcast":false}"#;
+        let result = coord.process_tool_result(msg).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(coord.teammate_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn message_sent_to_unknown_teammate_is_noop() {
+        let mut coord = TeamCoordinator::new();
+        let msg = r#"{"action":"message_sent","to":"ghost","message":"hi","is_broadcast":false}"#;
+        assert!(coord.process_tool_result(msg).await.unwrap().is_none());
     }
 
     #[tokio::test]

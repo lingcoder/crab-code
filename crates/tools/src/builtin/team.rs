@@ -151,8 +151,12 @@ impl Tool for TeamDeleteTool {
                 "team_name": team_name,
             });
 
+            let text = serde_json::to_string(&action).unwrap_or_default();
             Ok(ToolOutput::with_content(
-                vec![ToolOutputContent::Json { value: action }],
+                vec![
+                    ToolOutputContent::Json { value: action },
+                    ToolOutputContent::Text { text },
+                ],
                 false,
             ))
         })
@@ -249,8 +253,14 @@ impl Tool for SendMessageTool {
                 "from_session": session_id,
             });
 
+            // Emit a Text block too — the coordinator scans tool-result text
+            // for the marker (ToolOutput::text() drops Json blocks).
+            let text = serde_json::to_string(&action).unwrap_or_default();
             Ok(ToolOutput::with_content(
-                vec![ToolOutputContent::Json { value: action }],
+                vec![
+                    ToolOutputContent::Json { value: action },
+                    ToolOutputContent::Text { text },
+                ],
                 false,
             ))
         })
