@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crab_core::permission::PermissionDecision;
-use crab_core::tool::{ToolContext, ToolOutput};
+use crab_core::tool::{ToolContext, ToolOutput, ToolSource};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -158,6 +158,9 @@ pub trait PermissionHandler: Send + Sync {
 pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
     permission_handler: Option<Arc<dyn PermissionHandler>>,
+    /// When no handler is installed, `AskUser` decisions fail closed (reject)
+    /// unless this is set — see [`Self::set_allow_unattended`].
+    allow_unattended: bool,
 }
 
 impl ToolExecutor {
@@ -166,12 +169,33 @@ impl ToolExecutor {
         Self {
             registry,
             permission_handler: None,
+            allow_unattended: false,
         }
     }
 
     /// Set a permission handler for `AskUser` decisions.
     pub fn set_permission_handler(&mut self, handler: Arc<dyn PermissionHandler>) {
         self.permission_handler = Some(handler);
+    }
+
+    /// Opt into auto-approving `AskUser` decisions when no handler is installed.
+    ///
+    /// Off by default: without a handler, a tool that needs confirmation is
+    /// rejected (fail-closed). Only non-interactive contexts with an
+    /// out-of-band trust boundary (e.g. an editor-mediated session) should
+    /// enable this.
+    pub fn set_allow_unattended(&mut self, allow: bool) {
+        self.allow_unattended = allow;
+    }
+
+    /// Resolve an `AskUser` decision when no handler is installed: `None` means
+    /// proceed (unattended auto-approve), `Some(reject)` means fail closed.
+    fn unattended_outcome(&self) -> Option<ToolOutput> {
+        if self.allow_unattended {
+            None
+        } else {
+            Some(ToolOutput::error(reject_message_with_feedback(None)))
+        }
     }
 
     /// Returns a reference to the underlying registry.
@@ -228,9 +252,59 @@ impl ToolExecutor {
                             result.feedback.as_deref(),
                         )))
                     }
+                } else if let Some(rejection) = self.unattended_outcome() {
+                    // No handler and not opted into unattended — fail closed.
+                    Ok(rejection)
                 } else {
-                    // No handler installed — auto-allow (development fallback)
                     tool.execute(input, ctx).await
+                }
+            }
+        }
+    }
+
+    /// Execute the Bash tool with streaming output, gated by the full
+    /// permission check.
+    ///
+    /// The live orchestrator must call this rather than `BashTool`'s inherent
+    /// `execute_streaming` so Bash is subject to the same deny-list, whitelist,
+    /// dangerous-command, and mode rules as every other tool, and prompts via
+    /// the installed handler (failing closed when none is present).
+    pub async fn execute_bash_streaming(
+        &self,
+        input: serde_json::Value,
+        ctx: &ToolContext,
+        streaming: StreamingOutput,
+    ) -> crab_core::Result<ToolOutput> {
+        use crate::builtin::bash::{BASH_TOOL_NAME, BashTool};
+
+        let decision = check_permission(
+            &ctx.permission_policy,
+            BASH_TOOL_NAME,
+            &ToolSource::BuiltIn,
+            false,
+            &input,
+            &ctx.working_dir,
+        );
+
+        match decision {
+            PermissionDecision::Allow => BashTool.execute_streaming(input, ctx, streaming).await,
+            PermissionDecision::Deny(reason) => Ok(ToolOutput::error(reason)),
+            PermissionDecision::AskUser(prompt) => {
+                if let Some(handler) = &self.permission_handler {
+                    let result = handler
+                        .ask_permission(BASH_TOOL_NAME, &prompt, &input)
+                        .await;
+                    if result.allowed {
+                        BashTool.execute_streaming(input, ctx, streaming).await
+                    } else {
+                        Ok(ToolOutput::error(reject_message_with_feedback(
+                            result.feedback.as_deref(),
+                        )))
+                    }
+                } else if let Some(rejection) = self.unattended_outcome() {
+                    Ok(rejection)
+                } else {
+                    BashTool.execute_streaming(input, ctx, streaming).await
                 }
             }
         }
@@ -258,6 +332,7 @@ impl ToolExecutor {
         let tool_name = tool_name.to_string();
         let ctx = ctx.clone();
         let permission_handler = self.permission_handler.clone();
+        let allow_unattended = self.allow_unattended;
 
         let handle = tokio::spawn(async move {
             let tool = registry
@@ -285,6 +360,9 @@ impl ToolExecutor {
                                 result.feedback.as_deref(),
                             )));
                         }
+                    } else if !allow_unattended {
+                        // No handler and not opted into unattended — fail closed.
+                        return Ok(ToolOutput::error(reject_message_with_feedback(None)));
                     }
                 }
             }
@@ -709,6 +787,79 @@ mod tests {
         let (_rx, handle) = executor.execute_streaming("mutating", serde_json::json!({}), &ctx);
         let output = handle.await.unwrap().unwrap();
 
+        assert!(output.is_error);
+        assert_eq!(output.text(), REJECT_MESSAGE);
+    }
+
+    // ─── Fail-closed (no handler) tests ───
+
+    #[tokio::test]
+    async fn no_handler_fails_closed_on_ask_user() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(MutatingTool));
+        let executor = ToolExecutor::new(Arc::new(reg));
+        // No handler + Default mode -> AskUser -> reject (fail closed).
+        let ctx = make_ctx(PermissionMode::Default);
+        let output = executor
+            .execute("mutating", serde_json::json!({}), &ctx)
+            .await
+            .unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.text(), REJECT_MESSAGE);
+    }
+
+    #[tokio::test]
+    async fn allow_unattended_runs_without_handler() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(MutatingTool));
+        let mut executor = ToolExecutor::new(Arc::new(reg));
+        executor.set_allow_unattended(true);
+        let ctx = make_ctx(PermissionMode::Default);
+        let output = executor
+            .execute("mutating", serde_json::json!({}), &ctx)
+            .await
+            .unwrap();
+        assert!(!output.is_error);
+        assert_eq!(output.text(), "mutated");
+    }
+
+    #[tokio::test]
+    async fn execute_streaming_no_handler_fails_closed() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(MutatingTool));
+        let executor = ToolExecutor::new(Arc::new(reg));
+        let ctx = make_ctx(PermissionMode::Default);
+        let (_rx, handle) = executor.execute_streaming("mutating", serde_json::json!({}), &ctx);
+        let output = handle.await.unwrap().unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.text(), REJECT_MESSAGE);
+    }
+
+    // ─── Gated Bash streaming tests ───
+
+    #[tokio::test]
+    async fn execute_bash_streaming_denied_returns_error() {
+        let executor = make_executor();
+        let mut ctx = make_ctx(PermissionMode::Default);
+        ctx.permission_policy.denied_tools = vec![crate::builtin::bash::BASH_TOOL_NAME.into()];
+        let (streaming, _rx) = StreamingOutput::channel(8);
+        let output = executor
+            .execute_bash_streaming(serde_json::json!({"command": "echo hi"}), &ctx, streaming)
+            .await
+            .unwrap();
+        assert!(output.is_error);
+        assert!(output.text().contains("denied"));
+    }
+
+    #[tokio::test]
+    async fn execute_bash_streaming_no_handler_fails_closed() {
+        let executor = make_executor();
+        let ctx = make_ctx(PermissionMode::Default);
+        let (streaming, _rx) = StreamingOutput::channel(8);
+        let output = executor
+            .execute_bash_streaming(serde_json::json!({"command": "echo hi"}), &ctx, streaming)
+            .await
+            .unwrap();
         assert!(output.is_error);
         assert_eq!(output.text(), REJECT_MESSAGE);
     }

@@ -249,6 +249,12 @@ async fn handle_prompt(
     let registry = create_default_registry();
     let mut session = AgentSession::new(session_config, Arc::clone(&state.backend), registry);
 
+    // ACP has no interactive permission prompt yet; the editor/ACP client is the
+    // trust boundary. Opt into unattended auto-approval explicitly so the
+    // session is usable, rather than relying on a silent fail-open default. A
+    // real ACP permission relay to the client would replace this.
+    session.executor.set_allow_unattended(true);
+
     let event_rx = take_event_rx(&mut session);
     inject_cancel(&mut session, cancel.clone());
 

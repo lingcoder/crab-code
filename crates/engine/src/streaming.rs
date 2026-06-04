@@ -11,8 +11,10 @@ use std::sync::Arc;
 
 use crab_api::streaming::CompletedToolBlock;
 use crab_core::event::Event;
+use crab_core::permission::PermissionDecision;
 use crab_core::tool::{ToolContext, ToolOutput};
 use crab_tools::executor::apply_result_budget;
+use crab_tools::permission::check_permission;
 use crab_tools::registry::ToolRegistry;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -67,6 +69,22 @@ impl StreamingToolExecutor {
             return false;
         };
         if !tool.is_concurrency_safe(&block.input) {
+            return false;
+        }
+
+        // Gate the eager path with the same policy as the batch executor. Only
+        // an outright Allow streams inline; Deny/AskUser fall through to the
+        // post-stream batch (return false), which has the permission handler
+        // wired and renders the canonical deny/prompt outcome.
+        let decision = check_permission(
+            &ctx.permission_policy,
+            &block.name,
+            &tool.source(),
+            tool.is_read_only(),
+            &block.input,
+            &ctx.working_dir,
+        );
+        if !matches!(decision, PermissionDecision::Allow) {
             return false;
         }
 
@@ -208,6 +226,11 @@ mod tests {
         fn is_concurrency_safe(&self, _input: &Value) -> bool {
             self.concurrency_safe
         }
+        fn is_read_only(&self) -> bool {
+            // Concurrency-safe test tools model read-only tools, which the
+            // permission gate always allows to stream inline.
+            self.concurrency_safe
+        }
     }
 
     fn make_registry(tool: TestTool) -> Arc<ToolRegistry> {
@@ -315,6 +338,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_if_eligible_skips_denied_tool() {
+        let registry = make_registry(TestTool {
+            name: "reader",
+            concurrency_safe: true,
+            call_count: Arc::new(AtomicUsize::new(0)),
+        });
+        let (tx, _rx) = mpsc::channel::<Event>(8);
+        let mut ste = StreamingToolExecutor::new(CancellationToken::new());
+        let mut ctx = test_ctx();
+        ctx.permission_policy.denied_tools = vec!["reader".into()];
+
+        // Even though the tool is concurrency-safe, a deny rule must keep it off
+        // the eager inline path (it falls through to the gated batch executor).
+        let spawned =
+            ste.spawn_if_eligible(&block("tu_1", "reader"), Arc::clone(&registry), ctx, tx);
+        assert!(!spawned, "denied read-only tool must not stream inline");
+        assert!(ste.is_empty());
+    }
+
+    #[tokio::test]
     async fn cancellation_aborts_in_flight_task() {
         /// A tool that blocks until its inner cancellation token fires.
         struct SlowTool;
@@ -341,6 +384,9 @@ mod tests {
                 })
             }
             fn is_concurrency_safe(&self, _input: &Value) -> bool {
+                true
+            }
+            fn is_read_only(&self) -> bool {
                 true
             }
         }

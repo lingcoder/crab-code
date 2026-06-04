@@ -237,18 +237,11 @@ pub async fn execute_tool_calls(
             })
             .await;
 
-        // Streaming execution for Bash
+        // Streaming execution for Bash — routed through the executor so the
+        // permission gate (deny-list, dangerous-command, mode, handler prompt)
+        // applies. Delta forwarding stays here; the gated call drives the tool.
         let result = if name == BASH_TOOL_NAME {
             let (streaming, mut delta_rx) = StreamingOutput::channel(64);
-            let bash_tool = crab_tools::builtin::bash::BashTool;
-            let ctx_clone = ctx.clone();
-            let input_clone = input.clone();
-
-            let exec_handle = tokio::spawn(async move {
-                bash_tool
-                    .execute_streaming(input_clone, &ctx_clone, streaming)
-                    .await
-            });
 
             let event_tx_delta = event_tx.clone();
             let delta_id = id.clone();
@@ -263,9 +256,9 @@ pub async fn execute_tool_calls(
                 }
             });
 
-            let result = exec_handle
-                .await
-                .unwrap_or_else(|e| Err(crab_core::Error::Other(format!("join error: {e}"))));
+            let result = executor
+                .execute_bash_streaming(input.clone(), ctx, streaming)
+                .await;
             let _ = delta_fwd.await;
             result
         } else {
@@ -411,6 +404,66 @@ mod tests {
         assert!(write_batch.is_cancelled());
         // Query-level cancel is NOT affected
         assert!(!query_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn orchestrator_gates_denied_bash() {
+        use crab_core::permission::{PermissionMode, PermissionPolicy};
+        let executor = ToolExecutor::new(std::sync::Arc::new(
+            crab_tools::builtin::create_default_registry(),
+        ));
+        let ctx = ToolContext {
+            working_dir: std::env::current_dir().unwrap(),
+            permission_mode: PermissionMode::Default,
+            session_id: String::new(),
+            cancellation_token: CancellationToken::new(),
+            permission_policy: PermissionPolicy {
+                mode: PermissionMode::Default,
+                allowed_tools: vec![],
+                denied_tools: vec![BASH_TOOL_NAME.into()],
+            },
+            ext: crab_core::tool::ToolContextExt::default(),
+        };
+        let (event_tx, _event_rx) = mpsc::channel(64);
+        let cancel = CancellationToken::new();
+
+        // A sentinel file the command would create if it actually ran.
+        let sentinel =
+            std::env::temp_dir().join(format!("crab_bash_gate_{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&sentinel);
+        let cmd = format!("echo gated > '{}'", sentinel.display());
+
+        let assistant_msg = Message::new(
+            Role::Assistant,
+            vec![ContentBlock::tool_use(
+                "tu_1",
+                BASH_TOOL_NAME,
+                serde_json::json!({ "command": cmd }),
+            )],
+        );
+
+        let results = execute_tool_calls(
+            &assistant_msg,
+            &executor,
+            &ctx,
+            &event_tx,
+            &cancel,
+            None,
+            None,
+            false,
+            &HashSet::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        let output = results[0].1.as_ref().unwrap();
+        assert!(output.is_error, "denied bash must report an error");
+        assert!(
+            !sentinel.exists(),
+            "denied bash must not execute the command"
+        );
+        let _ = std::fs::remove_file(&sentinel);
     }
 
     #[tokio::test]
