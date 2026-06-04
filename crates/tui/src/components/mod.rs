@@ -22,7 +22,6 @@ pub mod markdown;
 pub mod mcp_browser;
 pub mod memory_browser;
 pub mod message_actions;
-pub mod message_list;
 pub mod message_pill;
 pub mod message_selector;
 pub mod model_picker;

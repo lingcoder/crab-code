@@ -349,14 +349,35 @@ impl App {
             }
             drain_count += 1;
         }
+        // Don't split a read-only run across the drain boundary: if the run
+        // continues into the viewport, back up to its start so its collapsed
+        // "Read N files" summary isn't frozen half-formed into scrollback (it
+        // stays in the viewport until the whole run finalizes).
+        let is_read_only_run_msg = |m: &ChatMessage| {
+            matches!(
+                m,
+                ChatMessage::ToolUse {
+                    is_read_only: true,
+                    ..
+                } | ChatMessage::ToolResult {
+                    is_read_only: true,
+                    ..
+                }
+            )
+        };
+        if drain_count < total && is_read_only_run_msg(&self.messages[drain_count]) {
+            while drain_count > 0 && is_read_only_run_msg(&self.messages[drain_count - 1]) {
+                drain_count -= 1;
+            }
+        }
         if drain_count == 0 {
             return;
         }
         // Preserve drained messages so we can re-render them at a different
-        // width when the terminal is resized.
+        // width when the terminal is resized. Group the same way the viewport
+        // does so a run's summary looks identical frozen and live.
         let drained: Vec<ChatMessage> = self.messages.drain(..drain_count).collect();
-        for msg in &drained {
-            let cell = crate::history::cell_from_chat_message(msg);
+        for cell in crate::history::group_messages(&drained) {
             self.pending_history.extend(cell.display_lines(width));
         }
         self.finalized_history.extend(drained);
@@ -384,8 +405,7 @@ impl App {
             self.last_scrollback_width = Some(new_width);
             return;
         }
-        for msg in &self.finalized_history {
-            let cell = crate::history::cell_from_chat_message(msg);
+        for cell in crate::history::group_messages(&self.finalized_history) {
             self.pending_history.extend(cell.display_lines(new_width));
         }
         self.last_scrollback_width = Some(new_width);
