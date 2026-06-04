@@ -317,31 +317,34 @@ impl SessionHistory {
         Ok(())
     }
 
-    /// Find the most recent session (by file modification time).
+    /// Read the persisted name for a session, if any.
+    pub fn load_name(&self, session_id: &str) -> Option<String> {
+        self.read_session_file(session_id).ok().flatten()?.name
+    }
+
+    /// Find the most recent session to resume for `--continue`.
     ///
-    /// This is used by the `-c` / `--continue` flag to resume the latest
-    /// session. The `_dir` parameter is accepted for future use when sessions
-    /// store their working directory; currently it is unused and the most
-    /// recent session file (by mtime) is returned regardless.
-    pub fn find_latest_for_dir(&self, _dir: &std::path::Path) -> Option<String> {
-        if !self.base_dir.exists() {
-            return None;
-        }
-        let mut best: Option<(String, std::time::SystemTime)> = None;
-        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if let Some(id) = name.strip_suffix(".json")
-                    && let Ok(meta) = entry.metadata()
-                    && let Ok(mtime) = meta.modified()
-                    && best.as_ref().is_none_or(|(_, t)| mtime > *t)
-                {
-                    best = Some((id.to_string(), mtime));
-                }
-            }
-        }
-        best.map(|(id, _)| id)
+    /// Prefers the newest session whose recorded working directory matches
+    /// `dir` (so `--continue` stays within the current project). Falls back to
+    /// the globally newest session when none records a matching directory —
+    /// preserving behavior for legacy sessions that predate working-dir
+    /// tracking.
+    pub fn find_latest_for_dir(&self, dir: &std::path::Path) -> Option<String> {
+        // Sorted newest-first by list_sessions_with_metadata.
+        let metas = self.list_sessions_with_metadata().ok()?;
+        let canon_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+
+        let dir_match = metas.iter().find(|m| {
+            m.working_dir.as_ref().is_some_and(|wd| {
+                let canon_wd =
+                    std::fs::canonicalize(wd).unwrap_or_else(|_| std::path::PathBuf::from(wd));
+                canon_wd == canon_dir
+            })
+        });
+
+        dir_match
+            .or_else(|| metas.first())
+            .map(|m| m.session_id.clone())
     }
 
     // ── Search ─────────────────────────────────────────────────────
@@ -1257,10 +1260,50 @@ mod tests {
             .save("session-new", &[Message::user("new")])
             .unwrap();
 
+        // Neither records a working_dir → falls back to the global newest.
         let latest = history
             .find_latest_for_dir(std::path::Path::new("/tmp"))
             .unwrap();
         assert_eq!(latest, "session-new");
+    }
+
+    #[test]
+    fn find_latest_for_dir_prefers_matching_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        let proj_a = dir.path().join("a");
+        let proj_b = dir.path().join("b");
+        std::fs::create_dir_all(&proj_a).unwrap();
+        std::fs::create_dir_all(&proj_b).unwrap();
+
+        // Newest session is in project B; an older one is in project A.
+        history
+            .save_with_metadata(
+                "in-a",
+                None,
+                Some(proj_a.to_str().unwrap()),
+                &[Message::user("a")],
+                &[],
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        history
+            .save_with_metadata(
+                "in-b",
+                None,
+                Some(proj_b.to_str().unwrap()),
+                &[Message::user("b")],
+                &[],
+            )
+            .unwrap();
+
+        // --continue from project A resumes the A session, not the newer B one.
+        assert_eq!(history.find_latest_for_dir(&proj_a).unwrap(), "in-a");
+        assert_eq!(history.find_latest_for_dir(&proj_b).unwrap(), "in-b");
+        // An unrelated dir falls back to the global newest.
+        let other = dir.path().join("c");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(history.find_latest_for_dir(&other).unwrap(), "in-b");
     }
 
     // ── Session metadata tests ────────────────────────────────────

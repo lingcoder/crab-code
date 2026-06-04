@@ -699,12 +699,35 @@ impl AgentRuntime {
 
     // ── Session persistence ─────────────────────────────────────────────
 
-    pub fn save_session(&self, session_id: &str) {
-        if let Some(ref history) = self.session_history
-            && let Err(e) = history.save(session_id, self.conversation.messages())
-        {
+    /// Persist the current conversation, recording the working directory so
+    /// `--continue` can stay within this project. The on-disk session name is
+    /// preserved; grants are taken from `grants` when supplied, otherwise read
+    /// back from disk so auto-save does not wipe the user's "always allow" set.
+    fn persist_session(&self, session_id: &str, grants: Option<&[String]>) {
+        let Some(history) = self.session_history.as_ref() else {
+            return;
+        };
+        let working_dir = self.tool_ctx.working_dir.to_str();
+        let name = history.load_name(session_id);
+        // Preserve the user's "always allow" set: use the supplied grants, or
+        // read back the on-disk set when auto-saving without them in scope.
+        let grants = grants.map_or_else(
+            || history.load_grants(session_id).unwrap_or_default(),
+            <[String]>::to_vec,
+        );
+        if let Err(e) = history.save_with_metadata(
+            session_id,
+            name.as_deref(),
+            working_dir,
+            self.conversation.messages(),
+            &grants,
+        ) {
             tracing::warn!(error = %e, "session save failed");
         }
+    }
+
+    pub fn save_session(&self, session_id: &str) {
+        self.persist_session(session_id, None);
     }
 
     /// Save the current conversation along with session-level grants.
@@ -712,12 +735,7 @@ impl AgentRuntime {
     /// Used by the TUI runner so the user's "always allow" decisions
     /// survive `/exit` and resume.
     pub fn save_session_with_grants(&self, session_id: &str, grants: &[String]) {
-        if let Some(ref history) = self.session_history
-            && let Err(e) =
-                history.save_with_grants(session_id, self.conversation.messages(), grants)
-        {
-            tracing::warn!(error = %e, "session save (with grants) failed");
-        }
+        self.persist_session(session_id, Some(grants));
     }
 
     pub fn session_history(&self) -> Option<&SessionHistory> {
@@ -751,7 +769,7 @@ impl AgentRuntime {
         let Some(ref history) = self.session_history else {
             return false;
         };
-        let _ = history.save(session_id, self.conversation.messages());
+        self.persist_session(session_id, None);
         match history.load(target_id) {
             Ok(Some(messages)) => {
                 self.conversation = Conversation::new(
@@ -781,7 +799,7 @@ impl AgentRuntime {
         target_id: &str,
     ) -> Option<Vec<String>> {
         let history = self.session_history.as_ref()?;
-        let _ = history.save_with_grants(session_id, self.conversation.messages(), outgoing_grants);
+        self.persist_session(session_id, Some(outgoing_grants));
         match history.load_with_grants(target_id) {
             Ok(Some((messages, grants))) => {
                 self.conversation = Conversation::new(
