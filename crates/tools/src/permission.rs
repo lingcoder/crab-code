@@ -5,7 +5,9 @@ use crate::builtin::edit::EDIT_TOOL_NAME;
 use crate::builtin::notebook::NOTEBOOK_EDIT_TOOL_NAME;
 use crate::builtin::write::WRITE_TOOL_NAME;
 use crab_core::permission::auto_mode::{AutoModeClassifier, RiskLevel};
-use crab_core::permission::{PermissionDecision, PermissionMode, PermissionPolicy};
+use crab_core::permission::{
+    PathPermission, PathValidator, PermissionDecision, PermissionMode, PermissionPolicy,
+};
 use crab_core::tool::ToolSource;
 
 /// Dangerous command patterns detected in bash input.
@@ -97,9 +99,13 @@ fn decide(
         return PermissionDecision::Allow;
     }
 
-    // 4. Read-only tools — always allowed in any mode
+    // 4. Read-only tools — allowed, but a read that targets an explicit
+    //    file path is confined to the working directory: out-of-tree reads
+    //    prompt, and unsafe paths (UNC, traversal, shell expansion) prompt with
+    //    the reason. Reads without a file path (or in Dangerously mode, handled
+    //    above) stay allowed.
     if is_read_only {
-        return PermissionDecision::Allow;
+        return check_read_confinement(input, working_dir);
     }
 
     // 5. Auto mode — heuristic classifier decides Allow / AskUser / Deny.
@@ -205,6 +211,31 @@ fn check_builtin_permission(
         }
 
         PermissionMode::Dangerously | PermissionMode::Auto => unreachable!(),
+    }
+}
+
+/// Confine a read-only tool's explicit `file_path` to the working directory.
+///
+/// Reads without a `file_path` (directory-search tools, parameterless reads)
+/// stay allowed. A path inside the working tree is allowed; one outside, or one
+/// flagged as unsafe (UNC, traversal, NTFS ADS, shell expansion), prompts —
+/// which `DontAsk` then turns into a denial. `~` and relative paths are
+/// expanded against the working directory before the check.
+fn check_read_confinement(input: &serde_json::Value, working_dir: &Path) -> PermissionDecision {
+    let Some(path_str) = input.get("file_path").and_then(|v| v.as_str()) else {
+        return PermissionDecision::Allow;
+    };
+
+    let validator = PathValidator::new(working_dir);
+    let expanded = PathValidator::expand_permission_path(path_str, working_dir);
+    match validator.is_path_allowed(&expanded) {
+        PathPermission::Allowed => PermissionDecision::Allow,
+        PathPermission::OutsideWorkDir => PermissionDecision::AskUser(format!(
+            "Allow reading '{path_str}' outside the working directory?"
+        )),
+        PathPermission::Denied(reason) => {
+            PermissionDecision::AskUser(format!("Allow reading '{path_str}'? ({reason})"))
+        }
     }
 }
 
@@ -406,6 +437,112 @@ mod tests {
                 check_permission(&p, "read", &ToolSource::BuiltIn, true, &json!({}), cwd());
             assert_eq!(result, PermissionDecision::Allow, "mode={mode}");
         }
+    }
+
+    // ─── Read-path confinement tests ───
+
+    #[test]
+    fn read_without_file_path_is_allowed() {
+        // Directory-search / parameterless reads carry no file_path and stay
+        // allowed.
+        let p = policy(PermissionMode::Default);
+        let result = check_permission(
+            &p,
+            "Grep",
+            &ToolSource::BuiltIn,
+            true,
+            &json!({"pattern": "foo", "path": "src"}),
+            cwd(),
+        );
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn read_inside_working_dir_is_allowed() {
+        let dir = std::env::temp_dir().join("crab_read_conf_inside");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("inside.txt");
+        std::fs::write(&file, "data").unwrap();
+
+        let p = policy(PermissionMode::Default);
+        let result = check_permission(
+            &p,
+            "Read",
+            &ToolSource::BuiltIn,
+            true,
+            &json!({"file_path": file.to_str().unwrap()}),
+            &dir,
+        );
+        assert_eq!(result, PermissionDecision::Allow);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_outside_working_dir_prompts() {
+        let dir = std::env::temp_dir().join("crab_read_conf_outside");
+        let _ = std::fs::create_dir_all(&dir);
+        let outside = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/hosts"
+        };
+        let p = policy(PermissionMode::Default);
+        let result = check_permission(
+            &p,
+            "Read",
+            &ToolSource::BuiltIn,
+            true,
+            &json!({"file_path": outside}),
+            &dir,
+        );
+        assert!(
+            matches!(result, PermissionDecision::AskUser(_)),
+            "out-of-tree read should prompt, got {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dangerously_allows_out_of_tree_read() {
+        // Dangerously short-circuits before confinement.
+        let outside = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/hosts"
+        };
+        let p = policy(PermissionMode::Dangerously);
+        let result = check_permission(
+            &p,
+            "Read",
+            &ToolSource::BuiltIn,
+            true,
+            &json!({"file_path": outside}),
+            &std::env::temp_dir(),
+        );
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn dont_ask_denies_out_of_tree_read() {
+        // The confinement prompt becomes a denial under DontAsk.
+        let dir = std::env::temp_dir().join("crab_read_conf_dontask");
+        let _ = std::fs::create_dir_all(&dir);
+        let outside = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/hosts"
+        };
+        let p = policy(PermissionMode::DontAsk);
+        let result = check_permission(
+            &p,
+            "Read",
+            &ToolSource::BuiltIn,
+            true,
+            &json!({"file_path": outside}),
+            &dir,
+        );
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ─── Dangerously mode tests ───

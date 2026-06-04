@@ -174,7 +174,9 @@ async fn read_file_with_offset_and_limit() {
 async fn read_nonexistent_file_is_error() {
     let executor = make_executor();
     let tmp = tempfile::tempdir().unwrap();
-    let ctx = make_ctx(tmp.path(), PermissionMode::Default);
+    // Dangerously bypasses read confinement so this exercises the tool's
+    // not-found branch rather than the out-of-tree permission prompt.
+    let ctx = make_ctx(tmp.path(), PermissionMode::Dangerously);
 
     let input = serde_json::json!({ "file_path": "/nonexistent/path/file.txt" });
     let output = executor.execute(READ_TOOL_NAME, input, &ctx).await.unwrap();
@@ -186,7 +188,9 @@ async fn read_nonexistent_file_is_error() {
 async fn read_image_path_routes_to_image_branch() {
     let executor = make_executor();
     let tmp = tempfile::tempdir().unwrap();
-    let ctx = make_ctx(tmp.path(), PermissionMode::Default);
+    // Dangerously bypasses read confinement so this exercises the image branch
+    // rather than the out-of-tree permission prompt.
+    let ctx = make_ctx(tmp.path(), PermissionMode::Dangerously);
 
     // Nonexistent .png is now routed through the image branch and returns
     // a "file not found" error rather than a "Binary file" text message.
