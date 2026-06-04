@@ -28,14 +28,42 @@ const DANGEROUS_PATTERNS: &[&str] = &[
 
 /// Full permission check implementing the decision matrix.
 ///
-/// Matrix (mode x `tool_type` x `path_scope`):
-///
-/// | PermissionMode | read_only | write(project) | write(outside) | dangerous | mcp_external | agent_spawn | denied_list |
-/// |----------------|-----------|----------------|----------------|-----------|--------------|-------------|-------------|
-/// | Default        | Allow     | Prompt         | Prompt         | Prompt    | Prompt       | Prompt      | Deny        |
-/// | TrustProject   | Allow     | Allow          | Prompt         | Prompt    | Prompt       | Allow       | Deny        |
-/// | Dangerously    | Allow     | Allow          | Allow          | Allow     | Allow        | Allow       | Deny        |
+/// The deny-list always wins first; read-only and explicitly-allowed tools are
+/// always allowed. Beyond that, the decision per mode is:
+/// - `Default`: prompt for any non-read-only tool.
+/// - `AcceptEdits`: auto-allow in-project file edits; prompt for the rest.
+/// - `TrustProject`: auto-allow in-project operations; prompt outside / dangerous.
+/// - `DontAsk`: like `Default`, but every prompt becomes a deny (non-interactive).
+/// - `Dangerously`: allow everything except deny-listed tools.
+/// - `Plan`: deny every mutation (read-only only).
+/// - `Auto`: heuristic classifier — safe allow, risky prompt, dangerous deny.
 pub fn check_permission(
+    policy: &PermissionPolicy,
+    tool_name: &str,
+    source: &ToolSource,
+    is_read_only: bool,
+    input: &serde_json::Value,
+    working_dir: &Path,
+) -> PermissionDecision {
+    let decision = decide(policy, tool_name, source, is_read_only, input, working_dir);
+
+    // DontAsk never prompts: anything that would ask for confirmation is denied
+    // instead. Applied as a final pass so no early-return path can leak a
+    // prompt — only read-only and explicitly-allowed tools survive.
+    if policy.mode == PermissionMode::DontAsk
+        && let PermissionDecision::AskUser(_) = decision
+    {
+        return PermissionDecision::Deny(
+            "dont-ask mode: this operation requires confirmation, which is disabled".into(),
+        );
+    }
+
+    decision
+}
+
+/// Core decision logic shared by every mode. `check_permission` wraps this and
+/// applies the `DontAsk` ask->deny transform on top.
+fn decide(
     policy: &PermissionPolicy,
     tool_name: &str,
     source: &ToolSource,
@@ -97,17 +125,21 @@ pub fn check_permission(
 
     // 7. Source-specific checks
     match source {
-        // MCP external: Default and TrustProject both require Prompt (untrusted source)
-        ToolSource::McpExternal { .. } => {
-            PermissionDecision::AskUser(format!("Allow MCP tool '{tool_name}' to execute?"))
-        }
+        // MCP external: untrusted source. Plan blocks mutations outright; every
+        // other interactive mode prompts (and DontAsk's late transform turns
+        // that prompt into a denial).
+        ToolSource::McpExternal { .. } => match policy.mode {
+            PermissionMode::Plan => {
+                PermissionDecision::Deny("plan mode: mutations are not allowed".into())
+            }
+            _ => PermissionDecision::AskUser(format!("Allow MCP tool '{tool_name}' to execute?")),
+        },
 
-        // Agent spawn: TrustProject/AcceptEdits/DontAsk auto-allows, Default requires Prompt, Plan denies
+        // Agent spawn: TrustProject/AcceptEdits auto-allow, Default prompts,
+        // Plan denies. DontAsk prompts here too, so its late transform denies.
         ToolSource::AgentSpawn => match policy.mode {
-            PermissionMode::TrustProject
-            | PermissionMode::AcceptEdits
-            | PermissionMode::DontAsk => PermissionDecision::Allow,
-            PermissionMode::Default => {
+            PermissionMode::TrustProject | PermissionMode::AcceptEdits => PermissionDecision::Allow,
+            PermissionMode::Default | PermissionMode::DontAsk => {
                 PermissionDecision::AskUser(format!("Allow agent tool '{tool_name}' to execute?"))
             }
             PermissionMode::Plan => {
@@ -162,8 +194,9 @@ fn check_builtin_permission(
         }
 
         PermissionMode::DontAsk => {
-            // DontAsk: auto-approve everything (same as Dangerously but via permission-mode flag)
-            PermissionDecision::Allow
+            // DontAsk never prompts: mirror Default here and let the caller's
+            // late ask->deny transform turn the prompt into a denial.
+            PermissionDecision::AskUser(format!("Allow '{tool_name}' to execute?"))
         }
 
         PermissionMode::Plan => {
@@ -759,5 +792,89 @@ mod tests {
         );
         // bash does not match mcp__*, should be allowed (TrustProject, in-project, safe command)
         assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    // ─── DontAsk (non-interactive strict) tests ───
+
+    #[test]
+    fn dont_ask_allows_read_only() {
+        let p = policy(PermissionMode::DontAsk);
+        let result = check_permission(&p, "read", &ToolSource::BuiltIn, true, &json!({}), cwd());
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn dont_ask_allows_explicitly_allowed_safe_tool() {
+        let p = policy_with_allowed(PermissionMode::DontAsk, vec!["write".into()]);
+        let result = check_permission(
+            &p,
+            "write",
+            &ToolSource::BuiltIn,
+            false,
+            &json!({"file_path": "/tmp/project/foo.txt"}),
+            cwd(),
+        );
+        assert_eq!(result, PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn dont_ask_denies_write() {
+        let p = policy(PermissionMode::DontAsk);
+        let result = check_permission(&p, "write", &ToolSource::BuiltIn, false, &json!({}), cwd());
+        assert!(
+            matches!(result, PermissionDecision::Deny(_)),
+            "DontAsk must deny a write that would otherwise prompt, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn dont_ask_denies_mcp_external() {
+        let p = policy(PermissionMode::DontAsk);
+        let result = check_permission(
+            &p,
+            "mcp__server__tool",
+            &ToolSource::McpExternal {
+                server_name: "server".into(),
+            },
+            false,
+            &json!({}),
+            cwd(),
+        );
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    #[test]
+    fn dont_ask_denies_agent_spawn() {
+        let p = policy(PermissionMode::DontAsk);
+        let result = check_permission(
+            &p,
+            "agent",
+            &ToolSource::AgentSpawn,
+            false,
+            &json!({}),
+            cwd(),
+        );
+        assert!(matches!(result, PermissionDecision::Deny(_)));
+    }
+
+    // ─── Plan mode MCP tests ───
+
+    #[test]
+    fn plan_denies_mcp_external() {
+        let p = policy(PermissionMode::Plan);
+        let result = check_permission(
+            &p,
+            "mcp__server__tool",
+            &ToolSource::McpExternal {
+                server_name: "server".into(),
+            },
+            false,
+            &json!({}),
+            cwd(),
+        );
+        assert!(
+            matches!(result, PermissionDecision::Deny(_)),
+            "Plan mode must block mutating MCP tools, got {result:?}"
+        );
     }
 }

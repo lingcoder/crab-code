@@ -825,7 +825,7 @@ pub enum PermissionMode {
     AcceptEdits,
     /// Trust in-project file operations; out-of-project and dangerous still prompt.
     TrustProject,
-    /// Auto-approve everything without prompting the user.
+    /// Never prompt: anything that would require confirmation is denied.
     DontAsk,
     /// Auto-approve everything (except `denied_tools`). Use with caution.
     Dangerously,

@@ -42,7 +42,7 @@ impl PermissionsBrowserOverlay {
             PermissionMode::AcceptEdits => "Auto-allow file edits; still ask for shell/network",
             PermissionMode::Plan => "Plan-only: block tool execution entirely",
             PermissionMode::Dangerously => "Allow everything (DANGEROUS — audit log only)",
-            PermissionMode::DontAsk => "Grant once per tool name for this session",
+            PermissionMode::DontAsk => "Never prompt; deny anything needing confirmation",
             PermissionMode::TrustProject => "Trust the project: allow in-project operations",
             PermissionMode::Auto => "Auto: classifier allows safe, prompts risky, blocks dangerous",
         }

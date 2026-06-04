@@ -12,7 +12,8 @@ pub enum PermissionMode {
     AcceptEdits,
     /// Trust in-project file operations; out-of-project and dangerous still prompt.
     TrustProject,
-    /// Auto-approve everything without prompting the user.
+    /// Never prompt: anything that would require confirmation is denied.
+    /// Only read-only and explicitly-allowed tools run.
     DontAsk,
     /// Auto-approve everything (except `denied_tools`). Use with caution.
     Dangerously,
@@ -24,13 +25,16 @@ pub enum PermissionMode {
 
 impl PermissionMode {
     fn restrictiveness(self) -> u8 {
+        // DontAsk denies anything that would prompt, so it is strict — second
+        // only to Plan. A sub-agent must never be granted a more permissive
+        // mode than a DontAsk parent.
         match self {
             Self::Plan => 0,
-            Self::Default => 1,
-            Self::Auto => 2,
-            Self::AcceptEdits => 3,
-            Self::TrustProject => 4,
-            Self::DontAsk => 5,
+            Self::DontAsk => 1,
+            Self::Default => 2,
+            Self::Auto => 3,
+            Self::AcceptEdits => 4,
+            Self::TrustProject => 5,
             Self::Dangerously => 6,
         }
     }
@@ -180,6 +184,30 @@ mod tests {
                 PermissionMode::Plan
             );
         }
+    }
+
+    #[test]
+    fn restrict_to_dont_ask_caps_more_permissive_children() {
+        // DontAsk is strict: a child set to a more permissive mode must be
+        // capped back to DontAsk.
+        for child in [
+            PermissionMode::Default,
+            PermissionMode::Auto,
+            PermissionMode::AcceptEdits,
+            PermissionMode::TrustProject,
+            PermissionMode::Dangerously,
+        ] {
+            assert_eq!(
+                child.restrict_to(PermissionMode::DontAsk),
+                PermissionMode::DontAsk,
+                "child {child} under a DontAsk ceiling"
+            );
+        }
+        // Plan is stricter still and is never loosened to DontAsk.
+        assert_eq!(
+            PermissionMode::Plan.restrict_to(PermissionMode::DontAsk),
+            PermissionMode::Plan
+        );
     }
 
     #[test]
