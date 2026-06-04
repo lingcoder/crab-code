@@ -372,6 +372,22 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         Some(sessions_dir.clone())
     };
 
+    // Best-effort retention: prune session files older than the configured
+    // window so the sessions directory does not grow unbounded. Skipped when
+    // persistence is off or retention is unset/zero.
+    if let Some(ref dir) = effective_sessions_dir
+        && let Some(days) = settings.cleanup_period_days
+        && days > 0
+    {
+        match crab_session::SessionHistory::new(dir.clone()).cleanup_older_than(days) {
+            Ok(n) if n > 0 => {
+                tracing::info!("pruned {n} session file(s) older than {days} days");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "session cleanup failed"),
+        }
+    }
+
     // Resolve resume ID: explicit --resume > -c (continue latest) > None
     let effective_resume_id = if resume_session_id.is_some() {
         resume_session_id

@@ -322,6 +322,37 @@ impl SessionHistory {
         self.read_session_file(session_id).ok().flatten()?.name
     }
 
+    /// Delete session files (`.json` / `.jsonl` and quarantined `.corrupt-*`)
+    /// whose modification time is older than `days`, bounding the growth of the
+    /// sessions directory. `days == 0` is a no-op (retention disabled). Returns
+    /// the number of files removed.
+    pub fn cleanup_older_than(&self, days: u32) -> crab_core::Result<u32> {
+        if days == 0 || !self.base_dir.exists() {
+            return Ok(0);
+        }
+        let Some(cutoff) = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(u64::from(days) * 86_400))
+        else {
+            return Ok(0);
+        };
+
+        let mut removed = 0u32;
+        for entry in std::fs::read_dir(&self.base_dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && modified < cutoff
+                && std::fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Find the most recent session to resume for `--continue`.
     ///
     /// Prefers the newest session whose recorded working directory matches
@@ -1582,6 +1613,38 @@ mod tests {
         history.append_jsonl("s1", &Message::user("x")).unwrap();
         history.truncate_jsonl("s1").unwrap();
         assert!(history.load_jsonl("s1").unwrap().is_none());
+    }
+
+    #[test]
+    fn cleanup_older_than_removes_stale_and_keeps_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.save("recent", &[Message::user("new")]).unwrap();
+
+        // Backdate one session file well past the retention window.
+        let old_path = dir.path().join("old.json");
+        std::fs::write(&old_path, r#"{"session_id":"old","messages":[]}"#).unwrap();
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 86_400);
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old_path)
+            .unwrap();
+        f.set_modified(stale).unwrap();
+        drop(f);
+
+        let removed = history.cleanup_older_than(30).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!old_path.exists());
+        assert!(dir.path().join("recent.json").exists());
+    }
+
+    #[test]
+    fn cleanup_older_than_zero_is_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.save("s1", &[Message::user("hi")]).unwrap();
+        assert_eq!(history.cleanup_older_than(0).unwrap(), 0);
+        assert!(dir.path().join("s1.json").exists());
     }
 
     #[test]
