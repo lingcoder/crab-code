@@ -60,15 +60,22 @@ pub enum PermissionKind {
 }
 
 impl PermissionKind {
-    /// Canonical tool name for this kind (used for session-level grants).
-    pub fn tool_name(&self) -> &str {
+    /// Scoped key for a session-level "always allow" grant.
+    ///
+    /// The scope is deliberately narrow so granting one command/domain does not
+    /// silently authorize unrelated ones: Bash is scoped to the program name
+    /// (or the exact command line when it is compound), `WebFetch` to the
+    /// domain, and everything else to its canonical tool name. The tool-name
+    /// prefixes (`Bash`, `Edit`, …) match the capitalized names carried by
+    /// incoming permission requests so a stored grant actually matches.
+    pub fn grant_key(&self) -> String {
         match self {
-            Self::Bash { .. } => "bash",
-            Self::FileEdit { .. } => "edit",
-            Self::FileWrite { .. } => "write",
-            Self::WebFetch { .. } => "web_fetch",
-            Self::NotebookEdit { .. } => "notebook_edit",
-            Self::Generic { tool_name, .. } => tool_name,
+            Self::Bash { command, .. } => format!("Bash:{}", bash_grant_scope(command)),
+            Self::FileEdit { .. } => "Edit".to_string(),
+            Self::FileWrite { .. } => "Write".to_string(),
+            Self::WebFetch { url } => format!("WebFetch:{}", extract_domain(url)),
+            Self::NotebookEdit { .. } => "NotebookEdit".to_string(),
+            Self::Generic { tool_name, .. } => tool_name.clone(),
         }
     }
 
@@ -1035,6 +1042,35 @@ fn classify_bash_risk(command: &str) -> (String, Color) {
     }
 }
 
+/// Scope a bash command for a session grant.
+///
+/// Compound commands (containing `&&`, `||`, `;`, or `|`) get an exact-match
+/// scope so a grant cannot broadly authorize unrelated chained subcommands. A
+/// single command is scoped to its program name (the first token that is not a
+/// leading `VAR=value` environment assignment).
+fn bash_grant_scope(command: &str) -> String {
+    let trimmed = command.trim();
+    if trimmed.contains("&&")
+        || trimmed.contains("||")
+        || trimmed.contains(';')
+        || trimmed.contains('|')
+    {
+        return trimmed.to_string();
+    }
+    for token in trimmed.split_whitespace() {
+        let is_env_assignment = token.contains('=')
+            && !token.contains('/')
+            && token.split('=').next().is_some_and(|n| {
+                !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        if is_env_assignment {
+            continue;
+        }
+        return token.to_string();
+    }
+    trimmed.to_string()
+}
+
 /// Extract domain from a URL for display.
 fn extract_domain(url: &str) -> String {
     url.strip_prefix("https://")
@@ -1362,6 +1398,58 @@ mod tests {
         assert_eq!(extract_domain("https://example.com/path"), "example.com");
         assert_eq!(extract_domain("http://api.test.io/v1/data"), "api.test.io");
         assert_eq!(extract_domain("no-scheme"), "no-scheme");
+    }
+
+    #[test]
+    fn grant_key_matches_capitalized_incoming_name() {
+        // The card is built from the capitalized registry name carried by a
+        // real permission event; the grant key must start with that same name
+        // (the old lowercase tool_name() never matched and made grants a no-op).
+        let input = serde_json::json!({"command": "git status"});
+        let card = PermissionCard::from_event("Bash", "git status", "r".into(), &input);
+        assert_eq!(card.kind.grant_key(), "Bash:git");
+    }
+
+    #[test]
+    fn grant_key_scopes_bash_by_program_not_all_bash() {
+        let git = PermissionCard::from_event(
+            "Bash",
+            "git status",
+            "r".into(),
+            &serde_json::json!({"command": "git status"}),
+        );
+        let rm = PermissionCard::from_event(
+            "Bash",
+            "rm -rf x",
+            "r".into(),
+            &serde_json::json!({"command": "rm -rf x"}),
+        );
+        // Granting `git status` must not authorize `rm -rf x`.
+        assert_ne!(git.kind.grant_key(), rm.kind.grant_key());
+        assert_eq!(git.kind.grant_key(), "Bash:git");
+    }
+
+    #[test]
+    fn grant_key_compound_bash_is_exact_match() {
+        // A compound command is scoped to its exact text so it cannot broadly
+        // authorize unrelated chained subcommands.
+        assert_eq!(
+            bash_grant_scope("echo ok && rm -rf x"),
+            "echo ok && rm -rf x"
+        );
+        assert_eq!(bash_grant_scope("FOO=bar git push"), "git");
+        assert_eq!(bash_grant_scope("npm run build"), "npm");
+    }
+
+    #[test]
+    fn grant_key_webfetch_scoped_to_domain() {
+        let card = PermissionCard::from_event(
+            "WebFetch",
+            "https://example.com/a",
+            "r".into(),
+            &serde_json::json!({"url": "https://example.com/a"}),
+        );
+        assert_eq!(card.kind.grant_key(), "WebFetch:example.com");
     }
 
     #[test]

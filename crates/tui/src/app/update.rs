@@ -854,12 +854,10 @@ impl App {
             }
         }
 
-        let current_info = self.approval_queue.current().map(|pa| {
-            (
-                pa.card.kind.tool_name().to_string(),
-                pa.card.rejection_summary(),
-            )
-        });
+        let current_info = self
+            .approval_queue
+            .current()
+            .map(|pa| (pa.card.kind.grant_key(), pa.card.rejection_summary()));
 
         if let Some((request_id, response)) = self.approval_queue.handle_key(key.code) {
             let allowed = response.is_allow();
@@ -1318,24 +1316,26 @@ impl App {
                 summary,
                 tool_input,
             } => {
-                if self.session_grants.contains(&tool_name) {
+                // Build the card up front so the grant check uses the same
+                // scoped key (`Bash:git`, `WebFetch:host`, …) that AllowAlways
+                // stored — the incoming event's raw tool name is not enough.
+                let card =
+                    PermissionCard::from_event(&tool_name, &summary, request_id.clone(), &tool_input);
+                if self.session_grants.contains(&card.kind.grant_key()) {
                     AppAction::PermissionResponse {
                         request_id,
                         allowed: true,
                         feedback: None,
                     }
+                } else if self.is_input_suppressing() {
+                    // Hold the card back while the user is typing so a stray
+                    // key cannot answer a prompt they have not read; a Tick
+                    // promotes it once the window elapses.
+                    self.pending_suppressed.push(card);
+                    AppAction::None
                 } else {
-                    let card =
-                        PermissionCard::from_event(&tool_name, &summary, request_id, &tool_input);
-                    if self.is_input_suppressing() {
-                        // Hold the card back while the user is typing so a stray
-                        // key cannot answer a prompt they have not read; a Tick
-                        // promotes it once the window elapses.
-                        self.pending_suppressed.push(card);
-                    } else {
-                        self.state = AppState::Confirming;
-                        self.approval_queue.push(card);
-                    }
+                    self.state = AppState::Confirming;
+                    self.approval_queue.push(card);
                     AppAction::None
                 }
             }

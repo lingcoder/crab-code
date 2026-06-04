@@ -2153,16 +2153,18 @@ mod tests {
     fn granted_tool_not_deferred_while_typing() {
         let mut app = App::new("test");
         app.state = AppState::Processing;
-        app.session_grants.insert("bash".to_string());
+        // The grant uses the scoped key AllowAlways stores for `ls`, and the
+        // incoming event carries the capitalized registry name `Bash`.
+        app.session_grants.insert("Bash:ls".to_string());
         app.handle_event(key(KeyCode::Char('h')));
 
         let action = app.handle_event(TuiEvent::Agent {
             epoch: 0,
             event: crab_core::event::Event::PermissionRequest {
-                tool_name: "bash".into(),
+                tool_name: "Bash".into(),
                 input_summary: "ls".into(),
                 request_id: "req_1".into(),
-                tool_input: serde_json::Value::Null,
+                tool_input: serde_json::json!({"command": "ls"}),
             },
         });
 
