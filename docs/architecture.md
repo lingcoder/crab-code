@@ -2323,11 +2323,6 @@ src/
 │   ├── mod.rs
 │   └── snapshot.rs          //   FileHistory + Snapshot + rewind / LRU(100)
 │
-├── error_recovery/          // Classification + recovery strategy
-│   ├── mod.rs
-│   ├── category.rs          //   ErrorCategory + ErrorClassifier
-│   └── strategy.rs          //   Retry / AskUser / Abort
-│
 ├── summarizer.rs            // Conversation compaction (/compact, auto at 80%)
 ├── repl_commands.rs         // ReplCommand enum + parser
 ├── auto_dream.rs            // Background memory consolidation (cargo feature `auto-dream`)
@@ -4125,7 +4120,6 @@ MCP protocol extension modules:
 
 **Reliability Subsystem** :
 ```
-error_recovery::category + error_recovery::strategy    -- classify + recommend Retry/AskUser/Abort
 teams::retry                                           -- exponential backoff
 file_history                                           -- per-session Edit/Write snapshots, /rewind
 runtime::compact_now + session::compact_with_config    -- /compact and auto-compact at 80% watermark (async)
