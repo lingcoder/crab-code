@@ -110,10 +110,16 @@ impl AgentSession {
             .as_ref()
             .and_then(|p| p.parent().map(|parent| parent.join("file-history")))
             .unwrap_or_else(|| std::env::temp_dir().join("crab-file-history"));
+        // On resume, reuse the resumed session's file-history dir so prior
+        // /rewind snapshots survive the restart.
+        let file_history_id = session_config
+            .resume_session_id
+            .clone()
+            .unwrap_or_else(|| session_config.session_id.clone());
         let session_history = session_config.sessions_dir.map(SessionHistory::new);
         let file_history = Arc::new(std::sync::Mutex::new(FileHistory::new(
             file_history_base,
-            &session_config.session_id,
+            &file_history_id,
         )));
 
         // Load memories and inject into system prompt

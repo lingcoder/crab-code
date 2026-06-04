@@ -58,21 +58,41 @@ pub struct FileHistory {
 }
 
 impl FileHistory {
-    /// Create a new history rooted at `base_dir/session_id/`. The directory
-    /// is not created until the first snapshot is taken.
+    /// Create a new history rooted at `base_dir/session_id/`. If a prior
+    /// `index.json` exists in that directory (a resumed session), its
+    /// snapshot index is loaded so `/rewind` works across restarts.
     #[must_use]
     pub fn new(base_dir: impl Into<PathBuf>, session_id: impl AsRef<str>) -> Self {
         let session_dir = base_dir.into().join(session_id.as_ref());
-        Self {
-            session_dir,
-            index: BTreeMap::new(),
-        }
+        let index = std::fs::read_to_string(session_dir.join("index.json"))
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+        Self { session_dir, index }
     }
 
     /// Returns the storage root (`{base_dir}/{session_id}`).
     #[must_use]
     pub fn session_dir(&self) -> &Path {
         self.session_dir.as_path()
+    }
+
+    /// Path to the persisted snapshot index for this session.
+    fn index_path(&self) -> PathBuf {
+        self.session_dir.join("index.json")
+    }
+
+    /// Persist the snapshot index so a later run (resume) can find prior
+    /// snapshots. Best-effort: a write failure is logged, not fatal.
+    fn save_index(&self) {
+        match serde_json::to_string(&self.index) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(self.index_path(), json) {
+                    eprintln!("[file-history] index save failed: {e}");
+                }
+            }
+            Err(e) => eprintln!("[file-history] index serialize failed: {e}"),
+        }
     }
 
     /// Number of snapshots currently tracked across every file.
@@ -114,6 +134,7 @@ impl FileHistory {
         entries.push((version, storage.clone()));
 
         self.evict_over_cap()?;
+        self.save_index();
 
         Ok(Snapshot {
             path: path.to_path_buf(),
@@ -214,10 +235,12 @@ impl FileHistory {
 /// Build the on-disk filename for a snapshot: `{hash}@v{version}`.
 ///
 /// The hash is a deterministic digest of the path string so different files
-/// never share a storage slot; identical paths across versions do.
+/// never share a storage slot; identical paths across versions do. `DefaultHasher`
+/// (fixed keys) is used rather than `RandomState`, so a snapshot written in one
+/// run is reachable by the same key in a later run.
 fn snapshot_filename(path: &Path, version: u32) -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
     hasher.write(path.as_os_str().as_encoded_bytes());
     let hash = hasher.finish();
     format!("{hash:016x}@v{version}")
@@ -371,6 +394,36 @@ mod tests {
             snap_b.storage.parent().unwrap().ends_with("session-b"),
             "session-b snapshot must live in session-b/"
         );
+    }
+
+    #[test]
+    fn index_survives_reconstruction() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = tempfile::NamedTempFile::new().unwrap();
+        let path = target.path();
+
+        {
+            let mut history = FileHistory::new(dir.path(), "sess");
+            history.track_edit(path, b"v1").unwrap();
+            history.track_edit(path, b"v2").unwrap();
+        } // drop — the in-memory index is gone
+
+        // Reconstructing on the same dir reloads the persisted index, so
+        // /rewind keeps working across a restart.
+        let history = FileHistory::new(dir.path(), "sess");
+        let snaps = history.snapshots_for(path);
+        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps[1].version, 2);
+
+        std::fs::write(path, b"scrambled").unwrap();
+        history.rewind(path, 1).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"v1");
+    }
+
+    #[test]
+    fn snapshot_filename_is_deterministic() {
+        let p = Path::new("/some/file.rs");
+        assert_eq!(snapshot_filename(p, 1), snapshot_filename(p, 1));
     }
 
     #[test]

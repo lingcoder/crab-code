@@ -260,9 +260,16 @@ impl AgentRuntime {
             .as_ref()
             .and_then(|p| p.parent().map(|parent| parent.join("file-history")))
             .unwrap_or_else(|| std::env::temp_dir().join("crab-file-history"));
+        // On resume, root file-history at the resumed session's id so prior
+        // /rewind snapshots are found (the new session id would be empty).
+        let file_history_id = config
+            .session_config
+            .resume_session_id
+            .as_deref()
+            .unwrap_or(&session_id);
         let file_history = Arc::new(std::sync::Mutex::new(FileHistory::new(
             file_history_base,
-            &session_id,
+            file_history_id,
         )));
 
         let track_edit: crab_core::tool::TrackEditFn = {
