@@ -77,7 +77,7 @@ pub struct AgentRuntime {
     tool_ctx: ToolContext,
     loop_config: QueryConfig,
     skill_registry: SkillRegistry,
-    session_history: Option<SessionHistory>,
+    session_history: Option<Arc<SessionHistory>>,
     _mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
     cost: CostAccumulator,
     memory_dir: Option<PathBuf>,
@@ -191,7 +191,7 @@ impl AgentRuntime {
             .session_config
             .sessions_dir
             .as_ref()
-            .map(|d| SessionHistory::new(d.clone()));
+            .map(|d| Arc::new(SessionHistory::new(d.clone())));
 
         let mut system_prompt = config.session_config.system_prompt.clone();
 
@@ -228,7 +228,7 @@ impl AgentRuntime {
             .resume_session_id
             .as_ref()
             .zip(session_history.as_ref())
-            .and_then(|(resume_id, history)| history.load_with_grants(resume_id).ok().flatten())
+            .and_then(|(resume_id, history)| history.load_for_resume(resume_id).ok().flatten())
             .map(|(messages, grants)| {
                 for msg in messages {
                     conversation.push(msg);
@@ -293,6 +293,13 @@ impl AgentRuntime {
                 Arc::new(client) as Arc<dyn CompactionClient>
             });
 
+        // Append each in-flight message to the session's `.jsonl` crash log so
+        // a crash mid-turn does not lose the turn. The log is folded into the
+        // `.json` snapshot (and truncated) after each completed turn.
+        let session_persister = session_history.as_ref().map(|h| {
+            Arc::new(h.persister(session_id.clone())) as Arc<dyn crab_session::SessionPersister>
+        });
+
         let loop_config = QueryConfig {
             model: config.session_config.model.clone(),
             max_tokens: config.session_config.max_tokens,
@@ -309,7 +316,7 @@ impl AgentRuntime {
             source: crab_core::query::QuerySource::Repl,
             compaction_client: compaction_client.clone(),
             compaction_config: compaction_config.clone(),
-            session_persister: None,
+            session_persister,
         };
 
         let mut skill_registry = SkillRegistry::new();
@@ -410,6 +417,16 @@ impl AgentRuntime {
         let task_executor = Arc::clone(&self.executor);
         let task_ctx = self.tool_ctx.clone();
         let task_config = self.loop_config.clone();
+
+        // Persist the user turn to the crash log before running: the engine
+        // loop persists assistant + tool-result messages, but never the user
+        // message that started the turn.
+        if let Some(persister) = task_config.session_persister.as_ref()
+            && let Some(last) = task_conversation.messages().last()
+            && last.role == crab_core::message::Role::User
+        {
+            persister.persist_message(last);
+        }
 
         let (return_tx, return_rx) = tokio::sync::oneshot::channel();
 
@@ -723,6 +740,12 @@ impl AgentRuntime {
             &grants,
         ) {
             tracing::warn!(error = %e, "session save failed");
+            return;
+        }
+        // The snapshot now contains everything; reset the crash log so it only
+        // holds messages from the next (in-flight) turn.
+        if let Err(e) = history.truncate_jsonl(session_id) {
+            tracing::warn!(error = %e, "session crash-log truncate failed");
         }
     }
 
@@ -739,7 +762,7 @@ impl AgentRuntime {
     }
 
     pub fn session_history(&self) -> Option<&SessionHistory> {
-        self.session_history.as_ref()
+        self.session_history.as_deref()
     }
 
     /// Load only the grants for a session id (e.g. for `--continue` /

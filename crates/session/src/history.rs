@@ -452,6 +452,43 @@ impl SessionHistory {
         Ok(Some(messages))
     }
 
+    /// Clear the `.jsonl` crash log after its messages have been folded into
+    /// the canonical `.json` snapshot, so it only ever holds messages produced
+    /// since the last snapshot.
+    pub fn truncate_jsonl(&self, session_id: &str) -> crab_core::Result<()> {
+        let path = self.jsonl_path(session_id);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Load a session for resume: the canonical `.json` snapshot plus any
+    /// messages still in the `.jsonl` crash log.
+    ///
+    /// The `.jsonl` is truncated whenever a snapshot is written, so it only
+    /// contains post-snapshot messages — i.e. an in-flight turn that crashed
+    /// before the next snapshot. Returns `None` only when neither file exists.
+    pub fn load_for_resume(
+        &self,
+        session_id: &str,
+    ) -> crab_core::Result<Option<(Vec<Message>, Vec<String>)>> {
+        let snapshot = self.load_with_grants(session_id)?;
+        let tail = self.load_jsonl(session_id)?.unwrap_or_default();
+
+        match (snapshot, tail.is_empty()) {
+            (Some((mut messages, grants)), false) => {
+                messages.extend(tail);
+                Ok(Some((messages, grants)))
+            }
+            (Some(pair), true) => Ok(Some(pair)),
+            // No snapshot but a crash log exists (crashed before the first
+            // snapshot): recover the turn from the log alone.
+            (None, false) => Ok(Some((tail, Vec::new()))),
+            (None, true) => Ok(None),
+        }
+    }
+
     /// Create a [`SessionPersister`] bound to a specific session ID.
     pub fn persister(self: &Arc<Self>, session_id: String) -> BoundSessionPersister {
         BoundSessionPersister {
@@ -1511,6 +1548,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let history = SessionHistory::new(dir.path().to_path_buf());
         assert!(history.load_jsonl("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn load_for_resume_appends_crash_log_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        // Snapshot holds one completed turn.
+        history
+            .save("s1", &[Message::user("turn1"), Message::assistant("ok")])
+            .unwrap();
+        // A crash left an in-flight turn in the jsonl log.
+        history.append_jsonl("s1", &Message::user("turn2")).unwrap();
+
+        let (messages, _grants) = history.load_for_resume("s1").unwrap().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].text(), "turn2");
+    }
+
+    #[test]
+    fn load_for_resume_snapshot_only_when_log_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.save("s1", &[Message::user("only")]).unwrap();
+        let (messages, _) = history.load_for_resume("s1").unwrap().unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn truncate_jsonl_clears_crash_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history.append_jsonl("s1", &Message::user("x")).unwrap();
+        history.truncate_jsonl("s1").unwrap();
+        assert!(history.load_jsonl("s1").unwrap().is_none());
     }
 
     #[test]
