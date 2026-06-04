@@ -11,6 +11,7 @@ pub mod memory;
 pub mod memory_extract;
 pub mod micro_compact;
 pub mod migration;
+pub mod resume_sanitize;
 pub mod snip_compact;
 pub mod telemetry;
 pub mod template;
@@ -34,6 +35,7 @@ pub use history::{
 pub use input_expand::expand_at_mentions;
 pub use llm_compaction_client::NullCompactionClient;
 pub use memory::{IndexEntry, MemoryFile, MemoryIndex, MemoryStore};
+pub use resume_sanitize::sanitize_for_resume;
 pub use snip_compact::SnipConfig;
 pub use telemetry::logs::SessionRecorder;
 pub use template::{

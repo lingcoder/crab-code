@@ -230,7 +230,7 @@ impl AgentRuntime {
             .zip(session_history.as_ref())
             .and_then(|(resume_id, history)| history.load_for_resume(resume_id).ok().flatten())
             .map(|(messages, grants)| {
-                for msg in messages {
+                for msg in crab_session::sanitize_for_resume(messages) {
                     conversation.push(msg);
                 }
                 grants
@@ -800,7 +800,7 @@ impl AgentRuntime {
                     self.conversation.system_prompt.clone(),
                     self.conversation.context_window,
                 );
-                for msg in messages {
+                for msg in crab_session::sanitize_for_resume(messages) {
                     self.conversation.push(msg);
                 }
                 true
@@ -830,7 +830,7 @@ impl AgentRuntime {
                     self.conversation.system_prompt.clone(),
                     self.conversation.context_window,
                 );
-                for msg in messages {
+                for msg in crab_session::sanitize_for_resume(messages) {
                     self.conversation.push(msg);
                 }
                 Some(grants)
