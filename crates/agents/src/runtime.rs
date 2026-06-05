@@ -103,6 +103,10 @@ pub struct AgentRuntime {
     /// The system prompt *before* the Coordinator overlay — workers use this so
     /// they don't inherit the "you do not execute code" guardrail.
     worker_base_prompt: String,
+    /// Background task registry — tracks running/completed background tasks
+    /// (bash commands, sub-agents, teammates). Shared with tools that need
+    /// to read or modify task state (`TaskStopTool`, `TaskOutputTool`).
+    task_registry: Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>,
 }
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
@@ -314,6 +318,7 @@ impl AgentRuntime {
         // can enforce read-before-edit and detect out-of-band changes.
         let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
 
+        let task_registry = Arc::new(std::sync::Mutex::new(crab_core::task::TaskRegistry::new()));
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
             permission_mode: config.session_config.permission_policy.mode,
@@ -326,6 +331,7 @@ impl AgentRuntime {
                 read_state: Some(read_state),
                 ..Default::default()
             },
+            task_registry: Some(Arc::clone(&task_registry)),
         };
 
         let compaction_config = CompactionConfig::default();
@@ -410,6 +416,7 @@ impl AgentRuntime {
             skill_dirs,
             coordinator,
             worker_base_prompt,
+            task_registry,
         };
 
         let meta = RuntimeInitMeta {
@@ -705,6 +712,13 @@ impl AgentRuntime {
 
     pub fn tool_ctx_mut(&mut self) -> &mut ToolContext {
         &mut self.tool_ctx
+    }
+
+    /// Shared background task registry. Tools use the copy in `tool_ctx`;
+    /// the runtime uses this one for worker registration.
+    #[must_use]
+    pub fn task_registry(&self) -> &Arc<std::sync::Mutex<crab_core::task::TaskRegistry>> {
+        &self.task_registry
     }
 
     pub fn executor(&self) -> &Arc<ToolExecutor> {

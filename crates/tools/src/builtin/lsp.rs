@@ -168,6 +168,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         }
     }
 

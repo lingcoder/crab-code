@@ -459,6 +459,7 @@ mod tests {
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         };
 
         let output = adapter
@@ -504,6 +505,7 @@ mod tests {
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         };
 
         let output = adapter.execute(serde_json::json!({}), &ctx).await.unwrap();

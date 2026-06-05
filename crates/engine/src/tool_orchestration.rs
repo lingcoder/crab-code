@@ -423,6 +423,7 @@ mod tests {
                 denied_tools: vec![BASH_TOOL_NAME.into()],
             },
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         };
         let (event_tx, _event_rx) = mpsc::channel(64);
         let cancel = CancellationToken::new();
@@ -479,6 +480,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         };
         let (event_tx, _event_rx) = mpsc::channel(64);
         let cancel = CancellationToken::new();

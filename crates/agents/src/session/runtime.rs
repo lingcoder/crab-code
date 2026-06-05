@@ -211,6 +211,7 @@ impl AgentSession {
                 read_state: Some(read_state),
                 ..Default::default()
             },
+            task_registry: None,
         };
 
         let compaction_client: Arc<dyn crab_session::CompactionClient> =

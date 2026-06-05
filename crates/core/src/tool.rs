@@ -294,6 +294,10 @@ pub struct ToolContext {
     pub permission_policy: PermissionPolicy,
     /// Extended context for tools that need richer application state.
     pub ext: ToolContextExt,
+    /// Background task registry — shared with the runtime. `None` when
+    /// no runtime is attached (e.g. unit tests).
+    #[doc(hidden)]
+    pub task_registry: Option<Arc<std::sync::Mutex<crate::task::TaskRegistry>>>,
 }
 
 /// File-snapshot callback for Edit/Write tools.
@@ -709,6 +713,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: ToolContextExt::default(),
+            task_registry: None,
         };
         assert_eq!(ctx.working_dir, std::path::Path::new("/tmp"));
         assert_eq!(ctx.permission_mode, PermissionMode::Default);

@@ -322,6 +322,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         }
     }
 
@@ -373,6 +374,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
+            task_registry: None,
         };
         let tool = EnterWorktreeTool;
         let input = serde_json::json!({ "name": "test-wt" });
