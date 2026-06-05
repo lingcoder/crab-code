@@ -3,6 +3,40 @@ use crate::types::{CommandResult, SlashCommand};
 
 const FEEDBACK_REPO: &str = "lingcoder/crab-code";
 
+/// Call `gh issue create` to submit feedback as a GitHub Issue.
+///
+/// Returns the issue URL on success, or an error message on failure.
+/// In test builds this is a no-op that returns a fake URL.
+fn create_github_issue(repo: &str, title: &str, body: &str) -> Result<String, String> {
+    #[cfg(test)]
+    {
+        let _ = (repo, title, body);
+        return Ok("https://github.com/test/repo/issues/1".into());
+    }
+
+    #[cfg(not(test))]
+    {
+        match std::process::Command::new("gh")
+            .args([
+                "issue", "create", "--repo", repo, "--title", title, "--body", body,
+            ])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let url = String::from_utf8_lossy(&output.stdout);
+                Ok(url.trim().to_string())
+            }
+            Ok(output) => {
+                let err = String::from_utf8_lossy(&output.stderr);
+                Err(format!("Failed to create issue: {}", err.trim()))
+            }
+            Err(_) => {
+                Err("GitHub CLI (gh) not found. Install it from https://cli.github.com/".into())
+            }
+        }
+    }
+}
+
 pub struct FeedbackCommand;
 
 impl SlashCommand for FeedbackCommand {
@@ -25,30 +59,9 @@ impl SlashCommand for FeedbackCommand {
             ctx.session_id,
             ctx.working_dir.display()
         );
-        match std::process::Command::new("gh")
-            .args([
-                "issue",
-                "create",
-                "--repo",
-                FEEDBACK_REPO,
-                "--title",
-                title,
-                "--body",
-                &body,
-            ])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let url = String::from_utf8_lossy(&output.stdout);
-                CommandResult::Message(format!("Issue created: {}", url.trim()))
-            }
-            Ok(output) => {
-                let err = String::from_utf8_lossy(&output.stderr);
-                CommandResult::Message(format!("Failed to create issue: {}", err.trim()))
-            }
-            Err(_) => CommandResult::Message(
-                "GitHub CLI (gh) not found. Install it from https://cli.github.com/".into(),
-            ),
+        match create_github_issue(FEEDBACK_REPO, title, &body) {
+            Ok(url) => CommandResult::Message(format!("Issue created: {url}")),
+            Err(msg) => CommandResult::Message(msg),
         }
     }
 }
@@ -71,11 +84,21 @@ mod tests {
     }
 
     #[test]
-    fn feedback_with_args_does_not_call_gh() {
-        // This test verifies the command metadata only.  We do NOT call
-        // execute("My bug report") because that shells out to `gh issue
-        // create` and creates a real GitHub issue on every test run.
-        assert_eq!(FeedbackCommand.name(), "feedback");
-        assert!(!FeedbackCommand.description().is_empty());
+    fn feedback_with_args_creates_issue() {
+        let (model, dir) = test_model_and_dir();
+        let ctx = make_test_ctx(&model, &dir);
+        if let CommandResult::Message(text) = FeedbackCommand.execute("My bug report", &ctx) {
+            assert!(text.contains("Issue created:"));
+            assert!(text.contains("https://"));
+        } else {
+            panic!("expected Message");
+        }
+    }
+
+    #[test]
+    fn create_github_issue_returns_url_in_test() {
+        let result = create_github_issue("owner/repo", "title", "body");
+        assert!(result.is_ok());
+        assert!(result.unwrap().starts_with("https://"));
     }
 }

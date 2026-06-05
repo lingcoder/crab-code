@@ -15,7 +15,7 @@
 
 ---
 
-> **Active Development** — 4700+ tests · 27 crates · ~149k LOC
+> **Active Development** — 4900+ tests · 27 crates · ~158k LOC
 
 Crab Code is a Rust-native agentic coding CLI. It aligns with Claude Code's toolset, permission model, and interaction patterns while supporting any LLM provider (Anthropic / OpenAI / DeepSeek / Bedrock / Vertex).
 

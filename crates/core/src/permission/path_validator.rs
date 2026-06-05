@@ -114,14 +114,6 @@ fn contains_suspicious_windows_pattern(path: &str) -> Option<&'static str> {
     {
         return Some("NTFS alternate data stream detected");
     }
-    // 8.3 short name: ~ followed by digit
-    if path.contains('~') {
-        for (i, c) in path.char_indices() {
-            if c == '~' && path[i + 1..].starts_with(|c: char| c.is_ascii_digit()) {
-                return Some("8.3 short name pattern detected");
-            }
-        }
-    }
     // Long path prefixes
     if path.starts_with("\\\\?\\")
         || path.starts_with("\\\\.\\")
