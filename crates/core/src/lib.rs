@@ -12,4 +12,5 @@ pub mod message;
 pub mod model;
 pub mod permission;
 pub mod query;
+pub mod task;
 pub mod tool;
