@@ -1,6 +1,8 @@
 use crate::context::CommandContext;
 use crate::types::{CommandResult, SlashCommand};
 
+const FEEDBACK_REPO: &str = "lingcoder/crab-code";
+
 pub struct FeedbackCommand;
 
 impl SlashCommand for FeedbackCommand {
@@ -28,7 +30,7 @@ impl SlashCommand for FeedbackCommand {
                 "issue",
                 "create",
                 "--repo",
-                "crabforge/crab-code",
+                FEEDBACK_REPO,
                 "--title",
                 title,
                 "--body",
@@ -69,10 +71,11 @@ mod tests {
     }
 
     #[test]
-    fn feedback_with_args_returns_message() {
-        let (model, dir) = test_model_and_dir();
-        let ctx = make_test_ctx(&model, &dir);
-        let result = FeedbackCommand.execute("My bug report", &ctx);
-        assert!(matches!(result, CommandResult::Message(_)));
+    fn feedback_with_args_does_not_call_gh() {
+        // This test verifies the command metadata only.  We do NOT call
+        // execute("My bug report") because that shells out to `gh issue
+        // create` and creates a real GitHub issue on every test run.
+        assert_eq!(FeedbackCommand.name(), "feedback");
+        assert!(!FeedbackCommand.description().is_empty());
     }
 }
