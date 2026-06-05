@@ -312,7 +312,7 @@ pub fn save_permission_store(path: &Path, store: &PermissionStore) -> crate::Res
 // ── Helpers ───────────────────────────────────────────────────────────
 
 /// Return current time as ISO 8601 string (UTC).
-fn now_iso8601() -> String {
+pub fn now_iso8601() -> String {
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

@@ -41,5 +41,5 @@ pub use rule_parser::{
 pub use shadowed_rules::{ShadowedRule, detect_shadowed_rules};
 pub use stored::{
     AuditEntry, AuditSource, PermissionRuleSet, PermissionStore, RuleScope, RuleVerdict,
-    StoredPermissionRule, load_permission_store, save_permission_store,
+    StoredPermissionRule, load_permission_store, now_iso8601, save_permission_store,
 };

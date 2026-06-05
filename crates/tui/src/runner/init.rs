@@ -109,6 +109,10 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
     }
     app.open_resume_picker = config.open_resume_picker;
 
+    // Load persistent permission grants from ~/.crab/permissions.json so
+    // "always allow" decisions survive across sessions.
+    app.init_persistent_permissions(&crab_utils::path::home_dir());
+
     // Slash command tab completion is set up in run_loop() once the
     // CommandRegistry is constructed, so it stays in sync automatically.
 

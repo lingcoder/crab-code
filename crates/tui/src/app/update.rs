@@ -866,6 +866,7 @@ impl App {
                 && let Some((ref grant_name, _)) = current_info
             {
                 self.session_grants.insert(grant_name.clone());
+                self.persist_grant(grant_name);
             }
             let rejection_info = current_info.map(|(_, ri)| ri);
             if !allowed && let Some((tool_name, summary)) = rejection_info {

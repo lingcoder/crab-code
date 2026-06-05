@@ -127,6 +127,11 @@ pub struct App {
     pub permission_mode: crab_core::permission::PermissionMode,
     /// Session-level "always allow" grants (tool names granted via 'a' key).
     pub session_grants: std::collections::HashSet<String>,
+    /// Persistent permission rule store (`~/.crab/permissions.json`).
+    /// `None` until `init_persistent_permissions` is called (after the home
+    /// directory is known). Once loaded, permanent rules are merged into
+    /// `session_grants` so they survive across sessions.
+    pub permission_rules: Option<crab_core::permission::stored::PermissionRuleSet>,
     /// Open the resume picker once the runtime is ready (set from bare
     /// `--resume`; consumed by `push_startup_overlays`).
     pub open_resume_picker: bool,
@@ -208,6 +213,7 @@ impl App {
             pending_suppressed: Vec::new(),
             permission_mode: crab_core::permission::PermissionMode::Default,
             session_grants: std::collections::HashSet::new(),
+            permission_rules: None,
             open_resume_picker: false,
             messages: Vec::new(),
             command_queue: CommandQueue::new(),
@@ -696,6 +702,59 @@ impl App {
         // Overlay stack (renders on top of everything)
         if !self.overlay_stack.is_empty() {
             self.overlay_stack.render(area, buf);
+        }
+    }
+
+    // ── Persistent permission grants ───────────────────────────────────
+
+    /// Load permanent permission rules from `~/.crab/permissions.json` and
+    /// seed `session_grants` so they survive across sessions.
+    ///
+    /// Called once at startup after the home directory is known. Missing or
+    /// malformed files are silently treated as empty (consistent with
+    /// `PermissionRuleSet::load`).
+    pub fn init_persistent_permissions(&mut self, home_dir: &std::path::Path) {
+        use crab_core::permission::stored::{RuleScope, RuleVerdict};
+
+        let path = crab_core::permission::stored::PermissionRuleSet::global_path(home_dir);
+        let mut rule_set = crab_core::permission::stored::PermissionRuleSet::new(path);
+        if rule_set.load().is_err() {
+            // Corrupt or unreadable — start clean, don't crash the TUI.
+            return;
+        }
+
+        // Seed session_grants from permanent Allow rules.
+        for rule in rule_set.list_rules() {
+            if rule.verdict == RuleVerdict::Allow && rule.scope == RuleScope::Permanent {
+                self.session_grants.insert(rule.tool_pattern.clone());
+            }
+        }
+
+        self.permission_rules = Some(rule_set);
+    }
+
+    /// Persist a new "always allow" grant to `~/.crab/permissions.json`.
+    ///
+    /// Called from the `AllowAlways` handler alongside the existing
+    /// `session_grants.insert()`. Writes are best-effort — a failure logs a
+    /// warning but does not block the TUI.
+    pub fn persist_grant(&mut self, grant_key: &str) {
+        use crab_core::permission::stored::{RuleScope, RuleVerdict, StoredPermissionRule};
+
+        let Some(rule_set) = self.permission_rules.as_mut() else {
+            return; // persistence not initialised (e.g. unit tests)
+        };
+
+        let rule = StoredPermissionRule {
+            tool_pattern: grant_key.to_string(),
+            verdict: RuleVerdict::Allow,
+            scope: RuleScope::Permanent,
+            created_at: crab_core::permission::now_iso8601(),
+            context: None,
+        };
+        rule_set.add_rule(rule);
+        if let Err(e) = rule_set.save() {
+            tracing::warn!("failed to persist permission grant: {e}");
         }
     }
 }
@@ -2510,5 +2569,71 @@ mod tests {
         // No follower ack for the heuristic path, so the next real user message
         // must remain intact.
         assert!(messages_contain(&app.messages, "resumed question"));
+    }
+
+    #[test]
+    fn persistent_permissions_seed_session_grants() {
+        use crab_core::permission::stored::{
+            PermissionRuleSet, RuleScope, RuleVerdict, StoredPermissionRule,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // Write a permanent Allow rule to disk.
+        let path = PermissionRuleSet::global_path(home);
+        let mut set = PermissionRuleSet::new(path.clone());
+        set.add_rule(StoredPermissionRule {
+            tool_pattern: "Bash:git".to_string(),
+            verdict: RuleVerdict::Allow,
+            scope: RuleScope::Permanent,
+            created_at: "2026-06-03T00:00:00Z".to_string(),
+            context: None,
+        });
+        set.save().unwrap();
+
+        // App starts empty, init loads the rule.
+        let mut app = App::new("test");
+        assert!(!app.session_grants.contains("Bash:git"));
+        app.init_persistent_permissions(home);
+        assert!(app.session_grants.contains("Bash:git"));
+        assert!(app.permission_rules.is_some());
+    }
+
+    #[test]
+    fn persistent_permissions_missing_file_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new("test");
+        app.init_persistent_permissions(dir.path());
+        // No crash, no rules loaded, permission_rules still set (empty set).
+        assert!(app.permission_rules.is_some());
+        assert!(app.session_grants.is_empty());
+    }
+
+    #[test]
+    fn persist_grant_writes_to_disk() {
+        use crab_core::permission::stored::PermissionRuleSet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let mut app = App::new("test");
+        app.init_persistent_permissions(home);
+
+        // Grant and persist.
+        app.persist_grant("Edit");
+
+        // Reload from disk — the rule should be there.
+        let path = PermissionRuleSet::global_path(home);
+        let mut set2 = PermissionRuleSet::new(path);
+        set2.load().unwrap();
+        assert_eq!(set2.list_permanent_rules().len(), 1);
+        assert_eq!(set2.list_permanent_rules()[0].tool_pattern, "Edit");
+    }
+
+    #[test]
+    fn persist_grant_noop_without_init() {
+        let mut app = App::new("test");
+        // permission_rules is None — persist_grant should silently return.
+        app.persist_grant("Bash:git");
+        // No panic, no error.
     }
 }
