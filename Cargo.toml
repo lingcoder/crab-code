@@ -37,7 +37,7 @@ eventsource-stream = "0.2"
 either = "1"
 
 # ─── TUI ───
-ratatui = { version = "0.30", features = ["serde", "scrolling-regions", "unstable-backend-writer"] }
+ratatui = { git = "https://github.com/ratatui/ratatui.git", branch = "main", features = ["serde", "scrolling-regions", "unstable-backend-writer"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 tui-textarea = "0.7"
 tachyonfx = "0.25"

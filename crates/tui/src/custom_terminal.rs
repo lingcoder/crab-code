@@ -331,7 +331,8 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let mut invalidated: usize = 0;
     let mut to_skip: usize = 0;
     for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
-        if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
+        let is_skip = matches!(current.diff_option, ratatui::buffer::CellDiffOption::Skip);
+        if !is_skip && (current != previous || invalidated > 0) && to_skip == 0 {
             let (x, y) = a.pos_of(i);
             let row = i / a.area.width as usize;
             if x <= last_nonblank_columns[row] {
