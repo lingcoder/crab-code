@@ -46,6 +46,9 @@ pub struct WorkerPool {
     pub team: Option<Team>,
     /// Retry tracker for failed tasks.
     pub retry_tracker: RetryTracker,
+    /// Background task registry — shared with the runtime. Workers are
+    /// registered here so `TaskList`/`TaskStop`/`TaskOutput` can see them.
+    task_registry: Option<Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>>,
 }
 
 /// A worker that is currently running.
@@ -82,7 +85,16 @@ impl WorkerPool {
             router,
             team: None,
             retry_tracker: RetryTracker::new(RetryPolicy::default()),
+            task_registry: None,
         }
+    }
+
+    /// Set the task registry for background task tracking.
+    pub fn set_task_registry(
+        &mut self,
+        registry: Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>,
+    ) {
+        self.task_registry = Some(registry);
     }
 
     /// Set a custom retry policy.
@@ -184,7 +196,22 @@ impl WorkerPool {
             cancel.clone(),
         );
 
+        // Save a preview for the registry before moving task_prompt.
+        let preview = truncate_preview(&task_prompt, 80);
+
         let handle = worker.spawn(task_prompt);
+
+        // Register in the task registry so TaskList/TaskStop can see it.
+        if let Some(ref reg) = self.task_registry {
+            let entry = crab_core::task::TaskEntry::new(
+                worker_id.clone(),
+                crab_core::task::TaskType::LocalAgent,
+                preview,
+            );
+            let mut r = reg.lock().expect("task registry lock");
+            r.register(entry);
+            r.set_status(&worker_id, crab_core::task::TaskStatus::Running);
+        }
 
         self.running
             .insert(worker_id.clone(), RunningWorker { handle, cancel });
@@ -222,6 +249,7 @@ impl WorkerPool {
         let worker = self.running.remove(worker_id)?;
         match worker.handle.await {
             Ok(result) => {
+                Self::update_task_status_static(self.task_registry.as_ref(), worker_id, &result);
                 self.completed.push(result.clone_summary());
                 Some(result)
             }
@@ -231,12 +259,14 @@ impl WorkerPool {
 
     /// Collect all completed workers (non-blocking: only those already finished).
     pub async fn collect_completed(&mut self) -> Vec<WorkerResult> {
+        let reg = self.task_registry.clone();
         let mut results = Vec::new();
         let mut still_running = HashMap::new();
 
         for (id, worker) in self.running.drain() {
             if worker.handle.is_finished() {
                 if let Ok(result) = worker.handle.await {
+                    Self::update_task_status_static(reg.as_ref(), &id, &result);
                     results.push(result);
                 }
             } else {
@@ -252,9 +282,11 @@ impl WorkerPool {
 
     /// Wait for all running workers to complete and collect their results.
     pub async fn collect_all(&mut self) -> Vec<WorkerResult> {
+        let reg = self.task_registry.clone();
         let mut results = Vec::new();
-        for (_, worker) in self.running.drain() {
+        for (id, worker) in self.running.drain() {
             if let Ok(result) = worker.handle.await {
+                Self::update_task_status_static(reg.as_ref(), &id, &result);
                 results.push(result);
             }
         }
@@ -297,6 +329,31 @@ impl WorkerPool {
     ) {
         self.running
             .insert(worker_id, RunningWorker { handle, cancel });
+    }
+
+    /// Update the task registry status for a completed worker.
+    fn update_task_status_static(
+        reg: Option<&Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>>,
+        worker_id: &str,
+        result: &WorkerResult,
+    ) {
+        if let Some(reg) = reg {
+            let mut reg = reg.lock().expect("task registry lock");
+            if result.success {
+                reg.set_status(worker_id, crab_core::task::TaskStatus::Completed);
+            } else {
+                reg.set_error(worker_id, "worker failed".to_string());
+            }
+        }
+    }
+}
+
+/// Truncate a string to `max_len` chars, appending "…" if truncated.
+fn truncate_preview(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max_len])
     }
 }
 

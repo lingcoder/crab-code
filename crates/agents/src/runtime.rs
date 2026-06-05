@@ -475,6 +475,7 @@ impl AgentRuntime {
         // registry and prompt instead of the leader's stripped 3-tool registry.
         let coordinator = self.coordinator;
         let worker_base_prompt = self.worker_base_prompt.clone();
+        let task_registry = Arc::clone(&self.task_registry);
 
         // Persist the user turn to the crash log before running: the engine
         // loop persists assistant + tool-result messages, but never the user
@@ -509,6 +510,7 @@ impl AgentRuntime {
             if !markers.is_empty() {
                 let mut pool =
                     crate::teams::WorkerPool::new(task_conversation.id.clone(), "main".into());
+                pool.set_task_registry(Arc::clone(&task_registry));
                 // Coordinator workers get the clean registry/prompt; plain
                 // sessions inherit the parent's.
                 let (worker_registry, parent_prompt) = match coordinator {
