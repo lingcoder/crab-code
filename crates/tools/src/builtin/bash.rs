@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crab_core::Result;
@@ -144,6 +144,10 @@ impl Tool for BashTool {
                 "description": {
                     "type": "string",
                     "description": "Clear, concise description of what this command does"
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Set to true to run this command in the background. Use TaskOutput to read the output later."
                 }
             },
             "required": ["command"]
@@ -158,6 +162,8 @@ impl Tool for BashTool {
         let command = input["command"].as_str().unwrap_or("").to_owned();
         let timeout_ms = input["timeout"].as_u64();
         let working_dir = ctx.working_dir.clone();
+        let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
+        let task_registry = ctx.task_registry.clone();
 
         Box::pin(async move {
             if command.is_empty() {
@@ -166,10 +172,68 @@ impl Tool for BashTool {
 
             let timeout = Some(resolve_timeout(timeout_ms));
 
-            let Some((prog, args)) = shell_invocation(command) else {
+            let Some((prog, args)) = shell_invocation(command.clone()) else {
                 return Ok(ToolOutput::error(NO_SHELL_ERROR));
             };
 
+            // ── Background mode ──────────────────────────────────────
+            if run_in_background {
+                let Some(reg) = task_registry else {
+                    return Ok(ToolOutput::error(
+                        "run_in_background requires a task registry (not available in this context)",
+                    ));
+                };
+
+                let task_id = crab_core::task::generate_task_id('b');
+                let entry = crab_core::task::TaskEntry::new(
+                    task_id.clone(),
+                    crab_core::task::TaskType::LocalBash,
+                    command.clone(),
+                );
+
+                if !reg.lock().expect("task registry lock").register(entry) {
+                    return Ok(ToolOutput::error("task ID collision — retry"));
+                }
+
+                // Spawn the command as a detached tokio task.
+                let task_id_spawn = task_id.clone();
+                let reg_spawn = Arc::clone(&reg);
+                tokio::spawn(async move {
+                    let opts = SpawnOptions {
+                        command: prog,
+                        args,
+                        working_dir: Some(working_dir),
+                        env: vec![],
+                        timeout,
+                        stdin_data: None,
+                        clear_env: false,
+                        kill_grace_period: None,
+                    };
+
+                    reg_spawn
+                        .lock()
+                        .expect("task registry lock")
+                        .set_status(&task_id_spawn, crab_core::task::TaskStatus::Running);
+
+                    let result = run(opts).await;
+
+                    let mut reg = reg_spawn.lock().expect("task registry lock");
+                    match result {
+                        Ok(output) => {
+                            reg.set_exit_code(&task_id_spawn, output.exit_code);
+                        }
+                        Err(e) => {
+                            reg.set_error(&task_id_spawn, e.to_string());
+                        }
+                    }
+                });
+
+                return Ok(ToolOutput::success(format!(
+                    "Task {task_id} started in the background. Use TaskOutput with task_id=\"{task_id}\" to read output."
+                )));
+            }
+
+            // ── Foreground mode (original behavior) ──────────────────
             let opts = SpawnOptions {
                 command: prog,
                 args,
@@ -726,5 +790,56 @@ mod tests {
             .unwrap();
         assert!(out.is_error);
         assert!(out.text().contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn bash_background_registers_task() {
+        use crab_core::task::{TaskRegistry, TaskStatus};
+
+        let registry = Arc::new(std::sync::Mutex::new(TaskRegistry::new()));
+        let mut ctx = make_ctx();
+        ctx.task_registry = Some(Arc::clone(&registry));
+
+        let tool = BashTool;
+        let input = serde_json::json!({
+            "command": "echo hello",
+            "run_in_background": true
+        });
+        let out = tool.execute(input, &ctx).await.unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("started in the background"));
+
+        // Extract task_id from the response.
+        let text = out.text();
+        let task_id = text
+            .split("Task ")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .unwrap();
+        assert!(task_id.starts_with('b'));
+
+        // Wait a bit for the background task to finish.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let reg = registry.lock().unwrap();
+        let entry = reg.get(task_id).unwrap();
+        assert!(
+            entry.status == TaskStatus::Completed || entry.status == TaskStatus::Running,
+            "unexpected status: {:?}",
+            entry.status
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_background_no_registry_is_error() {
+        let ctx = make_ctx(); // task_registry is None
+        let tool = BashTool;
+        let input = serde_json::json!({
+            "command": "echo hello",
+            "run_in_background": true
+        });
+        let out = tool.execute(input, &ctx).await.unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("task registry"));
     }
 }
