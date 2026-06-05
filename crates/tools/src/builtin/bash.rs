@@ -115,6 +115,21 @@ fn shell_invocation(command: String) -> Option<(String, Vec<String>)> {
     Some((shell.clone(), vec!["-c".to_owned(), command]))
 }
 
+/// Combine stdout and stderr from a process output into a single string.
+fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
+    let mut combined = String::new();
+    if !output.stdout.is_empty() {
+        combined.push_str(&output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        if !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(&output.stderr);
+    }
+    combined
+}
+
 pub struct BashTool;
 
 impl Tool for BashTool {
@@ -195,6 +210,13 @@ impl Tool for BashTool {
                     return Ok(ToolOutput::error("task ID collision — retry"));
                 }
 
+                // Set up an output file for TaskOutputTool to read later.
+                let output_path = std::env::temp_dir().join(format!("crab-task-{task_id}.output"));
+                let output_path_str = output_path.to_string_lossy().to_string();
+                reg.lock()
+                    .expect("task registry lock")
+                    .set_output_path(&task_id, output_path_str);
+
                 // Spawn the command as a detached tokio task.
                 let task_id_spawn = task_id.clone();
                 let reg_spawn = Arc::clone(&reg);
@@ -217,12 +239,16 @@ impl Tool for BashTool {
 
                     let result = run(opts).await;
 
+                    // Write combined output to the file.
                     let mut reg = reg_spawn.lock().expect("task registry lock");
                     match result {
                         Ok(output) => {
+                            let combined = format_output(&output);
+                            let _ = std::fs::write(&output_path, &combined);
                             reg.set_exit_code(&task_id_spawn, output.exit_code);
                         }
                         Err(e) => {
+                            let _ = std::fs::write(&output_path, e.to_string());
                             reg.set_error(&task_id_spawn, e.to_string());
                         }
                     }
@@ -246,18 +272,7 @@ impl Tool for BashTool {
             };
 
             let output = run(opts).await?;
-
-            // Combine stdout and stderr
-            let mut combined = String::new();
-            if !output.stdout.is_empty() {
-                combined.push_str(&output.stdout);
-            }
-            if !output.stderr.is_empty() {
-                if !combined.is_empty() && !combined.ends_with('\n') {
-                    combined.push('\n');
-                }
-                combined.push_str(&output.stderr);
-            }
+            let combined = format_output(&output);
 
             if output.timed_out {
                 return Ok(ToolOutput::error(format!("Command timed out\n{combined}")));
