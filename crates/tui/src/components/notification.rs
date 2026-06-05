@@ -442,9 +442,9 @@ impl ProgressIndicator {
         self.active = false;
     }
 
-    /// Advance spinner frame (call on tick).
+    /// Advance spinner frame (call on tick). Skips when reduced motion is active.
     pub fn tick(&mut self) {
-        if self.active && self.progress.is_none() {
+        if self.active && self.progress.is_none() && !crate::motion::prefers_reduced_motion() {
             self.frame = (self.frame + 1) % PROGRESS_FRAMES.len();
         }
     }

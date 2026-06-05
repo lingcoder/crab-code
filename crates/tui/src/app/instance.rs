@@ -2581,7 +2581,7 @@ mod tests {
         let home = dir.path();
         // Write a permanent Allow rule to disk.
         let path = PermissionRuleSet::global_path(home);
-        let mut set = PermissionRuleSet::new(path.clone());
+        let mut set = PermissionRuleSet::new(path);
         set.add_rule(StoredPermissionRule {
             tool_pattern: "Bash:git".to_string(),
             verdict: RuleVerdict::Allow,

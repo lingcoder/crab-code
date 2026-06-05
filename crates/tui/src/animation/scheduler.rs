@@ -85,8 +85,12 @@ impl FrameScheduler {
     }
 
     /// Advance the animation clock if due; returns `true` when callers
-    /// should issue a redraw.
+    /// should issue a redraw. Returns `false` when reduced motion is active
+    /// (freezes all frame-driven animations).
     pub fn tick(&self, now: Instant) -> bool {
+        if crate::motion::prefers_reduced_motion() {
+            return false;
+        }
         if !self.should_tick(now) {
             return false;
         }

@@ -41,6 +41,9 @@ pub struct TuiConfig {
     pub prefill: Option<String>,
     /// Open the resume picker once the session list is ready (bare `--resume`).
     pub open_resume_picker: bool,
+    /// Disable spinner animations and shimmer effects (from
+    /// `prefers_reduced_motion` in config.toml).
+    pub prefers_reduced_motion: bool,
 }
 
 /// Run the interactive TUI REPL. This is the main entry point for interactive mode.
@@ -143,6 +146,7 @@ mod tests {
             settings_warnings: vec![],
             prefill: None,
             open_resume_picker: false,
+            prefers_reduced_motion: false,
         };
         assert_eq!(config.session_config.session_id, "test");
         assert!(config.skill_dirs.is_empty());

@@ -79,6 +79,7 @@ pub struct Config {
     pub theme: Option<String>,
     pub language: Option<String>,
     pub output_style: Option<String>,
+    pub prefers_reduced_motion: Option<bool>,
 
     // ── Git ──
     pub git_context: Option<GitContextConfig>,

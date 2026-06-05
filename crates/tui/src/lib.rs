@@ -18,6 +18,7 @@ pub mod insert_history;
 pub mod keybindings;
 pub mod layout;
 pub mod markdown;
+pub mod motion;
 pub mod overlay;
 pub mod runner;
 pub mod terminal_detection;

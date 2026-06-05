@@ -82,6 +82,10 @@ impl CallCard<'_> {
         }
         let glyph = match (self.status, self.spinner_glyph) {
             (CallCardStatus::Running, Some(s)) => s.to_string(),
+            (CallCardStatus::Running, None) if crate::motion::prefers_reduced_motion() => {
+                // Static glyph — no animation.
+                "\u{25cc}".to_string() // dotted circle (U+25CC)
+            }
             (CallCardStatus::Running, None) => Spinner::braille()
                 .frame_at(std::time::Instant::now())
                 .to_string(),

@@ -558,6 +558,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 settings_warnings,
                 prefill: cli.prefill.clone(),
                 open_resume_picker,
+                prefers_reduced_motion: settings.prefers_reduced_motion.unwrap_or(false),
             };
             let exit_info = crab_tui::run(tui_config).await?;
             print_exit_info(&exit_info);

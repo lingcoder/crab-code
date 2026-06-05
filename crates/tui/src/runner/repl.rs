@@ -678,6 +678,9 @@ fn reload_settings(app: &mut App, rt: Option<&mut AgentRuntime>) -> Vec<String> 
                     rt.tool_ctx_mut().permission_mode = mode;
                 }
             }
+            if let Some(prefers) = settings.prefers_reduced_motion {
+                crate::motion::set(prefers);
+            }
             errors
                 .into_iter()
                 .map(|e| format!("{}: {}", e.field, e.message))

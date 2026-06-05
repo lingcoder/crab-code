@@ -113,6 +113,10 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
     // "always allow" decisions survive across sessions.
     app.init_persistent_permissions(&crab_utils::path::home_dir());
 
+    // Set the global reduced-motion preference so all animation sites can
+    // check it without threading a flag through the component tree.
+    crate::motion::set(config.prefers_reduced_motion);
+
     // Slash command tab completion is set up in run_loop() once the
     // CommandRegistry is constructed, so it stays in sync automatically.
 

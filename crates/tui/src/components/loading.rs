@@ -70,9 +70,9 @@ impl LoadingOverlay {
         self.message = message.into();
     }
 
-    /// Advance the spinner animation.
+    /// Advance the spinner animation. Skips when reduced motion is active.
     pub fn tick(&mut self) {
-        if self.visible {
+        if self.visible && !crate::motion::prefers_reduced_motion() {
             self.frame = (self.frame + 1) % SPINNER_FRAMES.len();
         }
     }
@@ -270,9 +270,9 @@ impl ThinkingAnimation {
         self.active
     }
 
-    /// Advance to the next frame.
+    /// Advance to the next frame. Skips when reduced motion is active.
     pub fn tick(&mut self) {
-        if self.active {
+        if self.active && !crate::motion::prefers_reduced_motion() {
             self.frame = (self.frame + 1) % (self.max_dots + 1);
         }
     }

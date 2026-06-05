@@ -331,8 +331,9 @@ impl Spinner {
     }
 
     /// Advance to the next animation frame. Call on each Tick event.
+    /// Skips frame/shimmer advancement when reduced motion is active.
     pub fn tick(&mut self) {
-        if self.active {
+        if self.active && !crate::motion::prefers_reduced_motion() {
             self.frame = (self.frame + 1) % FRAMES.len();
             self.tick += 1;
         }
@@ -417,8 +418,7 @@ impl Widget for &Spinner {
 
         let frame_char = FRAMES[self.frame];
         let msg = self.message();
-        let msg_chars: Vec<char> = msg.chars().collect();
-        let glimmer_pos = shimmer_index(self.tick, msg_chars.len(), 4);
+        let reduced = crate::motion::prefers_reduced_motion();
 
         // Build styled spans for the message with shimmer effect
         let mut spans = vec![
@@ -426,22 +426,26 @@ impl Widget for &Spinner {
             Span::raw(" "),
         ];
 
-        // Render each character of the message with shimmer
-        for (i, ch) in msg_chars.iter().enumerate() {
-            let dist = (i32::try_from(i).unwrap_or(0) - glimmer_pos).abs();
-            let style = if dist == 0 {
-                // Shimmer highlight: bright + bold
-                Style::default()
-                    .fg(self.shimmer_color)
-                    .add_modifier(Modifier::BOLD)
-            } else if dist <= 2 {
-                // Near shimmer: slightly brighter
-                Style::default().fg(Color::Gray)
-            } else {
-                // Normal: dim
-                Style::default().fg(Color::DarkGray)
-            };
-            spans.push(Span::styled(ch.to_string(), style));
+        if reduced {
+            // Reduced motion: flat dim styling, no shimmer sweep.
+            spans.push(Span::styled(msg, Style::default().fg(Color::DarkGray)));
+        } else {
+            let msg_chars: Vec<char> = msg.chars().collect();
+            let glimmer_pos = shimmer_index(self.tick, msg_chars.len(), 4);
+
+            for (i, ch) in msg_chars.iter().enumerate() {
+                let dist = (i32::try_from(i).unwrap_or(0) - glimmer_pos).abs();
+                let style = if dist == 0 {
+                    Style::default()
+                        .fg(self.shimmer_color)
+                        .add_modifier(Modifier::BOLD)
+                } else if dist <= 2 {
+                    Style::default().fg(Color::Gray)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                spans.push(Span::styled(ch.to_string(), style));
+            }
         }
 
         let line = Line::from(spans);
