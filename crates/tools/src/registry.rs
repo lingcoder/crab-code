@@ -34,6 +34,18 @@ impl ToolRegistry {
         self.tools.insert(canonical_name, tool);
     }
 
+    /// Register an alias for an already-registered tool. The alias name
+    /// maps to the same `Arc<dyn Tool>` instance. Returns `false` if the
+    /// canonical tool is not found.
+    pub fn register_alias(&mut self, canonical_name: &str, alias: &str) -> bool {
+        if let Some(tool) = self.tools.get(canonical_name).cloned() {
+            self.tools.insert(alias.to_string(), tool);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Look up a tool by name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {

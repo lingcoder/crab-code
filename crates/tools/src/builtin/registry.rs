@@ -62,6 +62,10 @@ pub fn register_all_builtins(
     registry.register(Arc::new(team::SendMessageTool));
     registry.register(Arc::new(task::TaskStopTool));
     registry.register(Arc::new(task::TaskOutputTool));
+    // ccb-compatible aliases
+    registry.register_alias("TaskStop", "KillShell");
+    registry.register_alias("TaskOutput", "BashOutput");
+    registry.register_alias("TaskOutput", "AgentOutput");
 
     let cron_store = cron::shared_cron_store();
     registry.register(Arc::new(cron::CronCreateTool::new(Arc::clone(&cron_store))));
@@ -191,7 +195,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 45 } else { 44 };
+        let mut expected = if ps_enabled { 48 } else { 47 };
         if is_computer_use_available() {
             expected += 1;
         }
@@ -206,7 +210,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 45 } else { 44 };
+        let mut expected = if ps_enabled { 48 } else { 47 };
         if is_computer_use_available() {
             expected += 1;
         }

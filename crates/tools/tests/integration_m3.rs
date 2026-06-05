@@ -576,7 +576,7 @@ fn expected_builtin_count() -> usize {
     let cu_enabled = cfg!(windows)
         || std::env::var("DISPLAY").is_ok()
         || std::env::var("WAYLAND_DISPLAY").is_ok();
-    let mut count = 44;
+    let mut count = 47;
     if ps_enabled {
         count += 1;
     }
