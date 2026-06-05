@@ -821,12 +821,10 @@ mod tests {
         // Wait a bit for the background task to finish.
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let reg = registry.lock().unwrap();
-        let entry = reg.get(task_id).unwrap();
+        let status = registry.lock().unwrap().get(task_id).unwrap().status;
         assert!(
-            entry.status == TaskStatus::Completed || entry.status == TaskStatus::Running,
-            "unexpected status: {:?}",
-            entry.status
+            status == TaskStatus::Completed || status == TaskStatus::Running,
+            "unexpected status: {status:?}",
         );
     }
 

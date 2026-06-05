@@ -518,8 +518,9 @@ impl Tool for TaskStopTool {
     fn execute(
         &self,
         input: Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let task_registry = ctx.task_registry.clone();
         Box::pin(async move {
             let task_id = input
                 .get("task_id")
@@ -532,16 +533,32 @@ impl Tool for TaskStopTool {
                 return Ok(ToolOutput::error("task_id must not be empty"));
             }
 
-            let result = serde_json::json!({
-                "action": "task_stop",
-                "stopped": true,
-                "task_id": task_id,
-            });
+            let Some(reg) = task_registry else {
+                return Ok(ToolOutput::error(
+                    "no task registry available in this context",
+                ));
+            };
 
-            Ok(ToolOutput::with_content(
-                vec![ToolOutputContent::Json { value: result }],
-                false,
-            ))
+            {
+                let mut reg = reg.lock().expect("task registry lock");
+                let Some(entry) = reg.get(task_id) else {
+                    return Ok(ToolOutput::error(format!(
+                        "no task found with ID: {task_id}"
+                    )));
+                };
+
+                if entry.status.is_terminal() {
+                    return Ok(ToolOutput::error(format!(
+                        "task {task_id} is not running (status: {:?})",
+                        entry.status
+                    )));
+                }
+
+                reg.set_status(task_id, crab_core::task::TaskStatus::Killed);
+            }
+            Ok(ToolOutput::success(format!(
+                "successfully stopped task: {task_id}"
+            )))
         })
     }
 
@@ -590,8 +607,9 @@ impl Tool for TaskOutputTool {
     fn execute(
         &self,
         input: Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let task_registry = ctx.task_registry.clone();
         Box::pin(async move {
             let task_id = input
                 .get("task_id")
@@ -609,22 +627,51 @@ impl Tool for TaskOutputTool {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
 
-            let timeout = input
+            let timeout_ms = input
                 .get("timeout")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(30_000);
 
-            let result = serde_json::json!({
-                "action": "task_output",
-                "task_id": task_id,
-                "block": block,
-                "timeout_ms": timeout,
-            });
+            let Some(reg) = task_registry else {
+                return Ok(ToolOutput::error(
+                    "no task registry available in this context",
+                ));
+            };
 
-            Ok(ToolOutput::with_content(
-                vec![ToolOutputContent::Json { value: result }],
-                false,
-            ))
+            // If blocking, poll until the task reaches a terminal state.
+            if block {
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+                loop {
+                    {
+                        let r = reg.lock().expect("task registry lock");
+                        if let Some(entry) = r.get(task_id) {
+                            if entry.status.is_terminal() {
+                                return format_task_output(entry, task_id);
+                            }
+                        } else {
+                            return Ok(ToolOutput::error(format!(
+                                "no task found with ID: {task_id}"
+                            )));
+                        }
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(ToolOutput::error(format!(
+                            "timed out waiting for task {task_id}"
+                        )));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+
+            // Non-blocking: snapshot current state.
+            let r = reg.lock().expect("task registry lock");
+            match r.get(task_id) {
+                Some(entry) => format_task_output(entry, task_id),
+                None => Ok(ToolOutput::error(format!(
+                    "no task found with ID: {task_id}"
+                ))),
+            }
         })
     }
 
@@ -636,6 +683,36 @@ impl Tool for TaskOutputTool {
         let id = input["task_id"].as_str().unwrap_or("?");
         Some(format!("TaskOutput (#{id})"))
     }
+}
+
+/// Format a task registry entry as a `ToolOutput` for the LLM.
+fn format_task_output(entry: &crab_core::task::TaskEntry, task_id: &str) -> Result<ToolOutput> {
+    let mut result = serde_json::json!({
+        "task_id": task_id,
+        "task_type": entry.task_type,
+        "status": entry.status,
+        "description": entry.description,
+    });
+
+    if let Some(ref path) = entry.output_path {
+        // Read output file if it exists.
+        if let Ok(output) = std::fs::read_to_string(path) {
+            result["output"] = serde_json::Value::String(output);
+        }
+    }
+
+    if let Some(exit_code) = entry.exit_code {
+        result["exit_code"] = serde_json::json!(exit_code);
+    }
+
+    if let Some(ref error) = entry.error {
+        result["error"] = serde_json::Value::String(error.clone());
+    }
+
+    Ok(ToolOutput::with_content(
+        vec![ToolOutputContent::Json { value: result }],
+        false,
+    ))
 }
 
 #[cfg(test)]
@@ -768,19 +845,30 @@ mod tests {
 
     #[tokio::test]
     async fn task_stop_basic() {
-        let ctx = test_ctx();
+        use crab_core::task::{TaskEntry, TaskRegistry, TaskStatus, TaskType};
+        use std::sync::{Arc, Mutex};
+
+        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
+        registry.lock().unwrap().register(TaskEntry::new(
+            "task_42".into(),
+            TaskType::LocalBash,
+            "test cmd".into(),
+        ));
+        registry
+            .lock()
+            .unwrap()
+            .set_status("task_42", TaskStatus::Running);
+
+        let mut ctx = test_ctx();
+        ctx.task_registry = Some(Arc::clone(&registry));
+
         let input = serde_json::json!({"task_id": "task_42"});
         let output = TaskStopTool.execute(input, &ctx).await.unwrap();
         assert!(!output.is_error);
+        assert!(output.text().contains("successfully stopped"));
 
-        match &output.content[0] {
-            ToolOutputContent::Json { value } => {
-                assert_eq!(value["action"], "task_stop");
-                assert_eq!(value["stopped"], true);
-                assert_eq!(value["task_id"], "task_42");
-            }
-            _ => panic!("expected JSON output"),
-        }
+        let entry = registry.lock().unwrap().get("task_42").unwrap().status;
+        assert_eq!(entry, TaskStatus::Killed);
     }
 
     #[tokio::test]
@@ -821,25 +909,39 @@ mod tests {
 
     #[tokio::test]
     async fn task_output_basic() {
-        let ctx = test_ctx();
-        let input = serde_json::json!({"task_id": "task_42"});
+        use crab_core::task::{TaskEntry, TaskRegistry, TaskType};
+        use std::sync::{Arc, Mutex};
+
+        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
+        registry.lock().unwrap().register(TaskEntry::new(
+            "task_42".into(),
+            TaskType::LocalBash,
+            "test".into(),
+        ));
+
+        let mut ctx = test_ctx();
+        ctx.task_registry = Some(Arc::clone(&registry));
+
+        let input = serde_json::json!({"task_id": "task_42", "block": false});
         let output = TaskOutputTool.execute(input, &ctx).await.unwrap();
         assert!(!output.is_error);
-
-        match &output.content[0] {
-            ToolOutputContent::Json { value } => {
-                assert_eq!(value["action"], "task_output");
-                assert_eq!(value["task_id"], "task_42");
-                assert_eq!(value["block"], true);
-                assert_eq!(value["timeout_ms"], 30000);
-            }
-            _ => panic!("expected JSON output"),
-        }
     }
 
     #[tokio::test]
     async fn task_output_custom_params() {
-        let ctx = test_ctx();
+        use crab_core::task::{TaskEntry, TaskRegistry, TaskType};
+        use std::sync::{Arc, Mutex};
+
+        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
+        registry.lock().unwrap().register(TaskEntry::new(
+            "task_7".into(),
+            TaskType::LocalBash,
+            "test".into(),
+        ));
+
+        let mut ctx = test_ctx();
+        ctx.task_registry = Some(Arc::clone(&registry));
+
         let input = serde_json::json!({
             "task_id": "task_7",
             "block": false,
@@ -847,14 +949,6 @@ mod tests {
         });
         let output = TaskOutputTool.execute(input, &ctx).await.unwrap();
         assert!(!output.is_error);
-
-        match &output.content[0] {
-            ToolOutputContent::Json { value } => {
-                assert_eq!(value["block"], false);
-                assert_eq!(value["timeout_ms"], 5000);
-            }
-            _ => panic!("expected JSON output"),
-        }
     }
 
     #[tokio::test]
