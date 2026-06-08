@@ -195,7 +195,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 48 } else { 47 };
+        let mut expected = if ps_enabled { 45 } else { 44 };
         if is_computer_use_available() {
             expected += 1;
         }
@@ -210,7 +210,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 48 } else { 47 };
+        let mut expected = if ps_enabled { 45 } else { 44 };
         if is_computer_use_available() {
             expected += 1;
         }

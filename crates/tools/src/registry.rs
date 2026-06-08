@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crab_core::tool::Tool;
@@ -10,12 +10,15 @@ use crab_core::tool::Tool;
 /// parameter for LLM requests.
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
+    /// Keys that are aliases (map to the same `Arc` as another key).
+    aliases: HashSet<String>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolRegistry")
-            .field("tool_count", &self.tools.len())
+            .field("tool_count", &(self.tools.len() - self.aliases.len()))
+            .field("alias_count", &self.aliases.len())
             .finish()
     }
 }
@@ -25,12 +28,14 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            aliases: HashSet::new(),
         }
     }
 
     /// Register a tool. Overwrites any existing tool with the same name.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         let canonical_name = tool.name().to_string();
+        self.aliases.remove(&canonical_name);
         self.tools.insert(canonical_name, tool);
     }
 
@@ -40,6 +45,7 @@ impl ToolRegistry {
     pub fn register_alias(&mut self, canonical_name: &str, alias: &str) -> bool {
         if let Some(tool) = self.tools.get(canonical_name).cloned() {
             self.tools.insert(alias.to_string(), tool);
+            self.aliases.insert(alias.to_string());
             true
         } else {
             false
@@ -52,28 +58,41 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
-    /// Number of registered tools.
+    /// Number of registered tools (excludes aliases).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.tools.len() - self.aliases.len()
     }
 
-    /// Whether the registry is empty.
+    /// Whether the registry is empty (excludes aliases).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.len() == 0
     }
 
     /// Get all registered tools as a list of `Arc<dyn Tool>`.
+    ///
+    /// Excludes aliases to avoid duplicate tool names in API requests.
     #[must_use]
     pub fn all_tools(&self) -> Vec<Arc<dyn Tool>> {
-        self.tools.values().cloned().collect()
+        self.tools
+            .iter()
+            .filter(|(name, _)| !self.aliases.contains(*name))
+            .map(|(_, tool)| tool.clone())
+            .collect()
     }
 
     /// List all registered tool names (sorted for deterministic output).
+    ///
+    /// Excludes aliases.
     #[must_use]
     pub fn tool_names(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
+        let mut names: Vec<&str> = self
+            .tools
+            .keys()
+            .filter(|name| !self.aliases.contains(name.as_str()))
+            .map(String::as_str)
+            .collect();
         names.sort_unstable();
         names
     }
@@ -82,13 +101,14 @@ impl ToolRegistry {
     ///
     /// Each entry contains `name`, `description`, and `input_schema` fields.
     /// Use `schema::to_api_tools()` to convert these to the format expected
-    /// by the LLM API.
+    /// by the LLM API. Excludes aliases.
     #[must_use]
     pub fn tool_schemas(&self) -> Vec<serde_json::Value> {
         let mut schemas: Vec<_> = self
             .tools
-            .values()
-            .map(|t| {
+            .iter()
+            .filter(|(name, _)| !self.aliases.contains(*name))
+            .map(|(_, t)| {
                 serde_json::json!({
                     "name": t.name(),
                     "description": t.description(),
@@ -278,5 +298,44 @@ mod tests {
         assert!(reg.get("a").is_some());
         assert!(reg.get("b").is_none());
         assert!(reg.get("c").is_some());
+    }
+
+    #[test]
+    fn alias_not_in_all_tools() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool {
+            tool_name: "canonical",
+        }));
+        assert!(reg.register_alias("canonical", "alias"));
+        let names: Vec<_> = reg
+            .all_tools()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0], "canonical");
+    }
+
+    #[test]
+    fn alias_not_in_tool_schemas() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool {
+            tool_name: "canonical",
+        }));
+        assert!(reg.register_alias("canonical", "alias"));
+        let schemas = reg.tool_schemas();
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0]["name"], "canonical");
+    }
+
+    #[test]
+    fn alias_lookup_still_works() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DummyTool {
+            tool_name: "canonical",
+        }));
+        assert!(reg.register_alias("canonical", "alias"));
+        assert!(reg.get("alias").is_some());
+        assert_eq!(reg.get("alias").unwrap().name(), "canonical");
     }
 }
