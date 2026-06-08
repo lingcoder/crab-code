@@ -206,6 +206,8 @@ pub fn sse_event_to_stream_event(event: AnthropicSseEvent) -> Option<StreamEvent
                 index,
                 delta: thinking,
             }),
+            // Signature is metadata for extended thinking replay; no content to emit.
+            AnthropicDelta::SignatureDelta { .. } => None,
         },
         AnthropicSseEvent::ContentBlockStop { index } => {
             Some(StreamEvent::ContentBlockStop { index })

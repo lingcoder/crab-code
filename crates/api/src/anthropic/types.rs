@@ -165,9 +165,20 @@ pub struct AnthropicContentBlockInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicDelta {
-    TextDelta { text: String },
-    InputJsonDelta { partial_json: String },
-    ThinkingDelta { thinking: String },
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
+    /// Signature delta for extended thinking blocks. Contains a cryptographic
+    /// signature that the API requires when replaying thinking content.
+    SignatureDelta {
+        signature: String,
+    },
 }
 
 /// Message delta body.
