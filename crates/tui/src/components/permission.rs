@@ -1508,7 +1508,7 @@ mod tests {
         assert_eq!(card.kind.title(), "Edit notebook");
     }
 
-    // ── Phase 1: Enhanced rendering tests ──
+    // ── Enhanced rendering tests ──
 
     #[test]
     fn bash_multiline_command_shows_dollar_prefix() {

@@ -662,7 +662,7 @@ fn handle_onboarding_key(state: &mut OnboardingState, key: KeyEvent) -> OverlayA
 }
 
 // ---------------------------------------------------------------------------
-// Render helpers — lightweight placeholder renders; full styling comes in Phase 4
+// Render helpers — lightweight placeholder renders
 // ---------------------------------------------------------------------------
 
 fn render_scrollable(title: &str, _scroll: usize, area: Rect, buf: &mut Buffer) {

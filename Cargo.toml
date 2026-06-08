@@ -14,12 +14,12 @@ categories = ["command-line-utilities", "development-tools"]
 description = "Rust-native agentic coding CLI — open-source alternative to Claude Code"
 
 [workspace.dependencies]
-# ─── 异步运行时 ───
+# ─── Async Runtime ───
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 
-# ─── 序列化 ───
+# ─── Serialization ───
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
@@ -47,16 +47,16 @@ tui-logger = "0.18"
 color-eyre = "0.6"
 supports-hyperlinks = "3"
 
-# ─── 错误处理 ───
+# ─── Error Handling ───
 thiserror = "2"
 anyhow = "1"
 
-# ─── 日志/追踪 ───
+# ─── Logging / Tracing ───
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
-# ─── 文件系统 ───
+# ─── File System ───
 globset = "0.4"
 similar = "3"
 regex = "1"
@@ -68,21 +68,21 @@ grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 
-# ─── 代码渲染 ───
+# ─── Code Rendering ───
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 pulldown-cmark = "0.13"
 
-# ─── 系统 ───
+# ─── System ───
 sysinfo = "0.39"
 directories = "6"
 libc = "0.2"
 
-# ─── 认证 ───
+# ─── Auth ───
 keyring = "4"
 keyring-core = "1"
 oauth2 = "5"
 
-# ─── 可观测性 ───
+# ─── Observability ───
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"
@@ -92,13 +92,13 @@ tracing-opentelemetry = "0.33"
 tokio-tungstenite = "0.29"
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
-# ─── WASM 插件 ───
+# ─── WASM Plugin ───
 wasmtime = "45"
 
-# ─── 进程 ───
+# ─── Process ───
 portable-pty = "0.9"
 
-# ─── 编码与加密 ───
+# ─── Encoding & Crypto ───
 base64 = "0.22"
 sha2 = "0.11"
 rand = "0.10"
@@ -106,13 +106,13 @@ rand = "0.10"
 # ─── PDF ───
 pdf_oxide = "0.3"
 
-# ─── 图像 ───
+# ─── Image ───
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
-# ─── 版本管理 ───
+# ─── Versioning ───
 semver = "1"
 
-# ─── 杂项 ───
+# ─── Misc ───
 uuid = { version = "1", features = ["v4"] }
 ulid = "1"
 lru = "0.18"
@@ -125,17 +125,15 @@ toml_edit = "0.25"
 schemars = "1"
 nucleo-matcher = "0.3"
 
-# ─── remote / sandbox / jobs 所需 ───
+# ─── Remote / Sandbox / Jobs ───
 # rust_crypto: pure-rust HMAC/RSA backend; avoids cmake + aws_lc_rs build deps
 # across Windows / Linux CI.
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
 agent-client-protocol = "0.14"
 async-trait = "0.1"
-# ─── Phase 7-auth：MCP OAuth 打开浏览器 + URL 编码 ───
 webbrowser = "1"
 urlencoding = "2"
-# ─── Phase 7 foundation：binary sniff + shell expand ───
 infer = "0.19"
 shellexpand = "3"
 axum = { version = "0.8", features = ["ws"] }
@@ -143,17 +141,15 @@ croner = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # Linux-only process sandbox
 landlock = "0.4"
-# Deferred external deps for computer_use (declared here so Phase 4 doesn't touch workspace)
-# Note: `screenshots` crate is deprecated in favor of `xcap`; using xcap instead.
 xcap = "0.9"
 enigo = "0.6"
 
-# ─── 测试 ───
+# ─── Testing ───
 tempfile = "3"
 wat = "1"
 vt100 = "0.16"
 
-# ─── 内部 crate ───
+# ─── Internal Crates ───
 crab-utils = { path = "crates/utils" }
 crab-core = { path = "crates/core" }
 crab-config = { path = "crates/config" }

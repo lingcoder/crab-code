@@ -205,15 +205,15 @@ pub async fn execute_command_hook(
 ///
 /// Expands the prompt template with event data and returns the expanded
 /// prompt as the hook result. The actual sub-agent spawning is handled
-/// by the agent layer (Phase 9); this function prepares the prompt.
+/// by the agent layer; this function prepares the prompt.
 pub async fn execute_agent_hook(
     hook: &AgentHook,
     event_json: &serde_json::Value,
 ) -> crab_core::Result<HookResult> {
     let expanded_prompt = expand_template(&hook.prompt_template, event_json);
 
-    // For now, return the expanded prompt as stdout. The agent orchestrator
-    // (Phase 9: Swarm/Team) will use this to spawn a sub-agent.
+    // Return the expanded prompt as stdout. The agent orchestrator
+    // will use this to spawn a sub-agent.
     Ok(HookResult::success(format!(
         "[agent:{}] {}",
         hook.agent_type, expanded_prompt

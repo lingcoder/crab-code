@@ -127,7 +127,7 @@ pub trait Tool: Send + Sync {
         self.interrupt_behavior() == InterruptBehavior::Cancel
     }
 
-    // ── Rendering hooks (Phase 1.5) ─────────────────────────────────
+    // ── Rendering hooks ─────────────────────────────────────────────
     //
     // All have default implementations so existing tools don't break.
     // Override in individual tool impls for customized TUI display.

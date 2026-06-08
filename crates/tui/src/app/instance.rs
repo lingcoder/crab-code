@@ -531,7 +531,7 @@ impl App {
 
     /// Render the full app into a ratatui frame.
     ///
-    /// Delegates to `Renderable` components (Phase 1 refactor).
+    /// Delegates to `Renderable` components.
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         #[allow(clippy::cast_possible_truncation)]
         let layout = AppLayout::compute_with_sidebar(
@@ -1533,7 +1533,7 @@ mod tests {
         assert_ne!(AppAction::Quit, AppAction::None);
     }
 
-    // ── New Phase 2 tests ──
+    // ── Sidebar tests ──
 
     #[test]
     fn ctrl_b_toggles_sidebar() {

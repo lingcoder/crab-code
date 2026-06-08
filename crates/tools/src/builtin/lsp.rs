@@ -1,6 +1,6 @@
 //! LSP (Language Server Protocol) tool stub.
 //!
-//! Phase 1: returns stub responses. Real LSP client integration is TODO.
+//! Returns stub responses. Real LSP client integration is TODO.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -9,7 +9,7 @@ use crab_core::Result;
 use crab_core::tool::{CollapsedGroupLabel, Tool, ToolContext, ToolDisplayResult, ToolOutput};
 use serde_json::Value;
 
-/// LSP operations tool — stub for Phase 1.
+/// LSP operations tool (stub).
 pub const LSP_TOOL_NAME: &str = "LSP";
 
 pub struct LspTool;

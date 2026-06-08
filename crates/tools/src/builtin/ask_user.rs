@@ -86,9 +86,9 @@ impl Tool for AskUserQuestionTool {
             // input handler and block until the user responds.
             let formatted = format_question(&question, &options, multi_select);
 
-            // TODO: In Phase 2, integrate with the TUI event loop to actually
-            // prompt the user and capture their response. For now, return the
-            // formatted question as the output.
+            // TODO: Integrate with the TUI event loop to actually prompt the
+            // user and capture their response. For now, return the formatted
+            // question as the output.
             Ok(ToolOutput::success(formatted))
         })
     }

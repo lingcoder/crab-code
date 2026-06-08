@@ -72,9 +72,8 @@ impl ElicitationResponse {
 ///
 /// Returns `todo!()` — will be wired to the TUI prompt system.
 pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse {
-    // In non-interactive mode (or until TUI integration in Phase 11),
-    // auto-deny elicitation requests. The TUI will override this
-    // with a real prompt dialog.
+    // In non-interactive mode, auto-deny elicitation requests.
+    // The TUI will override this with a real prompt dialog.
     tracing::info!(
         server = %req.server_name,
         message = %req.message,

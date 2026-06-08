@@ -52,7 +52,7 @@ pub fn config_dir(cli_config_dir: Option<&Path>, env: &HashMap<String, String>) 
 /// then chain the `with_*` setters before passing to [`resolve`].
 #[derive(Debug, Clone)]
 pub struct ResolveContext {
-    /// User-level config root (defaults to `~/.crab/`). Phase 5 will route
+    /// User-level config root (defaults to `~/.crab/`). Routes
     /// `CRAB_CONFIG_DIR` and `--config-dir` through this field.
     pub config_dir: PathBuf,
     /// Optional project root. When set, `<project_dir>/.crab/config.toml`
@@ -60,12 +60,10 @@ pub struct ResolveContext {
     pub project_dir: Option<PathBuf>,
     /// Whole-file CLI override (`--config <path>`). Highest file-layer slot.
     pub cli_config_file: Option<PathBuf>,
-    /// Captured environment for the runtime layer. Phase 5 reads it; Phase 3
-    /// keeps it empty by default. Tests inject a fake map.
+    /// Captured environment for the runtime layer. Tests inject a fake map.
     pub env: HashMap<String, String>,
-    /// CLI flag overrides for the runtime layer. Phase 5 introduces a real
-    /// `CliFlags` struct; Phase 3 carries the raw `toml::Value` produced by
-    /// the future flag parser, defaulting to an empty table.
+    /// CLI flag overrides for the runtime layer. Carries the raw
+    /// `toml::Value` produced by the flag parser, defaulting to an empty table.
     pub flags: CliFlags,
     /// Restrict which file-layer sources participate. `None` means all.
     pub sources_filter: Option<Vec<ConfigLayer>>,
@@ -189,8 +187,7 @@ impl Default for ResolveContext {
 /// ```
 ///
 /// Each file source is graceful: a missing file is skipped, a malformed
-/// file currently surfaces as an error (Phase 8 will downgrade parse
-/// failures to a warning per `docs/config-design.md` §10.1).
+/// file surfaces as an error (see `docs/config-design.md` §10.1).
 pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     let mut value = defaults_as_value()?;
 
@@ -206,7 +203,7 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
         }
     }
 
-    // Runtime layer: env first, then CLI flags. Both stubbed in Phase 3.
+    // Runtime layer: env first, then CLI flags.
     let mut runtime = Value::Table(Table::new());
     merge_toml_values(&mut runtime, env_to_value(&ctx.env)?);
     merge_toml_values(&mut runtime, cli_flags_to_value(&ctx.flags)?);

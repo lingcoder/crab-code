@@ -60,7 +60,7 @@ pub struct SessionConfig {
     /// Connect to IDE extension.
     pub ide_connect: bool,
 
-    // ─── Coordinator Mode gating (Phase 1) ───
+    // ─── Coordinator Mode gating ───
     /// Enable Layer 2b Coordinator Mode (tool ACL + anti-pattern prompt overlay).
     /// Gated on `CRAB_COORDINATOR_MODE=1` env only — Agent Teams, `TaskList`, and
     /// `Mailbox` are unconditional base infrastructure and do not need a flag.

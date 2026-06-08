@@ -274,6 +274,5 @@ mod tests {
     }
 
     // Note: network-dependent tests (actual multipart POST) would need a
-    // mock HTTP server (wiremock). Deferred to the Phase 7 integration
-    // test batch so unit tests stay offline + deterministic.
+    // mock HTTP server (wiremock) to keep unit tests offline + deterministic.
 }
