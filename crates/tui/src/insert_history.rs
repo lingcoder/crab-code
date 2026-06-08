@@ -266,6 +266,9 @@ impl ModifierDiff {
         if removed.contains(Modifier::CROSSED_OUT) {
             queue!(w, SetAttribute(CAttribute::NotCrossedOut))?;
         }
+        if removed.contains(Modifier::HIDDEN) {
+            queue!(w, SetAttribute(CAttribute::NoHidden))?;
+        }
         if removed.contains(Modifier::SLOW_BLINK) || removed.contains(Modifier::RAPID_BLINK) {
             queue!(w, SetAttribute(CAttribute::NoBlink))?;
         }
@@ -288,6 +291,9 @@ impl ModifierDiff {
         }
         if added.contains(Modifier::CROSSED_OUT) {
             queue!(w, SetAttribute(CAttribute::CrossedOut))?;
+        }
+        if added.contains(Modifier::HIDDEN) {
+            queue!(w, SetAttribute(CAttribute::Hidden))?;
         }
         if added.contains(Modifier::SLOW_BLINK) {
             queue!(w, SetAttribute(CAttribute::SlowBlink))?;
