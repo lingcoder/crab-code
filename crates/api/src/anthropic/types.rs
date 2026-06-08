@@ -159,6 +159,12 @@ pub struct AnthropicSseMessageStart {
 pub struct AnthropicContentBlockInfo {
     #[serde(rename = "type")]
     pub block_type: String,
+    /// Tool use ID (present when `block_type` is `"tool_use"`).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Tool name (present when `block_type` is `"tool_use"`).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Delta payload for content block.
