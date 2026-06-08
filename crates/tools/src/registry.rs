@@ -134,12 +134,15 @@ impl ToolRegistry {
         let allow_set: std::collections::HashSet<&str> = allow.iter().copied().collect();
         self.tools
             .retain(|name, _| allow_set.contains(name.as_str()));
+        self.aliases
+            .retain(|name| allow_set.contains(name.as_str()));
     }
 
     /// Remove tools whose names appear in `deny`. Unknown names are ignored.
     pub fn remove_names(&mut self, deny: &[&str]) {
         for name in deny {
             self.tools.remove(*name);
+            self.aliases.remove(*name);
         }
     }
 
