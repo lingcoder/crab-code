@@ -573,7 +573,8 @@ async fn stream_response(
             }
             StreamEvent::ContentBlockStart { .. }
             | StreamEvent::MessageDelta { .. }
-            | StreamEvent::MessageStop => {}
+            | StreamEvent::MessageStop
+            | StreamEvent::Raw { .. } => {}
         }
     }
 

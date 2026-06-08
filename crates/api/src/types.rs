@@ -76,6 +76,13 @@ pub enum StreamEvent {
     Error {
         message: String,
     },
+    /// Catch-all for provider-specific events not yet mapped to a
+    /// dedicated variant. Prevents information loss when providers add
+    /// new event types.
+    Raw {
+        event_type: String,
+        data: serde_json::Value,
+    },
 }
 
 /// Non-streaming response wrapper.
