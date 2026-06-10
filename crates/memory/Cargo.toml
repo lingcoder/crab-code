@@ -14,6 +14,7 @@ mem-ranker = ["dep:crab-api", "dep:tokio"]
 [dependencies]
 crab-utils.workspace = true
 crab-core.workspace = true
+globset.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true

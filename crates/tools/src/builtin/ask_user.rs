@@ -213,6 +213,9 @@ mod tests {
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 
@@ -231,6 +234,9 @@ mod tests {
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext,
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         };
         (ctx, channels)
     }

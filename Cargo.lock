@@ -1423,8 +1423,10 @@ name = "crab-engine"
 version = "0.1.0"
 dependencies = [
  "crab-api",
+ "crab-config",
  "crab-core",
  "crab-hooks",
+ "crab-memory",
  "crab-plugin",
  "crab-session",
  "crab-telemetry",
@@ -1519,6 +1521,7 @@ dependencies = [
  "crab-core",
  "crab-utils",
  "dunce",
+ "globset",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1584,7 +1587,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

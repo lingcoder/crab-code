@@ -219,6 +219,7 @@ mod tests {
     use super::*;
     use crab_core::permission::{PermissionMode, PermissionPolicy};
     use crab_core::tool::Tool;
+    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     fn make_ctx() -> ToolContext {
@@ -230,6 +231,9 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

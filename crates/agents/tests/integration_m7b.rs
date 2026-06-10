@@ -175,6 +175,7 @@ async fn agent_tool_produces_spawn_request() {
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
         task_registry: None,
+        nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
     let input = serde_json::json!({
@@ -296,6 +297,7 @@ async fn tool_chain_write_then_edit() {
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
         task_registry: None,
+        nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
     // Step 1: Write a file
@@ -344,6 +346,7 @@ async fn tool_chain_glob_then_read() {
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
         task_registry: None,
+        nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
     // Step 1: Glob for .rs files
@@ -388,6 +391,7 @@ async fn permission_denied_tool_blocked() {
         },
         ext: crab_core::tool::ToolContextExt::default(),
         task_registry: None,
+        nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
     let output = executor

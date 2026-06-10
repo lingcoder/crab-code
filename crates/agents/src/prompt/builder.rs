@@ -181,9 +181,13 @@ fn append_memory_context(prompt: &mut String, memories: &[MemoryFile]) {
 }
 
 /// Append AGENTS.md project instructions.
+///
+/// Walks upward from `project_dir` to the filesystem root, collecting
+/// `AGENTS.md`, `.crab/AGENTS.md`, and unconditional `.crab/rules/*.md`
+/// at each level. Closer-to-CWD files have higher priority (loaded later).
 fn append_agents_md_instructions(prompt: &mut String, project_dir: &Path) {
     let global_dir = crab_config::config::global_config_dir();
-    let agents_mds = agents_md::collect_agents_md(project_dir, &global_dir);
+    let agents_mds = agents_md::collect_agents_md_from_cwd(project_dir, &global_dir);
 
     // Best-effort gitignore maintenance for AGENTS.local.md
     let local_md = project_dir.join("AGENTS.local.md");
@@ -197,12 +201,7 @@ fn append_agents_md_instructions(prompt: &mut String, project_dir: &Path) {
 
     let _ = writeln!(prompt, "# Project Instructions (AGENTS.md)\n");
     for md in &agents_mds {
-        let source = match md.source {
-            agents_md::AgentsMdSource::Global => "global",
-            agents_md::AgentsMdSource::User => "user",
-            agents_md::AgentsMdSource::Project => "project",
-        };
-        let _ = writeln!(prompt, "<!-- source: {source} -->");
+        let _ = writeln!(prompt, "<!-- source: {} -->", md.source.label());
         let _ = writeln!(prompt, "{}", md.content);
         let _ = writeln!(prompt);
     }

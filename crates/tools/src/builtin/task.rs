@@ -848,6 +848,9 @@ mod tests {
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

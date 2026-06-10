@@ -61,6 +61,7 @@ impl Tool for WriteTool {
         let track_edit = ctx.ext.track_edit.clone();
         let read_state = ctx.ext.read_state.clone();
         let record_read = ctx.ext.record_read.clone();
+        let nested_triggers = ctx.nested_memory_triggers.clone();
         Box::pin(async move {
             let file_path = input
                 .get("file_path")
@@ -129,6 +130,11 @@ impl Tool for WriteTool {
             // Refresh the read baseline to the just-written contents so a
             // follow-up edit in the same turn is not blocked.
             super::read_gate::record_after_write(record_read.as_ref(), path);
+
+            // Trigger nested AGENTS.md discovery for this file's directory.
+            if let Ok(mut triggers) = nested_triggers.try_lock() {
+                triggers.insert(path.to_path_buf());
+            }
 
             let bytes = content.len();
             Ok(ToolOutput::success(format!(
@@ -232,6 +238,7 @@ mod tests {
     use super::*;
     use crab_core::permission::PermissionPolicy;
     use serde_json::json;
+    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     fn test_ctx() -> ToolContext {
@@ -243,6 +250,9 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

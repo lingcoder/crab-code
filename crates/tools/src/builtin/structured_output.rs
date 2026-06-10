@@ -115,6 +115,7 @@ mod tests {
     use super::*;
     use crab_core::permission::PermissionPolicy;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_ctx() -> ToolContext {
         ToolContext {
@@ -125,6 +126,9 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

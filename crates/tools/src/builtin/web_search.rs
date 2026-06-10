@@ -720,6 +720,7 @@ fn ddg_topic_to_result(topic: &Value, filter: &DomainFilter) -> Option<Value> {
 mod tests {
     use super::*;
     use crab_core::tool::ToolContext;
+    use std::sync::Arc;
 
     fn test_ctx() -> ToolContext {
         ToolContext {
@@ -730,6 +731,9 @@ mod tests {
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

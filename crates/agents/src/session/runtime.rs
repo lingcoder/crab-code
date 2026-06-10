@@ -4,6 +4,7 @@
 //! Also contains the `format_memory_section` helper used during session
 //! initialisation to inject loaded memories into the system prompt.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crab_api::LlmBackend;
@@ -14,7 +15,7 @@ use crab_memory::MemoryStore;
 use crab_session::{Conversation, CostAccumulator, FileHistory, SessionHistory};
 use crab_tools::executor::ToolExecutor;
 use crab_tools::registry::ToolRegistry;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crab_engine::{QueryConfig, query_loop};
@@ -212,6 +213,7 @@ impl AgentSession {
                 ..Default::default()
             },
             task_registry: None,
+            nested_memory_triggers: Arc::new(Mutex::new(HashSet::new())),
         };
 
         let compaction_client: Arc<dyn crab_session::CompactionClient> =

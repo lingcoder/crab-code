@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -300,6 +300,10 @@ pub struct ToolContext {
     /// no runtime is attached (e.g. unit tests).
     #[doc(hidden)]
     pub task_registry: Option<Arc<std::sync::Mutex<crate::task::TaskRegistry>>>,
+    /// Paths of files read/written during tool execution. The engine loop
+    /// checks this after each tool batch and injects nested AGENTS.md content
+    /// for directories between CWD and the accessed files.
+    pub nested_memory_triggers: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 /// File-snapshot callback for Edit/Write tools.
@@ -729,6 +733,7 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(Mutex::new(HashSet::new())),
         };
         assert_eq!(ctx.working_dir, std::path::Path::new("/tmp"));
         assert_eq!(ctx.permission_mode, PermissionMode::Default);

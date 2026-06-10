@@ -2,7 +2,9 @@
 //! `crab-tools` into the MCP server's `ToolHandler` interface so those
 //! tools are listable + callable by any connected MCP client.
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crab_core::permission::{PermissionMode, PermissionPolicy};
 use crab_core::tool::{Tool, ToolContext, ToolOutputContent};
@@ -62,6 +64,7 @@ impl ToolHandler for ToolRegistryHandler {
                 permission_policy: PermissionPolicy::default(),
                 ext: crab_core::tool::ToolContextExt::default(),
                 task_registry: None,
+                nested_memory_triggers: Arc::new(Mutex::new(HashSet::new())),
             };
 
             match tool.execute(arguments, &ctx).await {

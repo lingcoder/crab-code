@@ -142,7 +142,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 # Linux-only process sandbox
 landlock = "0.4"
 # Windows Job Object sandbox (target-gated in crab-sandbox)
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "^0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",

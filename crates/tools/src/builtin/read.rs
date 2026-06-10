@@ -188,6 +188,7 @@ impl Tool for ReadTool {
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
         let record_read = ctx.ext.record_read.clone();
+        let nested_triggers = ctx.nested_memory_triggers.clone();
         let file_path = input["file_path"].as_str().unwrap_or("").to_owned();
         // offset is 1-based line number; default 1
         #[allow(clippy::cast_possible_truncation)]
@@ -272,6 +273,11 @@ impl Tool for ReadTool {
                     .ok()
                     .and_then(|m| m.modified().ok());
                 record_read(&path, crab_core::tool::ReadRecord { mtime });
+            }
+
+            // Trigger nested AGENTS.md discovery for this file's directory.
+            if let Ok(mut triggers) = nested_triggers.try_lock() {
+                triggers.insert(path);
             }
 
             Ok(ToolOutput::success(output))
@@ -549,6 +555,7 @@ mod tests {
     use super::*;
     use crab_core::permission::{PermissionMode, PermissionPolicy};
     use serde_json::json;
+    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     fn make_ctx() -> ToolContext {
@@ -560,6 +567,9 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

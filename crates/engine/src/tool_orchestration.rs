@@ -343,6 +343,7 @@ pub fn tool_results_message(
 mod tests {
     use super::*;
     use crab_core::message::Role;
+    use std::sync::Arc;
 
     #[test]
     fn tool_results_message_builds_user_message() {
@@ -424,6 +425,9 @@ mod tests {
             },
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         };
         let (event_tx, _event_rx) = mpsc::channel(64);
         let cancel = CancellationToken::new();
@@ -481,6 +485,9 @@ mod tests {
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
             task_registry: None,
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         };
         let (event_tx, _event_rx) = mpsc::channel(64);
         let cancel = CancellationToken::new();

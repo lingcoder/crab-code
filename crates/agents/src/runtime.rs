@@ -1,6 +1,7 @@
 //! [`AgentRuntime`] — high-level facade that owns all L2 service state
 //! and exposes a minimal API for the TUI layer.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -332,6 +333,7 @@ impl AgentRuntime {
                 ..Default::default()
             },
             task_registry: Some(Arc::clone(&task_registry)),
+            nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         };
 
         let compaction_config = CompactionConfig::default();

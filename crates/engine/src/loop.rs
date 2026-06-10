@@ -1,4 +1,7 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crab_api::LlmBackend;
 use crab_api::capabilities::StreamingUsage;
@@ -14,8 +17,6 @@ use crab_session::{
     AutoCompactState, CompactionClient, CompactionConfig, CompactionMode, CompactionStrategy,
     ContextAction, ContextManager, Conversation, CostAccumulator, compact_with_config,
 };
-use std::collections::HashSet;
-use std::sync::Arc;
 
 use crab_tools::builtin::plan_mode::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
 use crab_tools::executor::ToolExecutor;
@@ -57,6 +58,9 @@ pub async fn query_loop(
     let mut compact_state = AutoCompactState::default();
     // Live model — may be swapped to a larger-context variant before compaction.
     let mut active_model: ModelId = config.model.clone();
+    // Tracks which nested AGENTS.md files have been injected this query,
+    // preventing re-injection across tool batches within the same session.
+    let mut loaded_nested_paths: HashSet<PathBuf> = HashSet::new();
     // Tokens summed across every LLM iteration of this run. We send a single
     // `Event::MessageEnd` with this total when the run truly completes, so the
     // TUI does not flicker into Idle between tool-use turns.
@@ -357,6 +361,43 @@ pub async fn query_loop(
             persister.persist_message(&result_msg);
         }
         conversation.push(result_msg);
+
+        // Inject nested AGENTS.md content for files accessed in this tool batch.
+        // File-reading tools (Read, Edit, Write) add paths to the trigger set
+        // during execution; we drain it here and collect matching instructions.
+        let triggers: Vec<PathBuf> = {
+            let mut guard = tool_ctx.nested_memory_triggers.lock().await;
+            guard.drain().collect()
+        };
+        if !triggers.is_empty() {
+            let nested = crab_memory::agents_md::collect_nested_agents_md(
+                &tool_ctx.working_dir,
+                &triggers,
+                &mut loaded_nested_paths,
+                &crab_config::config::global_config_dir(),
+            );
+            if !nested.is_empty() {
+                let mut block = String::from(
+                    "# Nested Project Instructions\n\
+                     (Loaded for files accessed in this turn)\n\n",
+                );
+                for md in &nested {
+                    use std::fmt::Write;
+                    let _ = writeln!(
+                        block,
+                        "<!-- source: {} -->\n{}\n",
+                        md.source.label(),
+                        md.content
+                    );
+                }
+                let nested_msg = Message::system(block);
+                if let Some(persister) = &config.session_persister {
+                    persister.persist_message(&nested_msg);
+                }
+                conversation.push(nested_msg);
+            }
+        }
+
         metrics.record(iter_span.finish(true));
     }
 }
