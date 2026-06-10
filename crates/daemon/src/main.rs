@@ -13,18 +13,18 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    eprintln!(
-        "crab-daemon v{} starting on port {}...",
-        env!("CARGO_PKG_VERSION"),
-        config.port,
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        port = config.port,
+        "crab-daemon starting"
     );
 
     let server = DaemonServer::new(config);
-    eprintln!(
-        "status={} sessions={} uptime={}s",
-        server.status().await,
-        server.session_count().await,
-        server.uptime().as_secs(),
+    tracing::info!(
+        status = %server.status().await,
+        sessions = server.session_count().await,
+        uptime_secs = server.uptime().as_secs(),
+        "daemon initialized"
     );
 
     // Graceful shutdown on Ctrl+C
@@ -32,15 +32,15 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         result = server_handle.run() => {
             if let Err(e) = result {
-                eprintln!("daemon error: {e}");
+                tracing::error!(error = %e, "daemon fatal error");
                 std::process::exit(1);
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            eprintln!(
-                "\nshutting down (uptime {}s, {} sessions)...",
-                server_handle.uptime().as_secs(),
-                server_handle.session_count().await,
+            tracing::info!(
+                uptime_secs = server_handle.uptime().as_secs(),
+                sessions = server_handle.session_count().await,
+                "shutting down"
             );
             server_handle.shutdown().await;
         }

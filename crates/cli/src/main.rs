@@ -7,6 +7,7 @@ mod completions;
 mod deep_link;
 mod installer;
 mod output;
+mod repl;
 
 use clap::Parser;
 

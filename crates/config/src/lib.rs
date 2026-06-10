@@ -1,9 +1,12 @@
 pub mod config;
+pub mod effort;
 pub mod gitignore;
 pub mod hooks;
 pub mod loader;
 pub mod merge;
 pub mod migration;
+pub mod model_alias;
+pub mod permission_mode;
 pub mod plugin_loader;
 pub mod runtime;
 pub mod validation;

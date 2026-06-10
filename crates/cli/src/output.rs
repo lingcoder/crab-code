@@ -360,7 +360,10 @@ pub fn event_to_json(event: &Event) -> Option<Value> {
                 "cache_creation_tokens": usage.cache_creation_tokens,
             },
         })),
-        Event::ContextUpgraded { .. } | Event::StreamAborted { .. } => None,
+        Event::ContextUpgraded { .. }
+        | Event::StreamAborted { .. }
+        | Event::UserPromptRequest { .. }
+        | Event::UserPromptResponse { .. } => None,
     }
 }
 

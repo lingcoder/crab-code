@@ -24,7 +24,9 @@ impl AnthropicClient {
             .timeout(std::time::Duration::from_secs(300))
             .pool_max_idle_per_host(4)
             .build()
-            .expect("failed to build HTTP client");
+            .unwrap_or_else(|e| {
+                panic!("failed to build reqwest HTTP client (TLS init error): {e}")
+            });
 
         Self {
             http,

@@ -4,6 +4,8 @@
 //! a human-readable "not available" message.
 
 /// Metadata for a single window on the host desktop.
+///
+/// Dead-code suppressed: populated when platform integration (Win32/X11) is enabled.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
@@ -18,6 +20,8 @@ pub struct WindowInfo {
 }
 
 /// Position and size of a window.
+///
+/// Dead-code suppressed: part of the `WindowInfo` struct, populated by platform backends.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct WindowBounds {
@@ -32,6 +36,9 @@ pub struct WindowBounds {
 }
 
 /// Result of a window enumeration attempt.
+///
+/// Dead-code suppressed: returned by `list_windows`/`focus_window`, used
+/// when platform integration is available.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WindowListResult {
@@ -47,6 +54,10 @@ pub struct WindowListResult {
 ///
 /// Returns a [`WindowListResult`] indicating that platform integration
 /// is not yet available.
+///
+/// Dead-code suppressed: called by `ComputerUseTool` when the `list_windows`
+/// action is requested; the `#[allow]` is needed because the tool dispatches
+/// at runtime, not compile time.
 #[allow(dead_code)]
 pub fn list_windows() -> WindowListResult {
     WindowListResult {
@@ -59,6 +70,8 @@ pub fn list_windows() -> WindowListResult {
 /// Attempt to focus a specific window by its platform identifier.
 ///
 /// Returns a human-readable message about the attempt.
+///
+/// Dead-code suppressed: planned for the `focus_window` action in `ComputerUseTool`.
 #[allow(dead_code)]
 pub fn focus_window(_window_id: u64) -> WindowListResult {
     WindowListResult {

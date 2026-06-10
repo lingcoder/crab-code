@@ -68,12 +68,9 @@ impl ElicitationResponse {
 /// In interactive mode, this would display a prompt to the user and wait
 /// for their response. In non-interactive mode, it auto-denies.
 ///
-/// # Current implementation
-///
-/// Returns `todo!()` — will be wired to the TUI prompt system.
+/// A full implementation will wire this to the TUI prompt dialog and
+/// channel system. For now, non-interactive auto-denial is the default.
 pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse {
-    // In non-interactive mode, auto-deny elicitation requests.
-    // The TUI will override this with a real prompt dialog.
     tracing::info!(
         server = %req.server_name,
         message = %req.message,
@@ -84,28 +81,41 @@ pub async fn handle_elicitation(req: ElicitationRequest) -> ElicitationResponse 
     ))
 }
 
-/// Validate that a response conforms to the request's schema, if one was provided.
+/// Validate that a response conforms to the request's JSON Schema.
+///
+/// When a schema is provided and the response is approved with data,
+/// this performs full `jsonschema` validation. Returns `Ok(())` on
+/// success, or a descriptive error string with validation details.
 pub fn validate_response(
     req: &ElicitationRequest,
     resp: &ElicitationResponse,
 ) -> Result<(), String> {
-    // If no schema, any response is valid
-    let Some(ref _schema) = req.schema else {
+    let Some(ref schema) = req.schema else {
         return Ok(());
     };
 
-    // If denied, no data validation needed
     if !resp.approved {
         return Ok(());
     }
 
-    // If approved but schema expects data, check data is present
     if resp.data.is_none() && !req.is_confirmation {
         return Err("approved response requires data when schema is provided".into());
     }
 
-    // Full JSON Schema validation would use the `jsonschema` crate.
-    // For now, we just verify data is present when required.
+    let Some(ref data) = resp.data else {
+        return Ok(());
+    };
+
+    // Perform JSON Schema validation.
+    let compiled = jsonschema::validator_for(schema)
+        .map_err(|e| format!("invalid JSON Schema in elicitation request: {e}"))?;
+
+    if let Err(validation_err) = compiled.validate(data) {
+        return Err(format!(
+            "response data does not conform to schema: {validation_err}"
+        ));
+    }
+
     Ok(())
 }
 
@@ -149,5 +159,123 @@ mod tests {
         let parsed: ElicitationRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.server_name, "my-server");
         assert_eq!(parsed.request_id.as_deref(), Some("req-1"));
+    }
+
+    #[test]
+    fn validate_no_schema_always_ok() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: None,
+            request_id: None,
+            is_confirmation: false,
+        };
+        let resp = ElicitationResponse::approve(serde_json::json!(42));
+        assert!(validate_response(&req, &resp).is_ok());
+    }
+
+    #[test]
+    fn validate_denied_always_ok() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({"type": "string"})),
+            request_id: None,
+            is_confirmation: false,
+        };
+        let resp = ElicitationResponse::deny(None);
+        assert!(validate_response(&req, &resp).is_ok());
+    }
+
+    #[test]
+    fn validate_approved_without_data_fails() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({"type": "object"})),
+            request_id: None,
+            is_confirmation: false,
+        };
+        let resp = ElicitationResponse::approve(serde_json::Value::Null);
+        // Data is Null which is still Some; let's test with confirm
+        let resp2 = ElicitationResponse {
+            approved: true,
+            data: None,
+            reason: None,
+        };
+        let err = validate_response(&req, &resp2).unwrap_err();
+        assert!(err.contains("requires data"));
+    }
+
+    #[test]
+    fn validate_conforming_data_ok() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"]
+            })),
+            request_id: None,
+            is_confirmation: false,
+        };
+        let resp = ElicitationResponse::approve(serde_json::json!({"name": "Alice"}));
+        assert!(validate_response(&req, &resp).is_ok());
+    }
+
+    #[test]
+    fn validate_non_conforming_data_fails() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"]
+            })),
+            request_id: None,
+            is_confirmation: false,
+        };
+        let resp = ElicitationResponse::approve(serde_json::json!({"age": 42}));
+        let err = validate_response(&req, &resp).unwrap_err();
+        assert!(err.contains("does not conform to schema"));
+    }
+
+    #[test]
+    fn validate_confirmation_with_no_data_ok() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({"type": "object"})),
+            request_id: None,
+            is_confirmation: true,
+        };
+        let resp = ElicitationResponse {
+            approved: true,
+            data: None,
+            reason: None,
+        };
+        assert!(validate_response(&req, &resp).is_ok());
+    }
+
+    #[test]
+    fn validate_string_schema() {
+        let req = ElicitationRequest {
+            server_name: "s".into(),
+            message: "m".into(),
+            schema: Some(serde_json::json!({"type": "string"})),
+            request_id: None,
+            is_confirmation: false,
+        };
+        let ok = ElicitationResponse::approve(serde_json::json!("hello"));
+        assert!(validate_response(&req, &ok).is_ok());
+
+        let bad = ElicitationResponse::approve(serde_json::json!(42));
+        assert!(validate_response(&req, &bad).is_err());
     }
 }

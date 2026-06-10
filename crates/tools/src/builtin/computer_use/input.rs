@@ -4,6 +4,9 @@
 //! a human-readable "not available" message.
 
 /// The kind of input event to simulate.
+///
+/// Dead-code suppressed: variants are matched at runtime in `simulate_input`
+/// and `ComputerUseTool::execute`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
@@ -18,6 +21,8 @@ pub enum InputEvent {
 }
 
 /// Mouse button identifier.
+///
+/// Dead-code suppressed: used by `InputEvent::MouseClick`, dispatched at runtime.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
@@ -30,6 +35,8 @@ pub enum MouseButton {
 }
 
 /// Result of an input simulation attempt.
+///
+/// Dead-code suppressed: returned by `simulate_input`, consumed by `ComputerUseTool`.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct InputResult {
@@ -43,6 +50,8 @@ pub struct InputResult {
 ///
 /// Returns an [`InputResult`] indicating that platform integration is
 /// not yet available.
+///
+/// Dead-code suppressed: called by `ComputerUseTool` via runtime dispatch.
 #[allow(dead_code)]
 pub fn simulate_input(event: &InputEvent) -> InputResult {
     let detail = match event {

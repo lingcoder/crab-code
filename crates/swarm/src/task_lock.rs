@@ -6,20 +6,20 @@
 //! teammates could race on `claim_task` and each believe they own the same
 //! [`Task`]. This module serialises those claims through an OS file lock.
 //!
-//! Uses [`crab_fs::lock`] (cross-platform flock/LockFileEx wrapper) — the library
+//! Uses [`crab_utils::lock`] (cross-platform flock/LockFileEx wrapper) — the library
 //! choice follows the "prefer existing crates" rule.
 //!
 //! # Lock protocol
 //!
 //! The task list lives at `<path>` (JSON). A sibling `<path>.lock` file
-//! holds an exclusive [`crab_fs::lock::RwLock`] write guard for the duration of
+//! holds an exclusive [`crab_utils::lock::RwLock`] write guard for the duration of
 //! every mutation. Readers use the same exclusive lock to avoid read/write
 //! races — task claiming is always a read-modify-write cycle.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
-use crab_fs::lock::RwLock;
+use crab_utils::lock::RwLock;
 
 use super::task_list::{Task, TaskList};
 

@@ -254,13 +254,19 @@ impl CircuitBreakerRetry {
     /// Get the current circuit state.
     #[must_use]
     pub fn state(&self) -> CircuitState {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.current
     }
 
     /// Record a successful request (resets the circuit).
     pub fn record_success(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.current = CircuitState::Closed;
         state.consecutive_failures = 0;
         state.opened_at = None;
@@ -268,7 +274,10 @@ impl CircuitBreakerRetry {
 
     /// Record a failed request (may trip the circuit).
     pub fn record_failure(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.consecutive_failures += 1;
         if state.consecutive_failures >= self.failure_threshold
             && state.current == CircuitState::Closed
@@ -283,7 +292,10 @@ impl CircuitBreakerRetry {
     }
 
     fn check_transition(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.current == CircuitState::Open
             && let Some(opened_at) = state.opened_at
             && opened_at.elapsed() >= self.open_duration

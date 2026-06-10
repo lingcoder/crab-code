@@ -563,7 +563,7 @@ pub struct BoundSessionPersister {
 impl SessionPersister for BoundSessionPersister {
     fn persist_message(&self, msg: &Message) {
         if let Err(e) = self.history.append_jsonl(&self.session_id, msg) {
-            eprintln!("[session] failed to persist message to JSONL: {e}");
+            tracing::error!(error = %e, session_id = %self.session_id, "failed to persist message to JSONL");
         }
     }
 }
@@ -601,14 +601,16 @@ fn quarantine_corrupt(path: &std::path::Path, err: &dyn std::fmt::Display) {
     let mut quarantined = path.as_os_str().to_owned();
     quarantined.push(format!(".corrupt-{secs}"));
     if std::fs::rename(path, PathBuf::from(quarantined)).is_ok() {
-        eprintln!(
-            "[session] quarantined corrupt session file {}: {err}",
-            path.display()
+        tracing::warn!(
+            path = %path.display(),
+            error = %err,
+            "quarantined corrupt session file"
         );
     } else {
-        eprintln!(
-            "[session] failed to read corrupt session file {}: {err}",
-            path.display()
+        tracing::error!(
+            path = %path.display(),
+            error = %err,
+            "failed to read corrupt session file"
         );
     }
 }

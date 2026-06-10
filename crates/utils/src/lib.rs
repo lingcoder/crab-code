@@ -3,5 +3,6 @@ pub mod binary_check;
 pub mod ca_certs;
 pub mod debug;
 pub mod id;
+pub mod lock;
 pub mod path;
 pub mod text;

@@ -167,7 +167,7 @@ fn write_token_file(path: &Path, body: &str) -> crab_core::Result<()> {
         })?;
     }
 
-    let mut lock = crab_fs::lock::RwLock::new(f);
+    let mut lock = crab_utils::lock::RwLock::new(f);
     let mut guard = lock
         .write()
         .map_err(|e| crab_core::Error::Other(format!("fd-lock failed: {e}")))?;

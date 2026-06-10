@@ -221,14 +221,10 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     // path also keeps deeper paths from invalidating shallower ones.
     errors.sort_by(|a, b| b.field.cmp(&a.field));
     for err in &errors {
-        eprintln!(
-            "[config] warning: schema violation at '{}': {}",
-            if err.field.is_empty() {
-                "<root>"
-            } else {
-                &err.field
-            },
-            err.message
+        tracing::warn!(
+            field = if err.field.is_empty() { "<root>" } else { &err.field },
+            error = %err.message,
+            "schema violation in config"
         );
         crate::validation::prune_invalid_field(&mut value, &err.field);
     }
@@ -296,9 +292,10 @@ fn load_toml_file(path: &Path) -> crab_core::Result<Option<Value>> {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            eprintln!(
-                "[config] warning: cannot read '{}': {e}. Skipping this layer.",
-                path.display()
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "cannot read config file, skipping layer"
             );
             return Ok(None);
         }
@@ -306,9 +303,10 @@ fn load_toml_file(path: &Path) -> crab_core::Result<Option<Value>> {
     match toml::from_str::<Value>(&text) {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
-            eprintln!(
-                "[config] warning: '{}' parse failed: {e}. Using empty layer.",
-                path.display()
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "config file parse failed, using empty layer"
             );
             Ok(None)
         }

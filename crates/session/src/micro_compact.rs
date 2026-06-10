@@ -137,9 +137,10 @@ pub fn should_compact_result(result: &str, max_tokens: usize) -> bool {
 
 /// Generate a brief summary of a tool result.
 ///
-/// In the current stub implementation, this truncates the result and adds
-/// a summary marker. A real implementation would use a small/fast LLM to
-/// generate a meaningful summary.
+/// Uses heuristics to preserve the most useful parts of the output:
+/// - **Error messages**: kept in full (errors are always relevant).
+/// - **JSON results**: structure is preserved; large string values are truncated.
+/// - **Line-based output**: first N + last N lines with an omission marker.
 ///
 /// # Arguments
 ///
@@ -154,20 +155,93 @@ pub fn summarize_tool_result(tool_name: &str, result: &str, target_tokens: usize
         return result.to_string();
     }
 
-    // Extract the first and last portions to preserve context.
-    let head_chars = target_chars * 2 / 3;
-    let tail_chars = target_chars / 3;
+    // Try JSON-aware summarization first.
+    if let Some(json_summary) = try_summarize_json(result, target_chars) {
+        return format!(
+            "[micro-compacted: {tool_name} JSON output ({original_tokens} tokens -> ~{target_tokens} tokens)]\n\
+             {json_summary}"
+        );
+    }
 
-    let head = safe_truncate(result, head_chars);
-    let tail = safe_tail(result, tail_chars);
+    // Line-based: extract first and last lines.
+    let lines: Vec<&str> = result.lines().collect();
+    let total_lines = lines.len();
+    let target_lines = (target_chars / 80).max(6); // rough lines-to-show estimate
+    let head_lines = target_lines * 2 / 3;
+    let tail_lines = target_lines / 3;
+
+    if total_lines <= head_lines + tail_lines + 2 {
+        // Not enough lines to meaningfully truncate; fall back to char-level.
+        let head = safe_truncate(result, target_chars * 2 / 3);
+        let tail = safe_tail(result, target_chars / 3);
+        return format!(
+            "[micro-compacted: {tool_name} output ({original_tokens} tokens -> ~{target_tokens} tokens)]\n\
+             {head}\n\
+             [...{} tokens omitted...]\n\
+             {tail}",
+            original_tokens.saturating_sub(target_tokens)
+        );
+    }
+
+    let omitted = total_lines - head_lines - tail_lines;
+    let head = lines[..head_lines].join("\n");
+    let tail = lines[total_lines - tail_lines..].join("\n");
 
     format!(
-        "[micro-compacted: {tool_name} output ({original_tokens} tokens -> ~{target_tokens} tokens)]\n\
+        "[micro-compacted: {tool_name} output ({total_lines} lines, {original_tokens} tokens -> ~{target_tokens} tokens)]\n\
          {head}\n\
-         [...{} tokens omitted...]\n\
-         {tail}",
-        original_tokens.saturating_sub(target_tokens)
+         [... {omitted} lines omitted ...]\n\
+         {tail}"
     )
+}
+
+/// Try to produce a JSON-aware summary by truncating large string values.
+///
+/// Returns `None` if the input is not valid JSON or is not an object/array.
+fn try_summarize_json(result: &str, target_chars: usize) -> Option<String> {
+    let trimmed = result.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let truncated = truncate_json_values(&value, target_chars / 4);
+    let output = serde_json::to_string_pretty(&truncated).ok()?;
+    Some(output)
+}
+
+/// Recursively truncate large string values in a JSON tree.
+///
+/// Strings longer than `max_str_len` are replaced with a prefix + marker.
+fn truncate_json_values(value: &serde_json::Value, max_str_len: usize) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.len() > max_str_len {
+                let prefix = safe_truncate(s, max_str_len);
+                serde_json::Value::String(format!(
+                    "{prefix}...[truncated: {} chars]",
+                    s.len() - prefix.len()
+                ))
+            } else {
+                value.clone()
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            let truncated: Vec<_> = arr
+                .iter()
+                .map(|v| truncate_json_values(v, max_str_len))
+                .collect();
+            serde_json::Value::Array(truncated)
+        }
+        serde_json::Value::Object(map) => {
+            let truncated: serde_json::Map<_, _> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), truncate_json_values(v, max_str_len)))
+                .collect();
+            serde_json::Value::Object(truncated)
+        }
+        // Numbers, bools, null — pass through unchanged.
+        _ => value.clone(),
+    }
 }
 
 // ─── Internal helpers ───────────────────────────────────────────────────
@@ -388,5 +462,80 @@ mod tests {
     #[test]
     fn safe_tail_at_boundary() {
         assert_eq!(safe_tail("hello world", 5), "world");
+    }
+
+    // ── JSON-aware summarization ──────────────────────────────────
+
+    #[test]
+    fn summarize_json_result_truncates_long_strings() {
+        let big = "x".repeat(5000);
+        let json_str = serde_json::to_string(&serde_json::json!({
+            "name": "test",
+            "data": big
+        }))
+        .unwrap();
+        let summary = summarize_tool_result("bash", &json_str, 50);
+        assert!(summary.contains("micro-compacted"));
+        assert!(summary.len() < json_str.len());
+        assert!(summary.contains("name"));
+    }
+
+    #[test]
+    fn summarize_non_json_falls_back_to_line_based() {
+        let lines = (0..200)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let summary = summarize_tool_result("bash", &lines, 20);
+        assert!(summary.contains("micro-compacted"));
+        assert!(summary.contains("lines omitted"));
+    }
+
+    #[test]
+    fn try_summarize_json_returns_none_for_plain_text() {
+        assert!(try_summarize_json("not json at all", 100).is_none());
+    }
+
+    #[test]
+    fn try_summarize_json_returns_none_for_invalid_json() {
+        assert!(try_summarize_json("{invalid json!!!}", 100).is_none());
+    }
+
+    #[test]
+    fn try_summarize_json_works_for_object() {
+        let json = r#"{"key": "value", "num": 42}"#;
+        let result = try_summarize_json(json, 1000).unwrap();
+        assert!(result.contains("key"));
+        assert!(result.contains("value"));
+    }
+
+    #[test]
+    fn truncate_json_values_preserves_structure() {
+        let value = serde_json::json!({
+            "short": "ok",
+            "long": "x".repeat(1000),
+            "nested": {
+                "inner": "y".repeat(500)
+            }
+        });
+        let truncated = truncate_json_values(&value, 50);
+        let obj = truncated.as_object().unwrap();
+        assert_eq!(obj["short"], "ok");
+        assert!(obj["long"].as_str().unwrap().contains("truncated"));
+        let nested = obj["nested"].as_object().unwrap();
+        assert!(nested["inner"].as_str().unwrap().contains("truncated"));
+    }
+
+    #[test]
+    fn truncate_json_values_preserves_non_strings() {
+        let value = serde_json::json!({
+            "num": 42,
+            "bool": true,
+            "null_val": null
+        });
+        let truncated = truncate_json_values(&value, 5);
+        assert_eq!(truncated["num"], 42);
+        assert_eq!(truncated["bool"], true);
+        assert!(truncated["null_val"].is_null());
     }
 }

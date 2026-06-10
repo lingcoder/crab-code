@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cancellation;
 pub mod capability;
 pub mod client;
+pub mod config;
 pub mod discovery;
 pub mod elicitation;
 pub mod env_expansion;

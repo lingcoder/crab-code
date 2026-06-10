@@ -88,10 +88,10 @@ impl FileHistory {
         match serde_json::to_string(&self.index) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(self.index_path(), json) {
-                    eprintln!("[file-history] index save failed: {e}");
+                    tracing::error!(error = %e, "file-history index save failed");
                 }
             }
-            Err(e) => eprintln!("[file-history] index serialize failed: {e}"),
+            Err(e) => tracing::error!(error = %e, "file-history index serialize failed"),
         }
     }
 

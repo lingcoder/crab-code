@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 /// Lifecycle state of a teammate.
+///
+/// Dead-code suppressed: the state variants are not all matched yet because
+/// the full teammate lifecycle (spawn -> run -> stop) is still being wired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum TeammateState {
@@ -32,6 +35,9 @@ impl std::fmt::Display for TeammateState {
 }
 
 /// Configuration for spawning a new teammate.
+///
+/// Dead-code suppressed: the config is constructed in tests and in the
+/// coordinator, but some fields are not yet consumed by the spawn path.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct TeammateConfig {
@@ -83,6 +89,9 @@ impl TeammateConfig {
 }
 
 /// A spawned sub-agent teammate.
+///
+/// Dead-code suppressed: the struct and its methods are wired through the
+/// coordinator but the full lifecycle is not yet complete.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Teammate {
@@ -98,6 +107,8 @@ pub struct Teammate {
     created_at: Instant,
 }
 
+/// Dead-code suppressed: the impl block is part of the planned teammate
+/// lifecycle; some methods are only called in tests today.
 #[allow(dead_code)]
 impl Teammate {
     /// Create a new teammate in the [`TeammateState::Idle`] state.

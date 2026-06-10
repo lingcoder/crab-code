@@ -16,5 +16,5 @@ pub mod worker_pool;
 pub use crab_swarm::*;
 
 pub use coordinator::{TEAM_CREATED_ACTION, TeamCoordinator};
-pub use worker::{AgentWorker, Worker, WorkerConfig, WorkerResult};
+pub use worker::{AgentWorker, WorkerConfig, WorkerResult};
 pub use worker_pool::{AgentHandle, WorkerPool};

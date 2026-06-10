@@ -141,6 +141,24 @@ pub enum Event {
         message_count: usize,
     },
 
+    // ─── User interaction ───
+    /// The `AskUserQuestion` tool is requesting input from the user.
+    ///
+    /// The UI should display the question/options and send back a
+    /// `UserPromptResponse` with the matching `request_id`.
+    UserPromptRequest {
+        request_id: String,
+        question: String,
+        options: Vec<String>,
+        multi_select: bool,
+    },
+
+    /// The user's answer to an `AskUserQuestion` prompt.
+    UserPromptResponse {
+        request_id: String,
+        response: String,
+    },
+
     // ─── Sub-agent workers ───
     /// A sub-agent worker has started.
     AgentWorkerStarted {
@@ -592,6 +610,24 @@ mod tests {
         serde_roundtrip(&Event::ThinkingDelta {
             index: 0,
             delta: "Step 1: analyze the problem".into(),
+        });
+    }
+
+    #[test]
+    fn event_serde_user_prompt_request() {
+        serde_roundtrip(&Event::UserPromptRequest {
+            request_id: "ask_1".into(),
+            question: "Pick a branch".into(),
+            options: vec!["main".into(), "dev".into()],
+            multi_select: false,
+        });
+    }
+
+    #[test]
+    fn event_serde_user_prompt_response() {
+        serde_roundtrip(&Event::UserPromptResponse {
+            request_id: "ask_1".into(),
+            response: "main".into(),
         });
     }
 

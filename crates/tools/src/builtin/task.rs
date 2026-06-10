@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tracing;
 
 use crate::str_utils::truncate_chars;
 
@@ -241,7 +242,10 @@ impl Tool for TaskCreateTool {
             let description = input["description"].as_str().unwrap_or("").to_string();
 
             let response = {
-                let mut list = store.lock().unwrap();
+                let mut list = store.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task store mutex poisoned: {e}");
+                    e.into_inner()
+                });
                 let task = list.create(subject, description);
                 serde_json::json!({
                     "id": task.id,
@@ -298,7 +302,10 @@ impl Tool for TaskListTool {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
             let summary: Vec<Value> = {
-                let list = store.lock().unwrap();
+                let list = store.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task store mutex poisoned: {e}");
+                    e.into_inner()
+                });
                 list.list()
                     .into_iter()
                     .map(|t| {
@@ -367,7 +374,10 @@ impl Tool for TaskGetTool {
         Box::pin(async move {
             let task_id = input["task_id"].as_str().unwrap_or("");
             #[allow(clippy::significant_drop_tightening)]
-            let list = store.lock().unwrap();
+            let list = store.lock().unwrap_or_else(|e| {
+                tracing::warn!("task store mutex poisoned: {e}");
+                e.into_inner()
+            });
             list.get(task_id).map_or_else(
                 || Ok(ToolOutput::success(format!("Task #{task_id} not found."))),
                 |task| {
@@ -456,7 +466,10 @@ impl Tool for TaskUpdateTool {
             });
 
             #[allow(clippy::significant_drop_tightening)]
-            let mut list = store.lock().unwrap();
+            let mut list = store.lock().unwrap_or_else(|e| {
+                tracing::warn!("task store mutex poisoned: {e}");
+                e.into_inner()
+            });
             list.update(
                 task_id,
                 status,
@@ -540,7 +553,10 @@ impl Tool for TaskStopTool {
             };
 
             {
-                let mut reg = reg.lock().expect("task registry lock");
+                let mut reg = reg.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task registry mutex poisoned: {e}");
+                    e.into_inner()
+                });
                 let Some(entry) = reg.get(task_id) else {
                     return Ok(ToolOutput::error(format!(
                         "no task found with ID: {task_id}"
@@ -644,7 +660,10 @@ impl Tool for TaskOutputTool {
                     std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
                 loop {
                     {
-                        let r = reg.lock().expect("task registry lock");
+                        let r = reg.lock().unwrap_or_else(|e| {
+                            tracing::warn!("task registry mutex poisoned: {e}");
+                            e.into_inner()
+                        });
                         if let Some(entry) = r.get(task_id) {
                             if entry.status.is_terminal() {
                                 return format_task_output(entry, task_id);
@@ -665,7 +684,10 @@ impl Tool for TaskOutputTool {
             }
 
             // Non-blocking: snapshot current state.
-            let r = reg.lock().expect("task registry lock");
+            let r = reg.lock().unwrap_or_else(|e| {
+                tracing::warn!("task registry mutex poisoned: {e}");
+                e.into_inner()
+            });
             match r.get(task_id) {
                 Some(entry) => format_task_output(entry, task_id),
                 None => Ok(ToolOutput::error(format!(

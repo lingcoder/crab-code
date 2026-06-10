@@ -44,9 +44,10 @@ pub fn apply_from_path(resolver: &mut Resolver, path: &Path) {
     let parsed: UserBindings = match serde_json::from_str(&content) {
         Ok(p) => p,
         Err(err) => {
-            eprintln!(
-                "crab: keybindings file {} is invalid: {err}",
-                path.display()
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "keybindings file is invalid"
             );
             return;
         }
@@ -58,12 +59,12 @@ pub fn apply_from_path(resolver: &mut Resolver, path: &Path) {
 pub fn apply(resolver: &mut Resolver, bindings: &UserBindings) {
     for (ctx_name, entries) in &bindings.bindings {
         let Some(ctx) = parse_context(ctx_name) else {
-            eprintln!("crab: unknown keybinding context '{ctx_name}' (skipped)");
+            tracing::warn!(context = %ctx_name, "unknown keybinding context, skipped");
             continue;
         };
         for (seq_str, action_name) in entries {
             let Some(seq) = parse_sequence(seq_str) else {
-                eprintln!("crab: invalid key sequence '{seq_str}' (skipped)");
+                tracing::warn!(sequence = %seq_str, "invalid key sequence, skipped");
                 continue;
             };
             if action_name == "none" || action_name.is_empty() {
@@ -71,7 +72,7 @@ pub fn apply(resolver: &mut Resolver, bindings: &UserBindings) {
                 continue;
             }
             let Some(action) = parse_action(action_name) else {
-                eprintln!("crab: unknown action '{action_name}' (skipped)");
+                tracing::warn!(action = %action_name, "unknown keybinding action, skipped");
                 continue;
             };
             resolver.bind(ctx, seq, action);

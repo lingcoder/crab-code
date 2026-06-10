@@ -2,8 +2,10 @@
 //!
 //! Provides structured `SearchResult` types, domain filtering, date range
 //! filtering, search result caching (15-minute TTL), and search history
-//! for deduplication. Real API integration (e.g., Brave Search, `SearXNG`,
-//! Google Custom Search) is deferred to Phase 2.
+//! for deduplication. Supports Brave Search, Google Custom Search, and
+//! Serper.dev via environment variables (`CRAB_SEARCH_API` +
+//! `CRAB_SEARCH_API_KEY`). Falls back to `DuckDuckGo` Instant Answer API
+//! when no paid API is configured.
 
 use crab_core::Result;
 use crab_core::tool::{CollapsedGroupLabel, Tool, ToolContext, ToolOutput};
@@ -328,15 +330,14 @@ impl Tool for WebSearchTool {
                     )))
                 }
                 Err(reason) => {
-                    // Fall back to stub results with configuration guidance
-                    let results =
-                        stub_search(&query, max_results, &allowed_domains, &blocked_domains);
-                    let json =
-                        serde_json::to_string_pretty(&results).unwrap_or_else(|_| "[]".to_string());
-                    Ok(ToolOutput::success(format!(
-                        "Search results for \"{query}\" (offline mode — {reason}):\n\n{json}\n\n\
-                         To enable real web search, configure a search API in settings.json:\n\
-                         ```json\n{{\"searchApi\": {{\"provider\": \"brave\", \"apiKey\": \"...\"}}}}\n```"
+                    tracing::warn!(query = %query, reason = %reason, "search failed");
+                    Ok(ToolOutput::error(format!(
+                        "Web search failed for \"{query}\": {reason}\n\n\
+                         To enable web search, set these environment variables:\n\
+                           CRAB_SEARCH_API=brave|google|serper\n\
+                           CRAB_SEARCH_API_KEY=<your-api-key>\n\n\
+                         Without a paid API, DuckDuckGo is used automatically but may \
+                         return limited results."
                     )))
                 }
             }
@@ -374,54 +375,345 @@ fn parse_string_array(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Attempt to search via a configured search API (Brave, `SearXNG`, etc.).
+/// Attempt to search via a configured search API or `DuckDuckGo` fallback.
 ///
-/// Returns `Err` with a reason string if no API is configured or the call fails.
+/// Checks `CRAB_SEARCH_API` and `CRAB_SEARCH_API_KEY` env vars for a paid
+/// provider (brave / google / serper). If neither var is set, falls back to
+/// the `DuckDuckGo` Instant Answer API which requires no key. Returns `Err`
+/// with a reason string when all backends fail.
 async fn search_via_api(
-    _query: &str,
-    _max_results: usize,
-    _allowed_domains: &[String],
-    _blocked_domains: &[String],
-) -> std::result::Result<Value, String> {
-    // Real implementation would:
-    // 1. Read search API config from settings (provider, apiKey, endpoint)
-    // 2. Build the appropriate API request (Brave Search, SearXNG, etc.)
-    // 3. Execute via curl subprocess or reqwest
-    // 4. Parse JSON response into standardized SearchResult format
-    //
-    // For now, return Err to fall back to stub mode.
-    // This will be wired up when settings integration is complete.
-    Err("no search API configured".into())
-}
-
-/// Generate stub search results for development/testing.
-fn stub_search(
     query: &str,
     max_results: usize,
-    _allowed_domains: &[String],
-    _blocked_domains: &[String],
-) -> Value {
-    let stubs: Vec<Value> = (1..=max_results)
-        .map(|i| {
-            serde_json::json!({
-                "title": format!("Result {i} for \"{query}\""),
-                "url": format!("https://example.com/search?q={}&page={i}", urlencoded(query)),
-                "snippet": format!(
-                    "This is a placeholder snippet for result {i} matching the query \"{query}\". \
-                     Real results will be available when a search API is configured."
-                )
-            })
-        })
-        .collect();
-    Value::Array(stubs)
+    allowed_domains: &[String],
+    blocked_domains: &[String],
+) -> std::result::Result<Value, String> {
+    let filter = DomainFilter {
+        allowed: allowed_domains.to_vec(),
+        blocked: blocked_domains.to_vec(),
+    };
+
+    // Try paid API first
+    if let Ok(api) = std::env::var("CRAB_SEARCH_API") {
+        let key = std::env::var("CRAB_SEARCH_API_KEY")
+            .map_err(|_| "CRAB_SEARCH_API_KEY env var is not set".to_string())?;
+        tracing::info!(provider = %api, "using configured search API");
+        return match api.to_lowercase().as_str() {
+            "brave" => search_brave(query, max_results, &key, &filter).await,
+            "google" => search_google(query, max_results, &key, &filter).await,
+            "serper" => search_serper(query, max_results, &key, &filter).await,
+            other => Err(format!(
+                "unknown CRAB_SEARCH_API value '{other}' — expected brave, google, or serper"
+            )),
+        };
+    }
+
+    // Fall back to DuckDuckGo Instant Answer API (no key required)
+    tracing::debug!("no paid search API configured, trying DuckDuckGo");
+    search_duckduckgo(query, max_results, &filter)
+        .await
+        .map_err(|e| format!("DuckDuckGo fallback failed: {e}"))
 }
 
-/// Minimal URL encoding for query strings.
-fn urlencoded(s: &str) -> String {
-    s.replace(' ', "+")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('?', "%3F")
+// ── Brave Search API ─────────────────────────────────────────────────
+
+async fn search_brave(
+    query: &str,
+    max_results: usize,
+    api_key: &str,
+    filter: &DomainFilter,
+) -> std::result::Result<Value, String> {
+    let url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+        urlencoding::encode(query),
+        max_results
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "gzip")
+        .header("X-Subscription-Token", api_key)
+        .send()
+        .await
+        .map_err(|e| format!("Brave Search request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Brave Search returned HTTP {status}: {body}"));
+    }
+
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse Brave Search response: {e}"))?;
+
+    let results = json
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+        .ok_or_else(|| "unexpected Brave Search response structure".to_string())?;
+
+    let mut search_results: Vec<Value> = results
+        .iter()
+        .filter_map(|r| {
+            let url = r.get("url")?.as_str()?;
+            if !filter.allows(url) {
+                return None;
+            }
+            Some(
+                SearchResult {
+                    title: r.get("title")?.as_str().unwrap_or("").to_owned(),
+                    url: url.to_owned(),
+                    snippet: r.get("description")?.as_str().unwrap_or("").to_owned(),
+                    published_date: r.get("age").and_then(|v| v.as_str()).map(String::from),
+                }
+                .to_json(),
+            )
+        })
+        .collect();
+
+    search_results.truncate(max_results);
+    Ok(Value::Array(search_results))
+}
+
+// ── Google Custom Search API ─────────────────────────────────────────
+
+async fn search_google(
+    query: &str,
+    max_results: usize,
+    api_key: &str,
+    filter: &DomainFilter,
+) -> std::result::Result<Value, String> {
+    let cx = std::env::var("CRAB_SEARCH_GOOGLE_CX")
+        .map_err(|_| "CRAB_SEARCH_GOOGLE_CX env var is required for Google search".to_string())?;
+
+    let url = format!(
+        "https://www.googleapis.com/customsearch/v1?key={}&cx={}&q={}&num={}",
+        api_key,
+        cx,
+        urlencoding::encode(query),
+        max_results.min(10) // Google API max 10 per request
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Google Search request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Google Search returned HTTP {status}: {body}"));
+    }
+
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse Google Search response: {e}"))?;
+
+    let items = json
+        .get("items")
+        .and_then(|i| i.as_array())
+        .ok_or_else(|| "no results from Google Search".to_string())?;
+
+    let mut search_results: Vec<Value> = items
+        .iter()
+        .filter_map(|r| {
+            let url = r.get("link")?.as_str()?;
+            if !filter.allows(url) {
+                return None;
+            }
+            Some(
+                SearchResult {
+                    title: r.get("title")?.as_str().unwrap_or("").to_owned(),
+                    url: url.to_owned(),
+                    snippet: r
+                        .get("snippet")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                    published_date: None,
+                }
+                .to_json(),
+            )
+        })
+        .collect();
+
+    search_results.truncate(max_results);
+    Ok(Value::Array(search_results))
+}
+
+// ── Serper.dev API ───────────────────────────────────────────────────
+
+async fn search_serper(
+    query: &str,
+    max_results: usize,
+    api_key: &str,
+    filter: &DomainFilter,
+) -> std::result::Result<Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://google.serper.dev/search")
+        .header("X-API-KEY", api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "q": query,
+            "num": max_results,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Serper request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Serper returned HTTP {status}: {body}"));
+    }
+
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse Serper response: {e}"))?;
+
+    let organic = json
+        .get("organic")
+        .and_then(|o| o.as_array())
+        .ok_or_else(|| "unexpected Serper response structure".to_string())?;
+
+    let mut search_results: Vec<Value> = organic
+        .iter()
+        .filter_map(|r| {
+            let url = r.get("link")?.as_str()?;
+            if !filter.allows(url) {
+                return None;
+            }
+            Some(
+                SearchResult {
+                    title: r.get("title")?.as_str().unwrap_or("").to_owned(),
+                    url: url.to_owned(),
+                    snippet: r
+                        .get("snippet")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                    published_date: r.get("date").and_then(|d| d.as_str()).map(String::from),
+                }
+                .to_json(),
+            )
+        })
+        .collect();
+
+    search_results.truncate(max_results);
+    Ok(Value::Array(search_results))
+}
+
+// ── DuckDuckGo Instant Answer API (keyless fallback) ────────────────
+
+async fn search_duckduckgo(
+    query: &str,
+    max_results: usize,
+    filter: &DomainFilter,
+) -> std::result::Result<Value, String> {
+    let url = format!(
+        "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+        urlencoding::encode(query)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "crab-code/0.1.0")
+        .send()
+        .await
+        .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        return Err(format!("DuckDuckGo returned HTTP {status}"));
+    }
+
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse DuckDuckGo response: {e}"))?;
+
+    let mut results: Vec<Value> = Vec::new();
+
+    // Extract the abstract (main answer) if present
+    if let Some(abstract_text) = json.get("AbstractText").and_then(|v| v.as_str())
+        && !abstract_text.is_empty()
+        && let Some(abstract_url) = json.get("AbstractURL").and_then(|v| v.as_str())
+        && filter.allows(abstract_url)
+    {
+        let heading = json
+            .get("Heading")
+            .and_then(|v| v.as_str())
+            .unwrap_or(query);
+        results.push(
+            SearchResult {
+                title: heading.to_owned(),
+                url: abstract_url.to_owned(),
+                snippet: abstract_text.to_owned(),
+                published_date: None,
+            }
+            .to_json(),
+        );
+    }
+
+    // Extract related topics
+    if let Some(topics) = json.get("RelatedTopics").and_then(|v| v.as_array()) {
+        for topic in topics {
+            if results.len() >= max_results {
+                break;
+            }
+            // DuckDuckGo related topics can be nested (groups with sub-topics)
+            if let Some(sub_topics) = topic.get("Topics").and_then(|v| v.as_array()) {
+                for sub in sub_topics {
+                    if results.len() >= max_results {
+                        break;
+                    }
+                    if let Some(result) = ddg_topic_to_result(sub, filter) {
+                        results.push(result);
+                    }
+                }
+            } else if let Some(result) = ddg_topic_to_result(topic, filter) {
+                results.push(result);
+            }
+        }
+    }
+
+    if results.is_empty() {
+        return Err("DuckDuckGo returned no results for this query".to_string());
+    }
+
+    results.truncate(max_results);
+    Ok(Value::Array(results))
+}
+
+/// Convert a `DuckDuckGo` related topic JSON object into a `SearchResult` JSON value.
+fn ddg_topic_to_result(topic: &Value, filter: &DomainFilter) -> Option<Value> {
+    let text = topic.get("Text")?.as_str()?;
+    let first_url = topic.get("FirstURL")?.as_str()?;
+    if !filter.allows(first_url) {
+        return None;
+    }
+    Some(
+        SearchResult {
+            title: text.chars().take(80).collect(),
+            url: first_url.to_owned(),
+            snippet: text.to_owned(),
+            published_date: None,
+        }
+        .to_json(),
+    )
 }
 
 #[cfg(test)]
@@ -477,47 +769,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_valid_query_returns_results() {
+    async fn execute_valid_query_uses_search_backend() {
         let tool = WebSearchTool;
         let ctx = test_ctx();
         let result = tool
             .execute(serde_json::json!({"query": "rust programming"}), &ctx)
             .await
             .unwrap();
-        assert!(!result.is_error);
+        // Without API keys or network, this will either succeed (DDG) or
+        // return a clear error — both are valid. Never fake results.
         let text = result.text();
-        assert!(text.contains("rust programming"));
-        assert!(text.contains("Result 1"));
-        assert!(text.contains("placeholder"));
-    }
-
-    #[tokio::test]
-    async fn execute_respects_max_results() {
-        let tool = WebSearchTool;
-        let ctx = test_ctx();
-        let result = tool
-            .execute(serde_json::json!({"query": "test", "max_results": 3}), &ctx)
-            .await
-            .unwrap();
-        let text = result.text();
-        assert!(text.contains("Result 3"));
-        assert!(!text.contains("Result 4"));
-    }
-
-    #[tokio::test]
-    async fn execute_caps_max_results_at_20() {
-        let tool = WebSearchTool;
-        let ctx = test_ctx();
-        let result = tool
-            .execute(
-                serde_json::json!({"query": "test", "max_results": 100}),
-                &ctx,
-            )
-            .await
-            .unwrap();
-        let text = result.text();
-        assert!(text.contains("Result 20"));
-        assert!(!text.contains("Result 21"));
+        if result.is_error {
+            assert!(text.contains("Web search failed"));
+        } else {
+            assert!(text.contains("rust programming"));
+        }
     }
 
     #[test]
@@ -541,24 +807,29 @@ mod tests {
     }
 
     #[test]
-    fn urlencoded_basic() {
-        assert_eq!(urlencoded("hello world"), "hello+world");
-        assert_eq!(urlencoded("a&b=c"), "a%26b%3Dc");
+    fn ddg_topic_to_result_none_without_url() {
+        let topic = serde_json::json!({"Text": "some text"});
+        assert!(ddg_topic_to_result(&topic, &DomainFilter::default()).is_none());
     }
 
     #[test]
-    fn stub_search_returns_correct_count() {
-        let results = stub_search("test", 5, &[], &[]);
-        assert_eq!(results.as_array().unwrap().len(), 5);
+    fn ddg_topic_to_result_none_without_text() {
+        let topic = serde_json::json!({"FirstURL": "https://example.com"});
+        assert!(ddg_topic_to_result(&topic, &DomainFilter::default()).is_none());
     }
 
     #[test]
-    fn stub_search_results_have_fields() {
-        let results = stub_search("rust", 1, &[], &[]);
-        let first = &results[0];
-        assert!(first["title"].as_str().unwrap().contains("rust"));
-        assert!(first["url"].as_str().unwrap().starts_with("https://"));
-        assert!(!first["snippet"].as_str().unwrap().is_empty());
+    fn ddg_topic_to_result_valid() {
+        let topic = serde_json::json!({
+            "Text": "Rust is a multi-paradigm programming language",
+            "FirstURL": "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        });
+        let result = ddg_topic_to_result(&topic, &DomainFilter::default()).unwrap();
+        assert_eq!(
+            result["url"],
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        );
+        assert!(result["snippet"].as_str().unwrap().contains("Rust"));
     }
 
     // ── SearchResult tests ──

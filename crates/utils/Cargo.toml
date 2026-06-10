@@ -13,6 +13,7 @@ strip-ansi-escapes.workspace = true
 ulid.workspace = true
 dunce.workspace = true
 directories.workspace = true
+fd-lock.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

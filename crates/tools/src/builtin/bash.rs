@@ -8,6 +8,7 @@ use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, To
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tracing;
 
 use crate::executor::StreamingOutput;
 use crate::str_utils::truncate_chars;
@@ -206,7 +207,14 @@ impl Tool for BashTool {
                     command.clone(),
                 );
 
-                if !reg.lock().expect("task registry lock").register(entry) {
+                if !reg
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("task registry mutex poisoned: {e}");
+                        e.into_inner()
+                    })
+                    .register(entry)
+                {
                     return Ok(ToolOutput::error("task ID collision — retry"));
                 }
 
@@ -214,7 +222,10 @@ impl Tool for BashTool {
                 let output_path = std::env::temp_dir().join(format!("crab-task-{task_id}.output"));
                 let output_path_str = output_path.to_string_lossy().to_string();
                 reg.lock()
-                    .expect("task registry lock")
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("task registry mutex poisoned: {e}");
+                        e.into_inner()
+                    })
                     .set_output_path(&task_id, output_path_str);
 
                 // Spawn the command as a detached tokio task.
@@ -234,13 +245,19 @@ impl Tool for BashTool {
 
                     reg_spawn
                         .lock()
-                        .expect("task registry lock")
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("task registry mutex poisoned: {e}");
+                            e.into_inner()
+                        })
                         .set_status(&task_id_spawn, crab_core::task::TaskStatus::Running);
 
                     let result = run(opts).await;
 
                     // Write combined output to the file.
-                    let mut reg = reg_spawn.lock().expect("task registry lock");
+                    let mut reg = reg_spawn.lock().unwrap_or_else(|e| {
+                        tracing::warn!("task registry mutex poisoned: {e}");
+                        e.into_inner()
+                    });
                     match result {
                         Ok(output) => {
                             let combined = format_output(&output);

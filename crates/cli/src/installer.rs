@@ -7,6 +7,9 @@
 use std::fmt;
 
 /// Recognised package managers.
+///
+/// Dead-code suppressed: the enum and its methods are not wired to any
+/// CLI command yet but will be used when the `install` subcommand lands.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageManager {
@@ -35,6 +38,9 @@ impl PackageManager {
     }
 
     /// Build the install command line for a given package name.
+    ///
+    /// Dead-code suppressed: used by `install_dependency` which itself is not
+    /// yet called from any CLI command.
     #[allow(dead_code)]
     pub fn install_args(self, package_name: &str) -> Vec<String> {
         match self {
@@ -79,6 +85,9 @@ fn is_binary_available(name: &str) -> bool {
 ///
 /// Returns a list of [`PackageManager`] variants whose binaries were
 /// found on `PATH`.
+///
+/// Dead-code suppressed: not yet called from any CLI command; will be
+/// used by the planned `install` subcommand.
 #[allow(dead_code)]
 pub fn detect_package_managers() -> Vec<PackageManager> {
     PackageManager::all()
@@ -89,6 +98,9 @@ pub fn detect_package_managers() -> Vec<PackageManager> {
 }
 
 /// Result of a dependency installation attempt.
+///
+/// Dead-code suppressed: returned by `install_dependency` which is not yet
+/// called from any CLI command.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct InstallResult {
@@ -107,6 +119,8 @@ pub struct InstallResult {
 ///
 /// * `name` — the package/crate/formula name to install.
 /// * `pm` — the package manager to use.
+///
+/// Dead-code suppressed: planned for the `install` subcommand.
 #[allow(dead_code)]
 pub fn install_dependency(name: &str, pm: PackageManager) -> InstallResult {
     let binary = pm.binary();

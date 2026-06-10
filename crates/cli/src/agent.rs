@@ -1,6 +1,5 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -9,7 +8,7 @@ use tokio::sync::mpsc;
 use crab_agents::{AgentSession, SessionConfig, build_system_prompt};
 use crab_core::event::Event;
 use crab_core::model::ModelId;
-use crab_core::permission::{PermissionMode, PermissionPolicy};
+use crab_core::permission::PermissionPolicy;
 use crab_tools::builtin::create_default_registry;
 use crab_tools::executor::{PermissionHandler, PermissionResult};
 
@@ -20,7 +19,7 @@ use crate::commands;
 use crate::output::print_exit_info;
 use crate::output::{print_banner, print_events};
 
-/// Read Coordinator Mode gate from env (no CLI flag by design — insiders opt
+/// Read Coordinator Mode gate from env (no CLI flag by design -- insiders opt
 /// in via `CRAB_COORDINATOR_MODE=1`). Agent Teams base infrastructure is
 /// unconditional; only Coordinator Mode (tool ACL + prompt overlay) is gated.
 pub fn coordinator_mode_enabled() -> bool {
@@ -39,11 +38,11 @@ fn coordinator_mode_from(lookup: impl Fn(&str) -> Option<String>) -> bool {
 /// is fed from a pipe.
 #[derive(Debug, PartialEq, Eq)]
 enum LaunchMode {
-    /// Both stdout and stdin are terminals — start the interactive TUI.
+    /// Both stdout and stdin are terminals -- start the interactive TUI.
     Interactive,
-    /// stdin is piped — read it as the headless prompt.
+    /// stdin is piped -- read it as the headless prompt.
     HeadlessFromStdin,
-    /// stdout is not a terminal but stdin is — there is no prompt source.
+    /// stdout is not a terminal but stdin is -- there is no prompt source.
     NoPromptSource,
 }
 
@@ -57,78 +56,11 @@ fn launch_mode(stdout_is_tty: bool, stdin_is_tty: bool) -> LaunchMode {
     }
 }
 
-/// Resolve well-known model aliases to their full model IDs.
-/// Unknown strings are returned unchanged.
-fn resolve_model_alias(model: &str) -> String {
-    match model {
-        "sonnet" => "claude-sonnet-4-6".to_string(),
-        "opus" => "claude-opus-4-6".to_string(),
-        "haiku" => "claude-haiku-4-5-20251001".to_string(),
-        other => other.to_string(),
-    }
-}
-
-/// Resolve `--allowed-tools`, `--disallowed-tools`, and `--tools` into effective
-/// allowed/denied lists.
-///
-/// `--tools ""` disables all tools (denied = `["*"]`).
-/// `--tools "default"` allows all (no filtering).
-/// `--tools "read,write"` restricts to named tools only (allowed = those names).
-fn resolve_tool_filters(
-    allowed: &[String],
-    disallowed: &[String],
-    tools: Option<&str>,
-) -> (Vec<String>, Vec<String>) {
-    let mut effective_allowed = allowed.to_vec();
-    let mut effective_denied = disallowed.to_vec();
-
-    if let Some(tools_arg) = tools {
-        let trimmed = tools_arg.trim();
-        if trimmed.is_empty() {
-            // Empty string: disable all tools
-            effective_denied = vec!["*".to_string()];
-        } else if trimmed == "default" {
-            // "default": no filtering
-        } else {
-            // Explicit list: only these tools are allowed
-            let names: Vec<String> = trimmed
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            effective_allowed = names;
-        }
-    }
-
-    (effective_allowed, effective_denied)
-}
-
-/// Load MCP server configurations from one or more JSON files and merge them.
-fn load_mcp_configs(paths: &[PathBuf]) -> anyhow::Result<Value> {
-    let mut merged = serde_json::Map::new();
-    for path in paths {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("failed to read MCP config '{}': {}", path.display(), e)
-        })?;
-        let parsed: Value = serde_json::from_str(&content).map_err(|e| {
-            anyhow::anyhow!("failed to parse MCP config '{}': {}", path.display(), e)
-        })?;
-        if let Value::Object(map) = parsed {
-            for (k, v) in map {
-                merged.insert(k, v);
-            }
-        } else {
-            anyhow::bail!("MCP config '{}' must be a JSON object", path.display());
-        }
-    }
-    Ok(Value::Object(merged))
-}
-
 /// Resolve the effective system prompt from CLI flags.
 ///
 /// Priority:
-/// 1. `--system-prompt` / `--system-prompt-file` — replaces the default entirely.
-/// 2. `--append-system-prompt` / `--append-system-prompt-file` — appends to the default.
+/// 1. `--system-prompt` / `--system-prompt-file` -- replaces the default entirely.
+/// 2. `--append-system-prompt` / `--append-system-prompt-file` -- appends to the default.
 /// 3. Default: `build_system_prompt(...)` with optional settings-level custom instructions.
 fn resolve_system_prompt(
     cli: &Cli,
@@ -215,7 +147,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
 
     // Apply --mcp-config: load MCP server configs from file(s)
     if !cli.mcp_config.is_empty() {
-        let mcp = load_mcp_configs(&cli.mcp_config)?;
+        let mcp = crab_mcp::config::load_mcp_configs(&cli.mcp_config)?;
         if cli.strict_mcp_config {
             settings.mcp_servers = Some(mcp);
         } else {
@@ -230,7 +162,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         }
     }
 
-    // settings already has config.toml → user → project → local → env merged.
+    // settings already has config.toml -> user -> project -> local -> env merged.
     // CLI --provider/--model override the merged result.
     let provider = if cli.provider == "anthropic" {
         settings
@@ -243,7 +175,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     let model_id = cli
         .model
         .as_deref()
-        .map(resolve_model_alias)
+        .map(crab_config::model_alias::resolve_model_alias)
         .or_else(|| settings.model.clone())
         .unwrap_or_else(|| {
             if provider == "openai" || provider == "deepseek" || provider == "ollama" {
@@ -253,7 +185,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
             }
         });
 
-    // Build effective settings — just override provider and model from CLI
+    // Build effective settings -- just override provider and model from CLI
     let effective_settings = crab_config::Config {
         api_provider: Some(provider.clone()),
         model: Some(model_id.clone()),
@@ -263,7 +195,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     let backend = Arc::new(crab_api::create_backend(&effective_settings));
     let mut registry = create_default_registry();
 
-    // Only the headless/single-shot path connects MCP synchronously — it needs
+    // Only the headless/single-shot path connects MCP synchronously -- it needs
     // tools before the one turn runs. The interactive TUI connects MCP in the
     // background via AgentRuntime::init, so pre-connecting here would just block
     // startup and throw the result away.
@@ -344,23 +276,14 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     )?;
 
     // Resolve permission mode: --permission-mode > legacy flags > settings file > default
-    let permission_mode = if let Some(ref mode_str) = cli.permission_mode {
-        mode_str
-            .parse::<PermissionMode>()
-            .map_err(|e| anyhow::anyhow!(e))?
-    } else if cli.dangerously_skip_permissions {
-        PermissionMode::Dangerously
-    } else if cli.auto {
-        PermissionMode::Auto
-    } else if cli.trust_project {
-        PermissionMode::TrustProject
-    } else {
-        settings
-            .permission_mode
-            .as_deref()
-            .and_then(|s| s.parse::<PermissionMode>().ok())
-            .unwrap_or(PermissionMode::Default)
-    };
+    let permission_mode = crab_config::permission_mode::resolve_permission_mode(
+        cli.permission_mode.as_deref(),
+        cli.dangerously_skip_permissions,
+        cli.auto,
+        cli.trust_project,
+        settings.permission_mode.as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let global_dir = crab_config::config::global_config_dir();
     let sessions_dir = global_dir.join("sessions");
@@ -400,15 +323,8 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     // Resolve resume ID: explicit --resume > -c (continue latest) > None
     let effective_resume_id = if resume_session_id.is_some() {
         resume_session_id
-    } else if cli.continue_session {
-        let history = crab_session::SessionHistory::new(sessions_dir.clone());
-        let found = history.find_latest_for_dir(&working_dir);
-        if found.is_none() {
-            eprintln!("No previous session found to continue.");
-        }
-        found
     } else {
-        None
+        crab_session::resume::find_resume_session(&sessions_dir, cli.continue_session, &working_dir)
     };
 
     // --fork-session: when resuming, generate a new session ID (fork) instead of reusing
@@ -422,27 +338,24 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     };
 
     // Build allowed/denied tool lists from CLI flags
-    let (effective_allowed, effective_denied) = resolve_tool_filters(
-        &cli.allowed_tools,
-        &cli.disallowed_tools,
-        cli.tools.as_deref(),
-    );
+    let (effective_allowed, effective_denied) =
+        crab_core::permission::tool_filter::resolve_tool_filters(
+            &cli.allowed_tools,
+            &cli.disallowed_tools,
+            cli.tools.as_deref(),
+        );
 
     // Resolve effort level and thinking mode
     let effort = cli.effort.as_deref().map(str::to_lowercase);
     let thinking_mode = cli.thinking.as_deref().map(str::to_lowercase);
 
     // Validate effort if provided
-    if let Some(ref e) = effort
-        && !matches!(e.as_str(), "low" | "medium" | "high" | "max")
-    {
-        anyhow::bail!("invalid --effort value: '{e}'. Valid: low, medium, high, max");
+    if let Some(ref e) = effort {
+        crab_config::effort::validate_effort(e).map_err(|msg| anyhow::anyhow!(msg))?;
     }
     // Validate thinking if provided
-    if let Some(ref t) = thinking_mode
-        && !matches!(t.as_str(), "enabled" | "adaptive" | "disabled")
-    {
-        anyhow::bail!("invalid --thinking value: '{t}'. Valid: enabled, adaptive, disabled");
+    if let Some(ref t) = thinking_mode {
+        crab_config::effort::validate_thinking(t).map_err(|msg| anyhow::anyhow!(msg))?;
     }
 
     // --bare skips memory
@@ -547,7 +460,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 .collect();
             if let Some(latest) = commands::update::startup_version_check() {
                 settings_warnings.push(format!(
-                    "Update available: v{latest} — run `crab update` to install"
+                    "Update available: v{latest} -- run `crab update` to install"
                 ));
             }
             let tui_config = crab_tui::TuiConfig {
@@ -577,7 +490,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 .executor
                 .set_permission_handler(Arc::new(CliPermissionHandler));
             eprintln!("Type /exit or Ctrl+D to quit.\n");
-            run_repl(&mut session, &skill_registry).await
+            crate::repl::run_repl(&mut session, &skill_registry).await
         }
     }
 }
@@ -594,7 +507,7 @@ fn build_skill_dirs(working_dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// If input starts with `/`, try to match a skill command and return its content
 /// as the prompt. Otherwise return the original input.
-fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillRegistry) -> String {
+pub fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillRegistry) -> String {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
         return input.to_string();
@@ -626,11 +539,11 @@ fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillRegistr
             prompt.push_str(args);
         }
 
-        eprintln!("[skill] Activated: {} — {}", skill.name, skill.description);
+        eprintln!("[skill] Activated: {} -- {}", skill.name, skill.description);
         return prompt;
     }
 
-    // No matching skill — pass through as-is
+    // No matching skill -- pass through as-is
     input.to_string()
 }
 
@@ -681,7 +594,7 @@ impl PermissionHandler for CliPermissionHandler {
         tool_name: &str,
         prompt: &str,
         tool_input: &Value,
-    ) -> Pin<Box<dyn std::future::Future<Output = PermissionResult> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionResult> + Send + '_>> {
         let line = format_cli_permission(tool_name, prompt, tool_input);
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
@@ -712,7 +625,7 @@ async fn run_single_shot(
     prompt: &str,
     output_format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let event_rx = take_event_rx(session);
+    let event_rx = crate::repl::take_event_rx(session);
     let registry = session.executor.registry_arc();
     let printer = tokio::spawn(print_events(event_rx, output_format, registry));
 
@@ -724,216 +637,6 @@ async fn run_single_shot(
     let _ = printer.await;
 
     result.map_err(Into::into)
-}
-
-/// Interactive REPL: read lines, send to agent, print streaming output.
-#[cfg(not(feature = "tui"))]
-async fn run_repl(
-    session: &mut AgentSession,
-    skill_registry: &crab_skills::SkillRegistry,
-) -> anyhow::Result<()> {
-    use std::io::{BufRead, Write};
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-
-    let slash_registry = crab_commands::CommandRegistry::new();
-
-    loop {
-        // Print prompt
-        print!("crab> ");
-        stdout.flush()?;
-
-        // Read a line
-        let mut line = String::new();
-        let bytes_read = stdin.lock().read_line(&mut line)?;
-
-        // Ctrl+D (EOF)
-        if bytes_read == 0 {
-            eprintln!("\nGoodbye!");
-            break;
-        }
-
-        let input = line.trim();
-
-        if input.is_empty() {
-            continue;
-        }
-
-        // Intercept slash commands before they hit the LLM. Only treat input
-        // starting with `/<letter>` as a slash command so real paths like
-        // `/tmp/foo` still flow through as prompts.
-        if let Some(cmd_rest) = input.strip_prefix('/')
-            && cmd_rest
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic())
-        {
-            match dispatch_slash_command(session, skill_registry, &slash_registry, cmd_rest).await {
-                SlashOutcome::Continue => continue,
-                SlashOutcome::Exit => break,
-                SlashOutcome::FallThrough(expanded) => {
-                    run_turn(session, &expanded).await;
-                    continue;
-                }
-            }
-        }
-
-        run_turn(session, input).await;
-    }
-
-    Ok(())
-}
-
-/// Outcome of a slash-command dispatch that controls the REPL loop.
-#[cfg(not(feature = "tui"))]
-enum SlashOutcome {
-    /// Stay in the loop (message was printed, action handled).
-    Continue,
-    /// Exit the REPL.
-    Exit,
-    /// Expand the input (e.g. a user-defined skill) and feed it back as a turn.
-    FallThrough(String),
-}
-
-/// Parse and execute a slash command. Returns the loop control outcome.
-///
-/// `cmd_rest` is the input with the leading `/` already stripped.
-#[cfg(not(feature = "tui"))]
-async fn dispatch_slash_command(
-    session: &mut AgentSession,
-    skill_registry: &crab_skills::SkillRegistry,
-    command_registry: &crab_commands::CommandRegistry,
-    cmd_rest: &str,
-) -> SlashOutcome {
-    let (name, args) = cmd_rest
-        .split_once(char::is_whitespace)
-        .map_or((cmd_rest, ""), |(n, a)| (n, a.trim()));
-
-    if matches!(name, "exit" | "quit") {
-        eprintln!("Goodbye!");
-        return SlashOutcome::Exit;
-    }
-
-    let summary = session.cost.summary();
-    let ctx = crab_commands::CommandContext {
-        model: &session.config.model,
-        session_id: &session.conversation.id,
-        working_dir: &session.tool_ctx.working_dir,
-        permission_mode: session.tool_ctx.permission_mode,
-        cost: crab_commands::CostSnapshot {
-            input_tokens: summary.input_tokens,
-            output_tokens: summary.output_tokens,
-            cache_read_tokens: summary.cache_read_tokens,
-            cache_creation_tokens: summary.cache_creation_tokens,
-            total_cost_usd: summary.total_cost_usd,
-            api_calls: summary.api_calls,
-        },
-        estimated_tokens: 0,
-        context_window: session.conversation.context_window,
-        message_count: session.conversation.len(),
-        memory_dir: session
-            .memory_store
-            .as_ref()
-            .map(|_| std::path::Path::new(".crab/memory")),
-    };
-
-    let result = command_registry.execute(name, args, &ctx);
-
-    match result {
-        Some(crab_commands::CommandResult::Message(msg)) => {
-            println!("{msg}");
-            SlashOutcome::Continue
-        }
-        Some(crab_commands::CommandResult::Effect(effect)) => {
-            handle_command_effect(session, effect).await
-        }
-        Some(crab_commands::CommandResult::Silent) => SlashOutcome::Continue,
-        None => {
-            let expanded = resolve_slash_command(&format!("/{cmd_rest}"), skill_registry);
-            if expanded == format!("/{cmd_rest}") {
-                eprintln!("Unknown command: /{name}. Try /help.");
-                SlashOutcome::Continue
-            } else {
-                SlashOutcome::FallThrough(expanded)
-            }
-        }
-    }
-}
-
-/// Apply a [`CommandEffect`] to the running session.
-#[cfg(not(feature = "tui"))]
-async fn handle_command_effect(
-    session: &mut AgentSession,
-    effect: crab_commands::CommandEffect,
-) -> SlashOutcome {
-    use crab_commands::CommandEffect;
-
-    match effect {
-        CommandEffect::Exit => {
-            eprintln!("Goodbye!");
-            SlashOutcome::Exit
-        }
-        CommandEffect::Clear => {
-            session.conversation.clear();
-            println!("[info] Conversation cleared. System prompt and cost accumulator retained.");
-            SlashOutcome::Continue
-        }
-        CommandEffect::Compact => {
-            let before = session.conversation.len();
-            let summary = session.compact_conversation().await;
-            let after = session.conversation.len();
-            println!(
-                "[info] Compacted {before} messages → {after} (extracted {} summary items).",
-                summary.items.len()
-            );
-            SlashOutcome::Continue
-        }
-        CommandEffect::Rewind(target) => {
-            match session.rewind(target.as_deref()) {
-                Ok(restored) if restored.is_empty() => {
-                    println!("[info] No file edits to rewind.");
-                }
-                Ok(restored) => {
-                    println!("[info] Rewound: {}", restored.join(", "));
-                }
-                Err(e) => {
-                    println!("[info] Rewind failed: {e}");
-                }
-            }
-            SlashOutcome::Continue
-        }
-        other => {
-            println!("[info] Command effect {other:?} is not yet wired in the REPL.");
-            SlashOutcome::Continue
-        }
-    }
-}
-
-/// Run one turn of the agent loop for a plain user prompt.
-#[cfg(not(feature = "tui"))]
-async fn run_turn(session: &mut AgentSession, input: &str) {
-    let event_rx = take_event_rx(session);
-    let registry = session.executor.registry_arc();
-    let printer = tokio::spawn(print_events(event_rx, OutputFormat::Text, registry));
-
-    if let Err(e) = session.handle_user_input(input).await {
-        eprintln!("\n[error] {e}");
-    }
-
-    // Replace tx so the printer's rx sees all senders dropped and finishes.
-    let (fresh_tx, fresh_rx) = mpsc::channel::<Event>(1);
-    session.event_tx = fresh_tx;
-    drop(fresh_rx);
-    let _ = printer.await;
-    println!();
-}
-
-/// Swap the session's `event_rx` with a fresh one, returning the old receiver.
-fn take_event_rx(session: &mut AgentSession) -> mpsc::Receiver<Event> {
-    // Create a fresh channel: session sends via tx, printer reads via rx.
-    let (tx, rx) = mpsc::channel(256);
-    session.event_tx = tx;
-    rx
 }
 
 #[cfg(test)]
@@ -1049,73 +752,6 @@ mod tests {
         let result = resolve_slash_command("/review src/main.rs", &reg);
         assert!(result.contains("Review the code."));
         assert!(result.contains("src/main.rs"));
-    }
-
-    #[test]
-    fn resolve_model_alias_known() {
-        assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251001");
-    }
-
-    #[test]
-    fn resolve_model_alias_passthrough() {
-        assert_eq!(resolve_model_alias("gpt-4o"), "gpt-4o");
-        assert_eq!(
-            resolve_model_alias("claude-sonnet-4-20250514"),
-            "claude-sonnet-4-20250514"
-        );
-    }
-
-    // ─── load_mcp_configs tests ───
-
-    #[test]
-    fn load_mcp_configs_empty_paths() {
-        let result = load_mcp_configs(&[]).unwrap();
-        assert_eq!(result, json!({}));
-    }
-
-    #[test]
-    fn load_mcp_configs_rejects_missing_file() {
-        assert!(load_mcp_configs(&[PathBuf::from("/nonexistent.json")]).is_err());
-    }
-
-    // ─── resolve_tool_filters tests ───
-
-    #[test]
-    fn resolve_tool_filters_empty_inputs() {
-        let (allowed, denied) = resolve_tool_filters(&[], &[], None);
-        assert!(allowed.is_empty());
-        assert!(denied.is_empty());
-    }
-
-    #[test]
-    fn resolve_tool_filters_passthrough_lists() {
-        let (allowed, denied) =
-            resolve_tool_filters(&["Read".into(), "Write".into()], &["Bash".into()], None);
-        assert_eq!(allowed, vec!["Read", "Write"]);
-        assert_eq!(denied, vec!["Bash"]);
-    }
-
-    #[test]
-    fn resolve_tool_filters_tools_empty_disables_all() {
-        let (allowed, denied) = resolve_tool_filters(&[], &[], Some(""));
-        assert!(allowed.is_empty());
-        assert_eq!(denied, vec!["*"]);
-    }
-
-    #[test]
-    fn resolve_tool_filters_tools_default_no_change() {
-        let (allowed, denied) = resolve_tool_filters(&[], &[], Some("default"));
-        assert!(allowed.is_empty());
-        assert!(denied.is_empty());
-    }
-
-    #[test]
-    fn resolve_tool_filters_tools_explicit_list() {
-        let (allowed, denied) = resolve_tool_filters(&[], &[], Some("Read,Write,Edit"));
-        assert_eq!(allowed, vec!["Read", "Write", "Edit"]);
-        assert!(denied.is_empty());
     }
 
     // ─── resolve_system_prompt tests ───

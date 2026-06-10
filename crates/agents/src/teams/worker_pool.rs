@@ -208,7 +208,10 @@ impl WorkerPool {
                 crab_core::task::TaskType::LocalAgent,
                 preview,
             );
-            let mut r = reg.lock().expect("task registry lock");
+            let mut r = reg.lock().unwrap_or_else(|e| {
+                tracing::warn!("task registry mutex poisoned: {e}");
+                e.into_inner()
+            });
             r.register(entry);
             r.set_status(&worker_id, crab_core::task::TaskStatus::Running);
         }
@@ -338,7 +341,10 @@ impl WorkerPool {
         result: &WorkerResult,
     ) {
         if let Some(reg) = reg {
-            let mut reg = reg.lock().expect("task registry lock");
+            let mut reg = reg.lock().unwrap_or_else(|e| {
+                tracing::warn!("task registry mutex poisoned: {e}");
+                e.into_inner()
+            });
             if result.success {
                 reg.set_status(worker_id, crab_core::task::TaskStatus::Completed);
             } else {

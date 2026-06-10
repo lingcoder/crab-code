@@ -17,7 +17,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-crab-fs.workspace = true
+crab-utils.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

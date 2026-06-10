@@ -25,6 +25,7 @@ pub mod policy;
 pub mod rule_parser;
 pub mod shadowed_rules;
 pub mod stored;
+pub mod tool_filter;
 
 pub use auto_mode::{AutoModeClassifier, RiskLevel, auto_mode_decision};
 pub use decision::PermissionDecision;

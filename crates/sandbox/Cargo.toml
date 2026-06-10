@@ -12,6 +12,7 @@ crab-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 # tokio for std process Command + async tests on every backend
 tokio.workspace = true
 # sysinfo only needed by the Linux landlock backend for kernel-version sniff;
@@ -23,5 +24,37 @@ sysinfo.workspace = true
 # `cfg(target_os = "linux")` keeps it out of Windows / macOS builds.
 landlock.workspace = true
 
-[lints]
-workspace = true
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows Job Object API for process sandboxing.
+windows-sys.workspace = true
+
+[lints.rust]
+# Downgraded from workspace `forbid` to `deny` — the Windows Job Object
+# backend needs `unsafe` blocks for Win32 FFI. Each call site is
+# isolated in a safe wrapper function.
+unsafe_code = "deny"
+unused_mut = "deny"
+unused_comparisons = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+missing_panics_doc = "allow"
+missing_const_for_fn = "allow"
+missing_errors_doc = "allow"
+unused_async = "allow"
+new_without_default = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+fn_params_excessive_bools = "allow"
+unnecessary_wraps = "allow"
+option_if_let_else = "allow"
+or_fun_call = "allow"
+comparison_chain = "allow"
+if_same_then_else = "allow"
+duration_suboptimal_units = "allow"

@@ -141,6 +141,14 @@ croner = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # Linux-only process sandbox
 landlock = "0.4"
+# Windows Job Object sandbox (target-gated in crab-sandbox)
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+] }
 xcap = "0.9"
 enigo = "0.6"
 

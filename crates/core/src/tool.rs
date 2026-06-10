@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::Result;
@@ -358,6 +360,9 @@ pub fn new_read_state_tracker() -> (RecordReadFn, ReadStateFn) {
     (record, lookup)
 }
 
+/// Channel map type for pending `AskUserQuestion` prompts.
+pub type UserPromptChannels = Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>;
+
 /// Extended tool context fields — populated by the agent loop when available.
 ///
 /// These fields are optional enrichment data. Tools that need them should
@@ -379,6 +384,12 @@ pub struct ToolContextExt {
     /// Look up the last recorded read of a file. Used by Edit/Write to gate on
     /// a prior read; `None` disables the gate (edits proceed unchecked).
     pub read_state: Option<ReadStateFn>,
+    /// Shared map of pending user-prompt channels, keyed by request ID.
+    ///
+    /// `AskUserQuestionTool` registers a `oneshot::Sender` here so the UI
+    /// event loop can deliver the user's response. `None` disables the
+    /// ask-user flow (headless / unit-test mode).
+    pub user_prompt_channels: Option<UserPromptChannels>,
 }
 
 impl std::fmt::Debug for ToolContextExt {
@@ -390,6 +401,10 @@ impl std::fmt::Debug for ToolContextExt {
             .field("track_edit", &self.track_edit.as_ref().map(|_| "<fn>"))
             .field("record_read", &self.record_read.as_ref().map(|_| "<fn>"))
             .field("read_state", &self.read_state.as_ref().map(|_| "<fn>"))
+            .field(
+                "user_prompt_channels",
+                &self.user_prompt_channels.as_ref().map(|_| "<channels>"),
+            )
             .finish()
     }
 }

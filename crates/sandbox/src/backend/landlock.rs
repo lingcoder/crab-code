@@ -5,21 +5,28 @@
 //! non-applied result rather than failing hard — callers decide whether
 //! that degradation is acceptable.
 //!
-//! Enforcement currently validates the policy shape and reports what
-//! *would* be enforced; the actual `landlock_*` syscalls require a
-//! safe FFI wrapper. Since this workspace forbids `unsafe_code`,
-//! hooking those up is deferred to when a safe wrapper crate is
-//! adopted (e.g. the upstream `landlock` crate's higher-level API).
+//! Filesystem restrictions are enforced via the `landlock` crate's
+//! safe API. Network and resource limits are not yet supported by
+//! Landlock and are silently ignored.
 
-use crate::policy::SandboxPolicy;
+use landlock::{
+    ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetHandle, RulesetStatus,
+    path_beneath_rules,
+};
+
+use crate::policy::{PathAccess, SandboxPolicy};
 use crate::traits::{Sandbox, SandboxBackend, SandboxResult};
 
-pub struct LandlockSandbox;
+/// Linux Landlock sandbox.
+pub struct LandlockSandbox {
+    abi: Option<ABI>,
+}
 
 impl LandlockSandbox {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        let abi = detect_abi();
+        Self { abi }
     }
 }
 
@@ -35,41 +42,67 @@ impl Sandbox for LandlockSandbox {
     }
 
     fn is_available(&self) -> bool {
-        // Heuristic: Landlock is in-kernel since 5.13. The actual ABI
-        // version check needs a syscall; this keeps the check
-        // allocation-free.
-        let info = sysinfo::System::kernel_version();
-        if let Some(version) = info
-            && let Some((major, minor)) = parse_kernel_version(&version)
-        {
-            return major > 5 || (major == 5 && minor >= 13);
-        }
-        false
+        self.abi.is_some()
     }
 
     fn apply(
         &self,
         policy: &SandboxPolicy,
-        _cmd: &mut tokio::process::Command,
+        cmd: &mut tokio::process::Command,
     ) -> crab_core::Result<SandboxResult> {
-        if !self.is_available() {
-            return Ok(SandboxResult {
-                applied: false,
-                description: "Landlock not available on this kernel".into(),
-                backend: SandboxBackend::Landlock,
-            });
+        let abi = match self.abi {
+            Some(a) => a,
+            None => {
+                return Ok(SandboxResult {
+                    applied: false,
+                    description: "Landlock not available on this kernel".into(),
+                    backend: SandboxBackend::Landlock,
+                });
+            }
+        };
+
+        let ruleset = Ruleset::default()
+            .handle_access(AccessFs::from_all(abi))
+            .map_err(|e| crab_core::Error::Other(format!("Landlock ruleset init failed: {e}")))?;
+
+        let mut ruleset_created = ruleset
+            .create()
+            .map_err(|e| crab_core::Error::Other(format!("Landlock ruleset create failed: {e}")))?;
+
+        for rule in &policy.path_rules {
+            let access = path_access_to_landlock(rule.access, abi);
+            ruleset_created = ruleset_created
+                .add_rules(path_beneath_rules(&rule.path, access))
+                .map_err(|e| {
+                    crab_core::Error::Other(format!(
+                        "Landlock add_rule({}) failed: {e}",
+                        rule.path.display()
+                    ))
+                })?;
         }
 
-        // Real Landlock implementation would use pre_exec to:
-        //   1. landlock_create_ruleset — create a ruleset at current ABI
-        //   2. landlock_add_rule — per path_rule add the matching access
-        //   3. landlock_restrict_self — enforce on the current thread
-        //      before exec
-        // Gated on a safe wrapper; see the crate-level docs.
+        // Install the ruleset on the current thread. The child inherits
+        // this restriction when spawned.
+        let status = ruleset_created
+            .restrict_self()
+            .map_err(|e| crab_core::Error::Other(format!("Landlock restrict_self failed: {e}")))?;
+
+        let applied = matches!(
+            status.ruleset,
+            RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced
+        );
+
+        if status.ruleset == RulesetStatus::NotEnforced {
+            tracing::warn!(
+                "Landlock ruleset was not enforced — kernel may not support the requested ABI"
+            );
+        }
+
         Ok(SandboxResult {
-            applied: false,
+            applied,
             description: format!(
-                "Landlock policy validated (enforcement pending safe wrapper): {}",
+                "Landlock (ABI {}): filesystem restricted, {}",
+                abi as u32,
                 policy.summary()
             ),
             backend: SandboxBackend::Landlock,
@@ -77,11 +110,36 @@ impl Sandbox for LandlockSandbox {
     }
 }
 
+/// Detect the highest supported Landlock ABI version.
+///
+/// Returns `None` if the kernel does not support Landlock (< 5.13).
+fn detect_abi() -> Option<ABI> {
+    let info = sysinfo::System::kernel_version();
+    if let Some(version) = info
+        && let Some((major, minor)) = parse_kernel_version(&version)
+    {
+        if major > 5 || (major == 5 && minor >= 13) {
+            // Try ABI v3 first (kernel >= 6.2), fall back to v2/v1.
+            return Some(ABI::V3);
+        }
+    }
+    None
+}
+
 fn parse_kernel_version(version: &str) -> Option<(u32, u32)> {
     let mut parts = version.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
     Some((major, minor))
+}
+
+/// Convert our `PathAccess` to Landlock `AccessFs` flags.
+fn path_access_to_landlock(access: PathAccess, abi: ABI) -> AccessFs {
+    match access {
+        PathAccess::ReadOnly => AccessFs::from_read(abi),
+        PathAccess::ReadWrite => AccessFs::from_read(abi) | AccessFs::from_write(abi),
+        PathAccess::Full => AccessFs::from_all(abi),
+    }
 }
 
 #[cfg(test)]
@@ -97,5 +155,28 @@ mod tests {
     #[test]
     fn parse_kernel_version_invalid() {
         assert_eq!(parse_kernel_version("invalid"), None);
+    }
+
+    #[test]
+    fn is_available_depends_on_kernel() {
+        let sandbox = LandlockSandbox::new();
+        // On Linux CI with kernel >= 5.13 this should be true;
+        // on Windows/macOS it will be false.
+        if cfg!(target_os = "linux") {
+            // May or may not be available depending on kernel version.
+            let _ = sandbox.is_available();
+        } else {
+            assert!(!sandbox.is_available());
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_returns_not_applied_when_unavailable() {
+        let sandbox = LandlockSandbox { abi: None };
+        let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
+        let mut cmd = tokio::process::Command::new("echo");
+        let result = sandbox.apply(&policy, &mut cmd).unwrap();
+        assert!(!result.applied);
+        assert_eq!(result.backend, SandboxBackend::Landlock);
     }
 }

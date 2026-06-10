@@ -51,7 +51,7 @@ impl FrameScheduler {
         let alive = Arc::new(AtomicBool::new(true));
         self.subscribers
             .lock()
-            .expect("scheduler lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Subscriber {
                 alive: alive.clone(),
             });
@@ -64,7 +64,10 @@ impl FrameScheduler {
     }
 
     fn sweep_and_count(&self) -> usize {
-        let mut subs = self.subscribers.lock().expect("scheduler lock");
+        let mut subs = self
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         subs.retain(|s| s.alive.load(Ordering::SeqCst));
         subs.len()
     }
@@ -72,7 +75,10 @@ impl FrameScheduler {
     /// Test whether enough time has elapsed since the last tick to
     /// advance the animation clock. Does not move the clock forward.
     pub fn should_tick(&self, now: Instant) -> bool {
-        let last = self.last_tick.lock().expect("scheduler lock");
+        let last = self
+            .last_tick
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let interval = if self.sweep_and_count() == 0 {
             self.idle_interval
         } else {
@@ -94,7 +100,10 @@ impl FrameScheduler {
         if !self.should_tick(now) {
             return false;
         }
-        *self.last_tick.lock().expect("scheduler lock") = Some(now);
+        *self
+            .last_tick
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now);
         self.sweep_and_count() > 0
     }
 }

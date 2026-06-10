@@ -542,7 +542,11 @@ impl OAuth2Provider {
     /// Returns the cached token if still valid, or an error if expired.
     /// For automatic refresh, use [`get_token_or_refresh`] instead.
     pub fn get_token(&self) -> Result<StoredToken, AuthError> {
-        let cached = self.cached_token.lock().unwrap().clone();
+        let cached = self
+            .cached_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         match cached {
             Some(token) if !token.is_expired() => Ok(token),
@@ -566,12 +570,19 @@ impl OAuth2Provider {
     /// If the cached token is expired but has a refresh token, this method
     /// calls the token endpoint to obtain a new access token.
     pub async fn get_token_or_refresh(&self) -> Result<StoredToken, AuthError> {
-        let cached = self.cached_token.lock().unwrap().clone();
+        let cached = self
+            .cached_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
 
         match cached {
             Some(token) if !token.is_expired() => Ok(token),
             Some(token) if token.can_refresh() => {
-                let refresh_token = token.refresh_token.as_deref().unwrap();
+                // Invariant: `can_refresh()` guarantees `refresh_token` is `Some`.
+                let refresh_token = token.refresh_token.as_deref().unwrap_or_else(|| {
+                    unreachable!("can_refresh() already verified refresh_token is Some")
+                });
                 let resp = refresh_access_token(&self.config, refresh_token).await?;
                 let new_token = resp.to_stored_token(&self.config.provider);
                 self.store_token(new_token.clone())?;
@@ -594,7 +605,10 @@ impl OAuth2Provider {
         save_token_store(&self.token_path, &store)?;
 
         // Update in-memory cache
-        *self.cached_token.lock().unwrap() = Some(token);
+        *self
+            .cached_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(token);
         Ok(())
     }
 
@@ -603,7 +617,10 @@ impl OAuth2Provider {
         let mut store = load_token_store(&self.token_path)?;
         store.remove(&self.config.provider);
         save_token_store(&self.token_path, &store)?;
-        *self.cached_token.lock().unwrap() = None;
+        *self
+            .cached_token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         Ok(())
     }
 
@@ -638,7 +655,11 @@ impl crate::AuthProvider for OAuth2Provider {
             // 2. Call the token endpoint with grant_type=refresh_token
             // 3. Store the new access + refresh tokens
             // For skeleton, just verify we have a refresh token available
-            let cached = self.cached_token.lock().unwrap().clone();
+            let cached = self
+                .cached_token
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             match cached {
                 Some(token) if token.can_refresh() => {
                     // Placeholder — real implementation would do HTTP call here

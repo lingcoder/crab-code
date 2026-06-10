@@ -1,10 +1,12 @@
-//! OS-level sandbox for restricting tool execution.
+//! Re-exports from `crab_sandbox` for backward compatibility.
 //!
-//! Provides a `SandboxPolicy` trait with platform-specific implementations.
-//! Currently: Linux Landlock (when available), macOS/Windows no-op stubs.
-//! Enable via settings: `{ "sandbox": { "enabled": true } }`.
+//! All real sandbox logic lives in the `crab-sandbox` crate. This
+//! module provides the legacy `SandboxConfig` type and a
+//! `create_sandbox` facade that delegates to `crab_sandbox::create_sandbox`.
 
 use std::path::PathBuf;
+
+use crab_sandbox::Sandbox;
 
 /// Configuration for sandbox restrictions.
 #[derive(Debug, Clone, Default)]
@@ -38,45 +40,14 @@ impl SandboxConfig {
     }
 }
 
-/// Trait for platform-specific sandbox enforcement.
-///
-/// Implementations apply OS-level restrictions to a `Command` before execution.
-pub trait SandboxPolicy: Send + Sync {
-    /// Apply sandbox restrictions to a command that is about to be spawned.
-    fn apply(&self, cmd: &mut std::process::Command) -> crab_core::Result<()>;
-
-    /// Returns the platform name for diagnostics.
-    fn platform_name(&self) -> &'static str;
-
-    /// Returns whether the sandbox is actually functional on this platform.
-    fn is_available(&self) -> bool;
-}
-
-/// No-op sandbox for platforms without sandbox support.
-pub struct NoopSandbox;
-
-impl SandboxPolicy for NoopSandbox {
-    fn apply(&self, _cmd: &mut std::process::Command) -> crab_core::Result<()> {
-        Ok(())
-    }
-
-    fn platform_name(&self) -> &'static str {
-        "noop"
-    }
-
-    fn is_available(&self) -> bool {
-        false
-    }
-}
-
 /// Create the appropriate sandbox for the current platform.
 ///
-/// Returns a Linux Landlock sandbox if available, otherwise a no-op.
-pub fn create_sandbox(_config: &SandboxConfig) -> Box<dyn SandboxPolicy> {
-    // TODO: Linux Landlock implementation using the `landlock` crate
-    // TODO: macOS Seatbelt implementation using sandbox-exec
-    // TODO: Windows Job Object implementation using windows-rs
-    Box::new(NoopSandbox)
+/// Delegates to `crab_sandbox::create_sandbox()` which selects the
+/// best backend: Linux Landlock, Windows Job Object, or Noop on
+/// unsupported platforms.
+#[must_use]
+pub fn create_sandbox(_config: &SandboxConfig) -> Box<dyn Sandbox> {
+    crab_sandbox::create_sandbox()
 }
 
 #[cfg(test)]
@@ -120,23 +91,16 @@ mod tests {
     }
 
     #[test]
-    fn noop_sandbox_not_available() {
-        let sandbox = NoopSandbox;
-        assert!(!sandbox.is_available());
-        assert_eq!(sandbox.platform_name(), "noop");
-    }
-
-    #[test]
-    fn noop_sandbox_apply_succeeds() {
-        let sandbox = NoopSandbox;
-        let mut cmd = std::process::Command::new("echo");
-        assert!(sandbox.apply(&mut cmd).is_ok());
-    }
-
-    #[test]
-    fn create_sandbox_returns_noop_for_now() {
+    fn create_sandbox_returns_real_backend() {
         let config = SandboxConfig::default();
         let sandbox = create_sandbox(&config);
-        assert!(!sandbox.is_available());
+        // On Windows this should be WindowsJobObject, on Linux
+        // Landlock (if kernel >= 5.13), otherwise Noop.
+        let backend = sandbox.backend();
+        assert!(
+            backend == crab_sandbox::SandboxBackend::WindowsJobObject
+                || backend == crab_sandbox::SandboxBackend::Landlock
+                || backend == crab_sandbox::SandboxBackend::Noop
+        );
     }
 }

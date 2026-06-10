@@ -11,6 +11,7 @@ pub mod memory;
 pub mod memory_extract;
 pub mod micro_compact;
 pub mod migration;
+pub mod resume;
 pub mod resume_sanitize;
 pub mod snip_compact;
 pub mod telemetry;

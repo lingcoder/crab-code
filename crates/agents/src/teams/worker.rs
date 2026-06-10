@@ -308,24 +308,6 @@ fn extract_last_assistant_text(conversation: &Conversation) -> Option<String> {
         })
 }
 
-/// Legacy worker stub kept for backward compatibility with existing coordinator code.
-pub struct Worker {
-    pub id: String,
-    pub name: String,
-    pub tx: mpsc::Sender<crate::teams::bus::AgentMessage>,
-}
-
-impl Worker {
-    #[must_use]
-    pub fn new(
-        id: String,
-        name: String,
-        tx: mpsc::Sender<crate::teams::bus::AgentMessage>,
-    ) -> Self {
-        Self { id, name, tx }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,14 +431,6 @@ mod tests {
             extract_last_assistant_text(&conv),
             Some("result text".into())
         );
-    }
-
-    #[test]
-    fn legacy_worker_construction() {
-        let (tx, _rx) = mpsc::channel(16);
-        let worker = Worker::new("w1".into(), "Worker 1".into(), tx);
-        assert_eq!(worker.id, "w1");
-        assert_eq!(worker.name, "Worker 1");
     }
 
     #[test]
