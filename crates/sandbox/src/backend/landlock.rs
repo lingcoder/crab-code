@@ -10,8 +10,7 @@
 //! Landlock and are silently ignored.
 
 use landlock::{
-    ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetHandle, RulesetStatus,
-    path_beneath_rules,
+    ABI, AccessFs, LandlockStatus, Ruleset, RulesetAttr, RulesetCreatedAttr, path_beneath_rules,
 };
 
 use crate::policy::{PathAccess, SandboxPolicy};
@@ -87,12 +86,12 @@ impl Sandbox for LandlockSandbox {
             .restrict_self()
             .map_err(|e| crab_core::Error::Other(format!("Landlock restrict_self failed: {e}")))?;
 
-        let applied = matches!(
-            status.ruleset,
-            RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced
-        );
+        let applied = matches!(status.landlock, LandlockStatus::Available { .. });
 
-        if status.ruleset == RulesetStatus::NotEnforced {
+        if matches!(
+            status.landlock,
+            LandlockStatus::NotEnabled | LandlockStatus::NotImplemented
+        ) {
             tracing::warn!(
                 "Landlock ruleset was not enforced — kernel may not support the requested ABI"
             );
