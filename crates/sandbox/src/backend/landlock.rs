@@ -10,7 +10,7 @@
 //! Landlock and are silently ignored.
 
 use landlock::{
-    ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetHandle, RulesetStatus,
+    ABI, Access, AccessFs, BitFlags, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
     path_beneath_rules,
 };
 
@@ -134,7 +134,7 @@ fn parse_kernel_version(version: &str) -> Option<(u32, u32)> {
 }
 
 /// Convert our `PathAccess` to Landlock `AccessFs` flags.
-fn path_access_to_landlock(access: PathAccess, abi: ABI) -> AccessFs {
+fn path_access_to_landlock(access: PathAccess, abi: ABI) -> BitFlags<AccessFs> {
     match access {
         PathAccess::ReadOnly => AccessFs::from_read(abi),
         PathAccess::ReadWrite => AccessFs::from_read(abi) | AccessFs::from_write(abi),
