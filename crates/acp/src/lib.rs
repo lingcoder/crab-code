@@ -1,23 +1,25 @@
-//! `crab-acp` — [Agent Client Protocol](https://agentclientprotocol.com) server glue.
+//! `crab-acp` — [Agent Client Protocol](https://agentclientprotocol.com) server.
 //!
 //! ACP lets editors (Zed, Neovim, Helix, …) drive external AI coding
 //! agents the way LSP lets them drive language servers. This crate
-//! wires the upstream [`agent_client_protocol`] SDK to stdio so that a
+//! implements the agent side of the protocol on top of the upstream
+//! [`agent_client_protocol`] SDK (Zed's official Rust crate) so that a
 //! user's editor can spawn `crab` as an ACP-speaking child process.
 //!
 //! ## Architecture
 //!
-//! The wire types and builder come from the upstream SDK
-//! (`agent-client-protocol = 0.11`, Zed's official Rust crate,
-//! Apache-2.0). This crate provides the stdio transport via
-//! [`serve_stdio`] and re-exports the SDK surface that composition
-//! roots need, so `cli` / `daemon` don't add the SDK as a direct dep.
-//!
-//! Composition roots (`crates/cli/`) configure an
-//! [`Agent`](agent_client_protocol::Agent) builder with request/notification
-//! handlers, then hand it to [`serve_stdio`].
+//! [`AcpServer`] owns the wire protocol: stdio transport, session
+//! registry, prompt dispatch, cancellation, and the bridge from crab
+//! engine events to ACP session notifications. [`AgentHandler`] is the
+//! crate's external boundary — the composition root (cli) plugs in
+//! an implementation wired to the engine and calls
+//! [`AcpServer::serve_stdio`]. Mirrors how `crab-mcp`'s server takes a
+//! `ToolHandler` without embedding a tool backend.
 
-pub mod server;
+mod handler;
+mod notify;
+mod server;
+mod sessions;
 
-pub use agent_client_protocol as sdk;
-pub use server::{AcpServeError, serve_stdio};
+pub use handler::{AgentHandler, HandlerError, PromptTurn};
+pub use server::{AcpServeError, AcpServer};

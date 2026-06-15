@@ -9,14 +9,14 @@ description = "Agent Client Protocol (ACP) — crab as an external agent for Zed
 
 [dependencies]
 crab-core.workspace = true
+crab-utils.workspace = true
 # Upstream ACP SDK (Zed / agentclientprotocol.com official Rust crate).
-# Re-exported as `crab_acp::sdk` so composition roots don't add the SDK
-# as a direct dep.
 agent-client-protocol.workspace = true
 tokio.workspace = true
 # tokio_util::compat adapters (tokio io → futures io for ByteStreams).
 tokio-util = { workspace = true, features = ["compat"] }
 thiserror.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
