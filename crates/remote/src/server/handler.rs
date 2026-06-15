@@ -1,5 +1,5 @@
 //! Trait exposed by the crab-proto server to the composition root
-//! (`cli` / `daemon`) — "this is how you create and drive a real
+//! (`cli`) — "this is how you create and drive a real
 //! session". The server calls this on behalf of connected clients.
 //!
 //! Design: rather than a method-per-request-kind trait, we hand back a
@@ -7,7 +7,7 @@
 //! gets its own handle; the server forwards inbound protocol messages
 //! into `inbound_tx` and drains `outbound_rx` into WebSocket frames.
 //! The composition root is free to route both ends however it likes
-//! (single-session daemon, multi-session manager, fan-out to multiple
+//! (single session, multi-session manager, fan-out to multiple
 //! clients, etc.) without touching this crate.
 
 use serde_json::Value;

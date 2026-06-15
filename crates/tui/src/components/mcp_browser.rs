@@ -21,9 +21,7 @@ use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
-// ---------------------------------------------------------------------------
 // Data model
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct McpToolInfo {
@@ -74,9 +72,7 @@ pub fn load_mcp_servers(registry: &ToolRegistry) -> Vec<McpServerInfo> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
 // View state
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -85,9 +81,7 @@ enum View {
     ToolDetail,
 }
 
-// ---------------------------------------------------------------------------
 // McpBrowserOverlay
-// ---------------------------------------------------------------------------
 
 pub struct McpBrowserOverlay {
     servers: Vec<McpServerInfo>,
@@ -147,9 +141,7 @@ impl McpBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Rendering
-// ---------------------------------------------------------------------------
 
 impl Renderable for McpBrowserOverlay {
     #[allow(clippy::cast_possible_truncation)]
@@ -410,9 +402,7 @@ fn render_footer(area: Rect, buf: &mut Buffer, text: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Input handling
-// ---------------------------------------------------------------------------
 
 impl Overlay for McpBrowserOverlay {
     fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
@@ -494,9 +484,7 @@ impl McpBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

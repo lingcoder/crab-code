@@ -1,5 +1,6 @@
 //! History search overlay — fuzzy-match previous inputs (Ctrl+R).
 
+use crab_utils::text::truncate_chars;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -225,15 +226,6 @@ impl Overlay for HistorySearchOverlay {
     fn name(&self) -> &'static str {
         "history_search"
     }
-}
-
-fn truncate_chars(s: &str, max_chars: usize, ellipsis: &str) -> String {
-    if s.chars().nth(max_chars).is_none() {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max_chars).collect();
-    out.push_str(ellipsis);
-    out
 }
 
 #[cfg(test)]

@@ -6,9 +6,7 @@
 
 use std::time::Instant;
 
-// ---------------------------------------------------------------------------
 // Constants
-// ---------------------------------------------------------------------------
 
 /// Maximum consecutive denials before triggering a fallback warning.
 const MAX_CONSECUTIVE_DENIALS: u32 = 3;
@@ -16,9 +14,7 @@ const MAX_CONSECUTIVE_DENIALS: u32 = 3;
 /// Maximum total denials before triggering a fallback warning.
 const MAX_TOTAL_DENIALS: usize = 20;
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 /// A single denial event record.
 #[derive(Debug, Clone)]
@@ -98,9 +94,7 @@ impl DenialTracker {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

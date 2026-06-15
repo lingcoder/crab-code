@@ -484,13 +484,7 @@ impl Widget for CommandPaletteWidget<'_> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else if max > 3 {
-        format!("{}...", &s[..max - 3])
-    } else {
-        s[..max].to_string()
-    }
+    crab_utils::text::truncate_chars_within(s, max, "...")
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────
@@ -805,5 +799,15 @@ mod tests {
     #[test]
     fn truncate_exact() {
         assert_eq!(truncate("abc", 3), "abc");
+    }
+
+    #[test]
+    fn truncate_multibyte_does_not_panic() {
+        // The previous byte-slice implementation panicked when the cut
+        // point landed inside a multi-byte codepoint.
+        let out = truncate("打开命令面板并执行操作", 8);
+        assert_eq!(out, "打开命令面...");
+        assert_eq!(out.chars().count(), 8);
+        assert_eq!(truncate("你好", 10), "你好");
     }
 }

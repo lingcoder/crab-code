@@ -18,9 +18,7 @@ use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
-// ---------------------------------------------------------------------------
 // Data model
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct MemberInfo {
@@ -71,9 +69,7 @@ pub struct TeamSnapshot {
     pub tasks: Vec<TaskInfo>,
 }
 
-// ---------------------------------------------------------------------------
 // Tab state
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -90,9 +86,7 @@ impl Tab {
     }
 }
 
-// ---------------------------------------------------------------------------
 // TeamBrowserOverlay
-// ---------------------------------------------------------------------------
 
 pub struct TeamBrowserOverlay {
     snapshot: TeamSnapshot,
@@ -118,9 +112,7 @@ impl TeamBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Rendering
-// ---------------------------------------------------------------------------
 
 impl Renderable for TeamBrowserOverlay {
     #[allow(clippy::cast_possible_truncation)]
@@ -369,9 +361,7 @@ impl TeamBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Input handling
-// ---------------------------------------------------------------------------
 
 impl Overlay for TeamBrowserOverlay {
     fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
@@ -406,9 +396,7 @@ impl Overlay for TeamBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

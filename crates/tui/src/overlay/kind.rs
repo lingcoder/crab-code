@@ -6,9 +6,7 @@ use crate::keybindings::KeyContext;
 
 use super::OverlayAction;
 
-// ---------------------------------------------------------------------------
 // State structs for each overlay variant
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub struct TranscriptState {
@@ -364,9 +362,7 @@ impl MessageSelectorState {
     }
 }
 
-// ---------------------------------------------------------------------------
 // OverlayKind enum — every modal overlay the TUI can show
-// ---------------------------------------------------------------------------
 
 pub enum OverlayKind {
     Transcript(TranscriptState),
@@ -537,9 +533,7 @@ impl OverlayKind {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Shared key handlers — reduce duplication across similar overlay types
-// ---------------------------------------------------------------------------
 
 fn handle_scrollable_key(scroll_offset: &mut usize, key: KeyEvent) -> OverlayAction {
     use crossterm::event::KeyCode;
@@ -661,9 +655,7 @@ fn handle_onboarding_key(state: &mut OnboardingState, key: KeyEvent) -> OverlayA
     }
 }
 
-// ---------------------------------------------------------------------------
 // Render helpers — lightweight placeholder renders
-// ---------------------------------------------------------------------------
 
 fn render_scrollable(title: &str, _scroll: usize, area: Rect, buf: &mut Buffer) {
     use ratatui::style::{Color, Style};

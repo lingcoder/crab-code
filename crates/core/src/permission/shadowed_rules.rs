@@ -9,9 +9,7 @@
 
 use super::rule_parser::{PermissionRule, RuleContent};
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 /// A rule that is shadowed (made unreachable) by another rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,9 +22,7 @@ pub struct ShadowedRule {
     pub reason: String,
 }
 
-// ---------------------------------------------------------------------------
 // Functions
-// ---------------------------------------------------------------------------
 
 /// Detect rules in the list that are shadowed by earlier, broader rules.
 ///
@@ -151,9 +147,7 @@ fn glob_pattern_covers(a: &str, b: &str) -> bool {
     false
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

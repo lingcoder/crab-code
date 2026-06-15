@@ -6,3 +6,4 @@ pub mod id;
 pub mod lock;
 pub mod path;
 pub mod text;
+pub mod time;

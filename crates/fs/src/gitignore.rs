@@ -6,9 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 /// Compiled gitignore rules for a directory tree.
 ///
@@ -21,9 +19,7 @@ pub struct GitIgnoreFilter {
     gitignore: ignore::gitignore::Gitignore,
 }
 
-// ---------------------------------------------------------------------------
 // Construction
-// ---------------------------------------------------------------------------
 
 impl GitIgnoreFilter {
     /// Load all gitignore rules for the directory tree rooted at `root`.
@@ -97,15 +93,13 @@ fn global_gitignore_path() -> PathBuf {
     if let Ok(path) = std::env::var("GIT_GLOBAL_IGNORE") {
         return PathBuf::from(path);
     }
-    crab_utils::path::home_dir()
+    crab_utils::path::home_dir_or_cwd()
         .join(".config")
         .join("git")
         .join("ignore")
 }
 
-// ---------------------------------------------------------------------------
 // Queries
-// ---------------------------------------------------------------------------
 
 impl GitIgnoreFilter {
     /// Check whether `path` should be ignored.

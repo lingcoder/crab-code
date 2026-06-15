@@ -14,9 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
 // Record types
-// ---------------------------------------------------------------------------
 
 /// A metric data point ready for export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,9 +30,7 @@ pub struct MetricRecord {
     pub labels: HashMap<String, String>,
 }
 
-// ---------------------------------------------------------------------------
 // Local exporter
-// ---------------------------------------------------------------------------
 
 /// Writes telemetry data to local files. Never sends data over the network.
 pub struct LocalExporter {

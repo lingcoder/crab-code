@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
 // Error types
-// ---------------------------------------------------------------------------
 
 /// Errors related to path resolution or validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,9 +52,7 @@ impl std::fmt::Display for PathError {
 
 impl std::error::Error for PathError {}
 
-// ---------------------------------------------------------------------------
 // Permission result
-// ---------------------------------------------------------------------------
 
 /// Result of a file path permission check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,9 +65,7 @@ pub enum PathPermission {
     OutsideWorkDir,
 }
 
-// ---------------------------------------------------------------------------
 // Shell expansion / UNC detection
-// ---------------------------------------------------------------------------
 
 /// Check whether a path string contains shell expansion syntax that could
 /// cause TOCTOU vulnerabilities (validated literally, but expanded by shell).
@@ -133,9 +127,7 @@ fn contains_suspicious_windows_pattern(path: &str) -> Option<&'static str> {
     None
 }
 
-// ---------------------------------------------------------------------------
 // PathValidator
-// ---------------------------------------------------------------------------
 
 /// Validates whether a file path is allowed by permission rules.
 ///
@@ -396,13 +388,12 @@ fn normalize_path(path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
-/// Get the user's home directory.
+/// Get the user's home directory. `HOME` is checked on all platforms before
+/// the Windows-only `USERPROFILE` so tests and overrides behave uniformly.
 fn home_dir() -> Option<PathBuf> {
-    // Try HOME env var first (works on all platforms)
     if let Ok(home) = std::env::var("HOME") {
         return Some(PathBuf::from(home));
     }
-    // Windows: USERPROFILE
     #[cfg(windows)]
     if let Ok(profile) = std::env::var("USERPROFILE") {
         return Some(PathBuf::from(profile));
@@ -410,9 +401,7 @@ fn home_dir() -> Option<PathBuf> {
     None
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

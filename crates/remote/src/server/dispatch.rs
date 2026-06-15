@@ -317,8 +317,8 @@ async fn send_json<T: serde::Serialize + Sync + ?Sized>(
         .map_err(DispatchError::Socket)
 }
 
-fn truncate_for_log(s: &str) -> &str {
-    if s.len() > 120 { &s[..120] } else { s }
+fn truncate_for_log(s: &str) -> String {
+    crab_utils::text::truncate_chars(s, 120, "")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -354,6 +354,15 @@ mod tests {
         let long = "a".repeat(200);
         assert_eq!(truncate_for_log(&long).len(), 120);
         assert_eq!(truncate_for_log("short").len(), 5);
+    }
+
+    #[test]
+    fn truncate_multibyte_does_not_panic() {
+        // The previous byte-slice implementation panicked when byte 120
+        // landed inside a multi-byte codepoint.
+        let long = "消".repeat(100);
+        let out = truncate_for_log(&long);
+        assert_eq!(out.chars().count(), 100);
     }
 
     #[test]

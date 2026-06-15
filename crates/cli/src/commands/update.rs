@@ -81,7 +81,7 @@ struct VersionCheckCache {
 
 /// Path to the version check cache file.
 fn cache_path() -> PathBuf {
-    crab_utils::path::home_dir()
+    crab_utils::path::home_dir_or_cwd()
         .join(".crab")
         .join("update-check-cache.json")
 }

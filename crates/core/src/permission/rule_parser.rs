@@ -8,9 +8,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
 // Error types
-// ---------------------------------------------------------------------------
 
 /// Error returned when a permission rule string cannot be parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,9 +27,7 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-// ---------------------------------------------------------------------------
 // Core AST types
-// ---------------------------------------------------------------------------
 
 /// A parsed permission rule with tool name and optional content matcher.
 ///
@@ -110,9 +106,7 @@ pub struct BashPattern {
     pub args_glob: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
 // Parsing functions
-// ---------------------------------------------------------------------------
 
 /// Parse a permission rule string into a structured [`PermissionRule`].
 ///
@@ -303,9 +297,7 @@ pub fn parse_bash_pattern(pattern: &str) -> Result<BashPattern, ParseError> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

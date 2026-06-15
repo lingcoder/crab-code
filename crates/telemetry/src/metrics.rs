@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+use crab_utils::time::epoch_millis;
 
 // ── Structured log event ──────────────────────────────────────────────
 
@@ -88,12 +90,6 @@ fn next_span_id() -> String {
     format!("{n:016x}")
 }
 
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
 /// A completed timing measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpanTiming {
@@ -130,7 +126,7 @@ impl ActiveSpan {
             name: name.to_string(),
             span_id: next_span_id(),
             start: Instant::now(),
-            start_time_ms: now_unix_ms(),
+            start_time_ms: epoch_millis(),
             metadata: HashMap::new(),
             finished: false,
         }
@@ -475,7 +471,7 @@ mod tests {
         SpanTiming {
             name: name.to_string(),
             span_id: next_span_id(),
-            start_time_ms: now_unix_ms(),
+            start_time_ms: epoch_millis(),
             duration_ms,
             success,
             metadata: HashMap::new(),

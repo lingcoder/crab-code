@@ -3,7 +3,7 @@
 //! This crate is crab-code's own remote-control surface: a JSON-RPC-over-WebSocket
 //! protocol (the `crab-proto`) together with the client and server that speak it.
 //! It is the architectural hinge for every non-CLI entry point — web UI, mobile
-//! app, desktop app, and headless daemon all attach via this surface.
+//! app, and desktop app all attach via this surface.
 //!
 //! ## Module layout (planned; landed incrementally)
 //!

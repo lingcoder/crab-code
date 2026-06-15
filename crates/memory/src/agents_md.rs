@@ -184,11 +184,11 @@ pub fn collect_nested_agents_md(
             None => continue,
         };
 
-        // Phase 1: Managed/User conditional rules matching target
-        // (We don't have separate managed/user dirs yet, skip for now)
+        // Managed/user conditional rules matching the target would be
+        // checked first, but separate managed/user dirs don't exist yet.
 
-        // Phase 2: Nested directories (CWD → target)
-        // Load AGENTS.md + unconditional rules + conditional rules
+        // Nested directories (CWD → target): load AGENTS.md plus
+        // unconditional and conditional rules.
         let nested_dirs = nested_dirs_between(cwd, &target_dir);
         for dir in &nested_dirs {
             // AGENTS.md / .crab/AGENTS.md
@@ -217,8 +217,8 @@ pub fn collect_nested_agents_md(
             }
         }
 
-        // Phase 3: CWD-level directories (root → CWD)
-        // Only conditional rules (unconditional already loaded at startup)
+        // CWD-level directories (root → CWD): only conditional rules —
+        // unconditional ones were already loaded at startup.
         for dir in ancestor_dirs(cwd) {
             if cwd_ancestors.contains(&dir) && dir != *cwd {
                 let rules_dir = dir.join(".crab").join("rules");
@@ -1059,8 +1059,12 @@ mod tests {
         let mut loaded = HashSet::new();
 
         // First call
-        let results1 =
-            collect_nested_agents_md(root.path(), &[target.clone()], &mut loaded, &global);
+        let results1 = collect_nested_agents_md(
+            root.path(),
+            std::slice::from_ref(&target),
+            &mut loaded,
+            &global,
+        );
         assert_eq!(results1.len(), 1);
 
         // Second call should return nothing (already loaded)

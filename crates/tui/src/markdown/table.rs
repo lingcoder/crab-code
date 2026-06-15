@@ -4,9 +4,9 @@
 //! tables into simple pipe-delimited lines. This module exposes a
 //! column-aware alternative that pads cells to align visually.
 
+use crab_utils::text::display_width;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
@@ -147,13 +147,6 @@ pub fn render_vertical_table(
         }
     }
     lines
-}
-
-/// Terminal display width of a string — counts CJK/wide glyphs as 2 cells and
-/// zero-width combining marks as 0, so columns align and over-wide tables are
-/// detected correctly (a plain `chars().count()` mis-measures both).
-fn display_width(s: &str) -> usize {
-    UnicodeWidthStr::width(s)
 }
 
 fn pad_right(s: &str, target: usize) -> String {

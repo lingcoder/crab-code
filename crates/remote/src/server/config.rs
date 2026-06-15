@@ -1,6 +1,6 @@
 //! Configuration for the crab-proto server side.
 //!
-//! Separated from the actual listener so `daemon` / `cli` can construct
+//! Separated from the actual listener so the composition root can construct
 //! a `ServerConfig` ahead of time (loaded from `~/.crab/settings.json`
 //! or env vars) and hand it to [`super::RemoteServer::serve`] when it
 //! lands.
@@ -21,7 +21,7 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
 
     /// HMAC-SHA256 secret used to issue / verify JWTs. Any string
-    /// ≥32 bytes is fine; `daemon` generates a random one on first run
+    /// ≥32 bytes is fine; the host generates a random one on first run
     /// and writes it to `~/.crab/auth/jwt.secret` (0600 on unix).
     pub jwt_secret: String,
 

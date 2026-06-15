@@ -267,7 +267,7 @@ impl AutoComplete {
     fn complete_file_paths(&mut self, token: &str) {
         let path = if let Some(stripped) = token.strip_prefix('~') {
             // Expand tilde
-            if let Some(home) = home_dir() {
+            if let Some(home) = crab_utils::path::home_dir() {
                 home.join(stripped.trim_start_matches(['/', '\\']))
             } else {
                 return;
@@ -336,18 +336,6 @@ impl AutoComplete {
 impl Default for AutoComplete {
     fn default() -> Self {
         Self::new(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-    }
-}
-
-/// Get the user's home directory.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("USERPROFILE").ok().map(PathBuf::from)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(PathBuf::from)
     }
 }
 

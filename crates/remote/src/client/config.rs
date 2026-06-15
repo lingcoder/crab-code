@@ -1,6 +1,6 @@
 //! Configuration for [`super::RemoteClient`].
 //!
-//! Split out so `cli` / `daemon` can load + validate config independently
+//! Split out so composition roots can load + validate config independently
 //! of actually opening a connection (e.g. `crab config check` can verify
 //! the shape without touching the network).
 

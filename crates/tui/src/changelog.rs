@@ -120,12 +120,7 @@ fn push_bullet(out: &mut Vec<String>, bullet: &str, max: usize) {
 }
 
 fn truncate(s: &str) -> String {
-    if s.chars().count() <= MAX_BULLET_LEN {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(MAX_BULLET_LEN.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    crab_utils::text::truncate_chars_within(s, MAX_BULLET_LEN, "…")
 }
 
 #[cfg(test)]

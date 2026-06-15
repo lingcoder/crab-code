@@ -17,9 +17,7 @@ use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
-// ---------------------------------------------------------------------------
 // Data model (TUI-local, decoupled from crab-memory)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {
@@ -95,9 +93,7 @@ pub fn load_memories(dir: &std::path::Path) -> Vec<MemoryEntry> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
 // View state
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -105,9 +101,7 @@ enum View {
     Detail,
 }
 
-// ---------------------------------------------------------------------------
 // MemoryBrowserOverlay
-// ---------------------------------------------------------------------------
 
 pub struct MemoryBrowserOverlay {
     entries: Vec<MemoryEntry>,
@@ -143,9 +137,7 @@ impl MemoryBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Rendering
-// ---------------------------------------------------------------------------
 
 impl Renderable for MemoryBrowserOverlay {
     #[allow(clippy::cast_possible_truncation)]
@@ -338,9 +330,7 @@ fn render_footer(area: Rect, buf: &mut Buffer, text: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Input handling
-// ---------------------------------------------------------------------------
 
 impl Overlay for MemoryBrowserOverlay {
     fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
@@ -401,9 +391,7 @@ impl MemoryBrowserOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

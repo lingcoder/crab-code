@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crab_utils::path::home_dir;
+use crab_utils::path::home_dir_or_cwd;
 
 /// Auto memory directory for a specific project.
 ///
@@ -16,7 +16,7 @@ pub fn auto_memory_dir(git_root: Option<&Path>) -> PathBuf {
     match git_root {
         Some(root) => {
             let sanitized = sanitize_path_component(root);
-            home_dir()
+            home_dir_or_cwd()
                 .join(".crab")
                 .join("projects")
                 .join(sanitized)
@@ -29,13 +29,13 @@ pub fn auto_memory_dir(git_root: Option<&Path>) -> PathBuf {
 /// Global memory directory: `~/.crab/memory/`.
 #[must_use]
 pub fn global_memory_dir() -> PathBuf {
-    home_dir().join(".crab").join("memory")
+    home_dir_or_cwd().join(".crab").join("memory")
 }
 
 /// Team memory directory: `~/.crab/teams/<name>/memory/`.
 #[must_use]
 pub fn team_memory_dir(team_name: &str) -> PathBuf {
-    home_dir()
+    home_dir_or_cwd()
         .join(".crab")
         .join("teams")
         .join(team_name)

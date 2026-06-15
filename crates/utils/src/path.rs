@@ -10,17 +10,21 @@ pub fn normalize(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Returns the user's home directory.
-///
-/// # Panics
-///
-/// Panics if the home directory cannot be determined.
+/// Returns the user's home directory, if it can be determined.
 #[must_use]
-pub fn home_dir() -> PathBuf {
-    directories::BaseDirs::new()
-        .expect("failed to resolve home directory")
-        .home_dir()
-        .to_path_buf()
+pub fn home_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf())
+}
+
+/// Returns the user's home directory, with a non-panicking fallback.
+///
+/// Falls back to the current working directory (or `.`) when no home can be
+/// determined — e.g. stripped-down containers without `HOME` or a user
+/// profile. Intended for call sites that build best-effort default paths
+/// like `~/.crab/...` and must not panic.
+#[must_use]
+pub fn home_dir_or_cwd() -> PathBuf {
+    home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 #[cfg(test)]
@@ -42,15 +46,16 @@ mod tests {
     }
 
     #[test]
-    fn home_dir_is_absolute() {
-        let home = home_dir();
+    fn home_dir_is_absolute_and_exists() {
+        let home = home_dir().expect("home dir resolvable in test env");
         assert!(home.is_absolute());
+        assert!(home.exists());
     }
 
     #[test]
-    fn home_dir_exists() {
-        let home = home_dir();
-        assert!(home.exists());
+    fn home_dir_or_cwd_never_empty() {
+        let home = home_dir_or_cwd();
+        assert!(!home.as_os_str().is_empty());
     }
 
     #[test]

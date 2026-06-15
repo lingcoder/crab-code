@@ -19,9 +19,7 @@ use crate::keybindings::KeyContext;
 use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
-// ---------------------------------------------------------------------------
 // Data model
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffLineKind {
@@ -50,9 +48,7 @@ pub struct FileDiff {
     pub deletions: usize,
 }
 
-// ---------------------------------------------------------------------------
 // Unified diff parser
-// ---------------------------------------------------------------------------
 
 #[must_use]
 pub fn parse_unified_diff(raw: &str) -> Vec<FileDiff> {
@@ -144,9 +140,7 @@ pub fn parse_unified_diff(raw: &str) -> Vec<FileDiff> {
     files
 }
 
-// ---------------------------------------------------------------------------
 // View state
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -154,9 +148,7 @@ enum View {
     Detail,
 }
 
-// ---------------------------------------------------------------------------
 // DiffViewerOverlay
-// ---------------------------------------------------------------------------
 
 pub struct DiffViewerOverlay {
     files: Vec<FileDiff>,
@@ -223,9 +215,7 @@ impl DiffViewerOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Rendering
-// ---------------------------------------------------------------------------
 
 impl Renderable for DiffViewerOverlay {
     #[allow(clippy::cast_possible_truncation)]
@@ -445,9 +435,7 @@ impl DiffViewerOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Input handling
-// ---------------------------------------------------------------------------
 
 impl Overlay for DiffViewerOverlay {
     fn handle_key(&mut self, key: KeyEvent) -> OverlayAction {
@@ -545,9 +533,7 @@ impl DiffViewerOverlay {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

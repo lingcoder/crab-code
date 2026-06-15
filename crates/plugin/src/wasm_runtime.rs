@@ -42,6 +42,26 @@ struct HostState {
     stdout_buf: Vec<u8>,
 }
 
+/// Convert a guest-supplied i32 pointer into a host memory offset.
+///
+/// wasm32 linear memory is addressed by 32-bit values; a negative pointer is
+/// out of range and rejected rather than wrapping into a huge `usize`.
+fn guest_ptr_to_offset(ptr: i32) -> crab_core::Result<usize> {
+    usize::try_from(ptr)
+        .map_err(|_| crab_core::Error::Other("wasm guest returned a negative pointer".into()))
+}
+
+/// Resolve a guest `(ptr, len)` pair into host `(start, end)` offsets.
+///
+/// Returns `None` when either value is negative or the range overflows, so
+/// host functions can silently skip a malformed call rather than panic.
+fn guest_slice_bounds(ptr: i32, len: i32) -> Option<(usize, usize)> {
+    let start = usize::try_from(ptr).ok()?;
+    let len = usize::try_from(len).ok()?;
+    let end = start.checked_add(len)?;
+    Some((start, end))
+}
+
 /// A loaded and validated WASM plugin instance.
 pub struct WasmPluginInstance {
     /// Plugin name (from manifest or extracted from module).
@@ -60,10 +80,12 @@ pub struct WasmPluginInstance {
 
 impl std::fmt::Debug for WasmPluginInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The compiled module, engine, config, and manifest are large and/or
+        // not usefully printable; only the identifying fields are shown.
         f.debug_struct("WasmPluginInstance")
             .field("name", &self.name)
             .field("version", &self.version)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -103,19 +125,15 @@ impl WasmPluginInstance {
             .map_err(|e| crab_core::Error::Other(format!("wasm instantiate failed: {e}")))?;
 
         // Try the memory-based protocol first: plugin_execute(ptr, len) -> ptr
-        if let Some(exec_fn) = instance
-            .get_typed_func::<(i32, i32), i32>(&mut store, "plugin_execute")
-            .ok()
+        if let Ok(exec_fn) =
+            instance.get_typed_func::<(i32, i32), i32>(&mut store, "plugin_execute")
         {
-            let output = self.execute_with_memory(&mut store, &instance, exec_fn, input)?;
+            let output = Self::execute_with_memory(&mut store, &instance, &exec_fn, input)?;
             return Ok(output);
         }
 
         // Fallback: no-arg plugin_execute() -> i32 (status code)
-        if let Some(exec_fn) = instance
-            .get_typed_func::<(), i32>(&mut store, "plugin_execute")
-            .ok()
-        {
+        if let Ok(exec_fn) = instance.get_typed_func::<(), i32>(&mut store, "plugin_execute") {
             let status = exec_fn
                 .call(&mut store, ())
                 .map_err(|e| crab_core::Error::Other(format!("wasm execute failed: {e}")))?;
@@ -132,10 +150,9 @@ impl WasmPluginInstance {
 
     /// Execute using the memory-based protocol.
     fn execute_with_memory(
-        &self,
         store: &mut Store<HostState>,
         instance: &wasmtime::Instance,
-        exec_fn: wasmtime::TypedFunc<(i32, i32), i32>,
+        exec_fn: &wasmtime::TypedFunc<(i32, i32), i32>,
         input: &str,
     ) -> crab_core::Result<PluginOutput> {
         // Get the plugin's memory export
@@ -153,13 +170,17 @@ impl WasmPluginInstance {
             })?;
 
         let input_bytes = input.as_bytes();
+        // wasm32 linear memory is addressed by i32; an input larger than
+        // i32::MAX cannot fit in the guest regardless.
+        let input_len = i32::try_from(input_bytes.len())
+            .map_err(|_| crab_core::Error::Other("wasm input too large for guest memory".into()))?;
         let input_ptr = alloc_fn
-            .call(&mut *store, input_bytes.len() as i32)
+            .call(&mut *store, input_len)
             .map_err(|e| crab_core::Error::Other(format!("wasm alloc failed: {e}")))?;
 
         // Write input into guest memory
         let mem_data = memory.data_mut(&mut *store);
-        let start = input_ptr as usize;
+        let start = guest_ptr_to_offset(input_ptr)?;
         let end = start + input_bytes.len();
         if end > mem_data.len() {
             return Err(crab_core::Error::Other(
@@ -170,13 +191,13 @@ impl WasmPluginInstance {
 
         // Call plugin_execute(ptr, len) -> result_ptr
         let result_ptr = exec_fn
-            .call(&mut *store, (input_ptr, input_bytes.len() as i32))
+            .call(&mut *store, (input_ptr, input_len))
             .map_err(|e| crab_core::Error::Other(format!("wasm execute failed: {e}")))?;
 
         // Read the result: a length-prefixed string at result_ptr
         // Format: [len: i32][data: u8 * len]
         let mem_data = memory.data(&*store);
-        let rp = result_ptr as usize;
+        let rp = guest_ptr_to_offset(result_ptr)?;
         if rp + 4 > mem_data.len() {
             return Ok(PluginOutput {
                 status: 0,
@@ -184,8 +205,11 @@ impl WasmPluginInstance {
             });
         }
 
-        let result_len =
-            i32::from_le_bytes(mem_data[rp..rp + 4].try_into().unwrap_or([0; 4])) as usize;
+        // A negative length from the guest is malformed; treat it as empty.
+        let result_len = usize::try_from(i32::from_le_bytes(
+            mem_data[rp..rp + 4].try_into().unwrap_or([0; 4]),
+        ))
+        .unwrap_or(0);
         let result_start = rp + 4;
         let result_end = result_start + result_len;
 
@@ -226,16 +250,18 @@ impl WasmPluginInstance {
                 "env",
                 "host_log",
                 |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
-                    let memory = caller.get_export("memory").and_then(|e| e.into_memory());
-                    if let Some(memory) = memory {
-                        let data = memory.data(&caller);
-                        let start = ptr as usize;
-                        let end = start + len as usize;
-                        if end <= data.len() {
-                            if let Ok(msg) = std::str::from_utf8(&data[start..end]) {
-                                tracing::debug!(plugin_msg = msg, "wasm plugin log");
-                            }
-                        }
+                    let memory = caller
+                        .get_export("memory")
+                        .and_then(wasmtime::Extern::into_memory);
+                    let (Some(memory), Some((start, end))) = (memory, guest_slice_bounds(ptr, len))
+                    else {
+                        return;
+                    };
+                    let data = memory.data(&caller);
+                    if end <= data.len()
+                        && let Ok(msg) = std::str::from_utf8(&data[start..end])
+                    {
+                        tracing::debug!(plugin_msg = msg, "wasm plugin log");
                     }
                 },
             )
@@ -247,16 +273,18 @@ impl WasmPluginInstance {
                 "env",
                 "host_output",
                 |mut caller: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| {
-                    let memory = caller.get_export("memory").and_then(|e| e.into_memory());
-                    if let Some(memory) = memory {
-                        let data = memory.data(&caller);
-                        let start = ptr as usize;
-                        let end = start + len as usize;
-                        if end <= data.len() {
-                            let chunk = data[start..end].to_vec();
-                            let state = caller.data_mut();
-                            state.stdout_buf.extend_from_slice(&chunk);
-                        }
+                    let memory = caller
+                        .get_export("memory")
+                        .and_then(wasmtime::Extern::into_memory);
+                    let (Some(memory), Some((start, end))) = (memory, guest_slice_bounds(ptr, len))
+                    else {
+                        return;
+                    };
+                    let data = memory.data(&caller);
+                    if end <= data.len() {
+                        let chunk = data[start..end].to_vec();
+                        let state = caller.data_mut();
+                        state.stdout_buf.extend_from_slice(&chunk);
                     }
                 },
             )
@@ -286,10 +314,11 @@ pub struct WasmRuntime {
 
 impl std::fmt::Debug for WasmRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The engine handle is not usefully printable; show counts and config.
         f.debug_struct("WasmRuntime")
             .field("plugin_count", &self.plugins.len())
             .field("sandbox_config", &self.sandbox_config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -343,12 +372,10 @@ impl WasmRuntime {
 
         let name = manifest
             .as_ref()
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| "unnamed-wasm-plugin".into());
+            .map_or_else(|| "unnamed-wasm-plugin".into(), |m| m.name.clone());
         let version = manifest
             .as_ref()
-            .map(|m| m.version.clone())
-            .unwrap_or_else(|| "0.0.0".into());
+            .map_or_else(|| "0.0.0".into(), |m| m.version.clone());
 
         let instance = WasmPluginInstance {
             name,
@@ -653,8 +680,9 @@ mod tests {
         rt.load_plugin_bytes(&wasm, None).unwrap();
         rt.load_plugin_bytes(&wasm, None).unwrap();
 
-        let names: Vec<_> = rt.plugins().map(|p| p.name()).collect();
+        let names: Vec<_> = rt.plugins().map(WasmPluginInstance::name).collect();
         assert_eq!(names.len(), 2);
+        assert!(names.iter().all(|n| *n == "unnamed-wasm-plugin"));
     }
 
     #[test]

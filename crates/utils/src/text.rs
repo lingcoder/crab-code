@@ -11,6 +11,62 @@ pub fn strip_ansi(s: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// Truncates `s` to at most `max_chars` Unicode scalar values, appending
+/// `ellipsis` if any characters were dropped.
+///
+/// "Characters" here means codepoints (what `str::chars()` yields), not
+/// grapheme clusters — a flag emoji or combining sequence may still span
+/// multiple counted chars. That's fine for "short summary" truncation: the
+/// goal is to avoid byte-slice panics and keep output bounded, not to be
+/// grapheme-accurate.
+///
+/// If `s` already fits, it's returned unchanged (no ellipsis).
+///
+/// # Examples
+///
+/// ```
+/// use crab_utils::text::truncate_chars;
+///
+/// assert_eq!(truncate_chars("hello", 10, "…"), "hello");
+/// assert_eq!(truncate_chars("hello world", 5, "…"), "hello…");
+/// ```
+#[must_use]
+pub fn truncate_chars(s: &str, max_chars: usize, ellipsis: &str) -> String {
+    // Fast path: `nth(max_chars)` stops early instead of walking the whole
+    // string the way `chars().count()` would.
+    if s.chars().nth(max_chars).is_none() {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars).collect();
+    out.push_str(ellipsis);
+    out
+}
+
+/// Truncates `s` so the *result* — ellipsis included — is at most
+/// `max_chars` codepoints.
+///
+/// Unlike [`truncate_chars`] (which keeps `max_chars` of content and then
+/// appends the ellipsis), this enforces a total output budget. If
+/// `max_chars` is smaller than the ellipsis itself, the bare ellipsis is
+/// returned and exceeds the budget.
+///
+/// # Examples
+///
+/// ```
+/// use crab_utils::text::truncate_chars_within;
+///
+/// assert_eq!(truncate_chars_within("hello world!", 8, "..."), "hello...");
+/// assert_eq!(truncate_chars_within("abc", 3, "..."), "abc");
+/// ```
+#[must_use]
+pub fn truncate_chars_within(s: &str, max_chars: usize, ellipsis: &str) -> String {
+    if s.chars().nth(max_chars).is_none() {
+        return s.to_string();
+    }
+    let keep = max_chars.saturating_sub(ellipsis.chars().count());
+    truncate_chars(s, keep, ellipsis)
+}
+
 /// Truncates a string to fit within `max_width` display columns.
 /// Handles CJK double-width characters correctly.
 #[must_use]
@@ -110,6 +166,78 @@ mod tests {
     #[test]
     fn truncate_empty() {
         assert_eq!(truncate_to_width("", 5), "");
+    }
+
+    #[test]
+    fn truncate_chars_ascii_within_limit_unchanged() {
+        assert_eq!(truncate_chars("hi", 10, "…"), "hi");
+        assert_eq!(truncate_chars("hello", 5, "…"), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_ascii_over_limit() {
+        assert_eq!(truncate_chars("hello world", 5, "…"), "hello…");
+    }
+
+    #[test]
+    fn truncate_chars_multibyte_counts_by_chars_not_bytes() {
+        // 4-char CJK input occupies 12 bytes. Byte-slicing at [..3] would
+        // panic; char-based truncation at 2 keeps the first 2 characters.
+        assert_eq!(truncate_chars("你好世界", 2, "…"), "你好…");
+        assert_eq!(truncate_chars("你好世界", 10, "…"), "你好世界");
+    }
+
+    #[test]
+    fn truncate_chars_mixed_ascii_and_multibyte() {
+        assert_eq!(truncate_chars("abc你好d", 4, "…"), "abc你…");
+    }
+
+    #[test]
+    fn truncate_chars_empty_input_unchanged() {
+        assert_eq!(truncate_chars("", 10, "…"), "");
+        assert_eq!(truncate_chars("", 0, "…"), "");
+    }
+
+    #[test]
+    fn truncate_chars_zero_limit_yields_ellipsis_only() {
+        assert_eq!(truncate_chars("hello", 0, "…"), "…");
+    }
+
+    #[test]
+    fn truncate_chars_custom_and_empty_ellipsis() {
+        assert_eq!(truncate_chars("abcdef", 3, "[...]"), "abc[...]");
+        assert_eq!(truncate_chars("abcdef", 3, ""), "abc");
+    }
+
+    #[test]
+    fn truncate_chars_emoji_counted_as_chars() {
+        // Each emoji here is a single codepoint (not a ZWJ sequence).
+        assert_eq!(truncate_chars("🦀🦀🦀🦀", 2, "…"), "🦀🦀…");
+    }
+
+    #[test]
+    fn truncate_chars_within_fits_unchanged() {
+        assert_eq!(truncate_chars_within("abc", 3, "..."), "abc");
+        assert_eq!(truncate_chars_within("hi", 10, "..."), "hi");
+    }
+
+    #[test]
+    fn truncate_chars_within_total_budget_includes_ellipsis() {
+        let out = truncate_chars_within("hello world!", 8, "...");
+        assert_eq!(out, "hello...");
+        assert_eq!(out.chars().count(), 8);
+    }
+
+    #[test]
+    fn truncate_chars_within_multibyte() {
+        let out = truncate_chars_within("你好世界你好世界", 5, "…");
+        assert_eq!(out, "你好世界…");
+        assert_eq!(out.chars().count(), 5);
+    }
+
+    #[test]
+    fn truncate_chars_within_budget_smaller_than_ellipsis() {
+        assert_eq!(truncate_chars_within("hello", 2, "..."), "...");
     }
 
     #[test]

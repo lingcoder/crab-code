@@ -11,9 +11,7 @@ use grep_regex::RegexMatcherBuilder;
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 /// A single match from a content search.
 #[derive(Debug, Clone)]
@@ -49,9 +47,7 @@ pub struct GrepOptions {
     pub respect_gitignore: bool,
 }
 
-// ---------------------------------------------------------------------------
 // Public API
-// ---------------------------------------------------------------------------
 
 /// Search file contents by regex pattern.
 ///
@@ -139,9 +135,7 @@ pub fn search(opts: &GrepOptions) -> crab_core::Result<Vec<GrepMatch>> {
     Ok(all_matches)
 }
 
-// ---------------------------------------------------------------------------
 // Internal: file-level search using grep-searcher
-// ---------------------------------------------------------------------------
 
 /// Search a single file using `grep-searcher` with binary detection.
 fn search_file_grep(

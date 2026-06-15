@@ -8,32 +8,25 @@ const FEEDBACK_REPO: &str = "lingcoder/crab-code";
 /// Returns the issue URL on success, or an error message on failure.
 /// In test builds this is a no-op that returns a fake URL.
 fn create_github_issue(repo: &str, title: &str, body: &str) -> Result<String, String> {
-    #[cfg(test)]
-    {
-        let _ = (repo, title, body);
+    if cfg!(test) {
         return Ok("https://github.com/test/repo/issues/1".into());
     }
 
-    #[cfg(not(test))]
+    match std::process::Command::new("gh")
+        .args([
+            "issue", "create", "--repo", repo, "--title", title, "--body", body,
+        ])
+        .output()
     {
-        match std::process::Command::new("gh")
-            .args([
-                "issue", "create", "--repo", repo, "--title", title, "--body", body,
-            ])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let url = String::from_utf8_lossy(&output.stdout);
-                Ok(url.trim().to_string())
-            }
-            Ok(output) => {
-                let err = String::from_utf8_lossy(&output.stderr);
-                Err(format!("Failed to create issue: {}", err.trim()))
-            }
-            Err(_) => {
-                Err("GitHub CLI (gh) not found. Install it from https://cli.github.com/".into())
-            }
+        Ok(output) if output.status.success() => {
+            let url = String::from_utf8_lossy(&output.stdout);
+            Ok(url.trim().to_string())
         }
+        Ok(output) => {
+            let err = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to create issue: {}", err.trim()))
+        }
+        Err(_) => Err("GitHub CLI (gh) not found. Install it from https://cli.github.com/".into()),
     }
 }
 

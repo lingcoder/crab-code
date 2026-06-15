@@ -7,9 +7,7 @@
 use super::PermissionDecision;
 use super::rule_parser::{PermissionRule, matches_rule};
 
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 /// A human-readable explanation of a permission decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,9 +21,7 @@ pub struct PermissionExplanation {
     pub suggestion: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
 // Functions
-// ---------------------------------------------------------------------------
 
 /// Explain a permission decision in terms of the rules that were evaluated.
 ///
@@ -148,9 +144,7 @@ pub fn suggest_allow_rule(tool_name: &str, tool_input: &serde_json::Value) -> Op
     ))
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
