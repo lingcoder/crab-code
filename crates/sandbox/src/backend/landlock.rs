@@ -48,17 +48,14 @@ impl Sandbox for LandlockSandbox {
     fn apply(
         &self,
         policy: &SandboxPolicy,
-        cmd: &mut tokio::process::Command,
+        _cmd: &mut tokio::process::Command,
     ) -> crab_core::Result<SandboxResult> {
-        let abi = match self.abi {
-            Some(a) => a,
-            None => {
-                return Ok(SandboxResult {
-                    applied: false,
-                    description: "Landlock not available on this kernel".into(),
-                    backend: SandboxBackend::Landlock,
-                });
-            }
+        let Some(abi) = self.abi else {
+            return Ok(SandboxResult {
+                applied: false,
+                description: "Landlock not available on this kernel".into(),
+                backend: SandboxBackend::Landlock,
+            });
         };
 
         let ruleset = Ruleset::default()
@@ -117,11 +114,9 @@ fn detect_abi() -> Option<ABI> {
     let info = sysinfo::System::kernel_version();
     if let Some(version) = info
         && let Some((major, minor)) = parse_kernel_version(&version)
+        && (major > 5 || (major == 5 && minor >= 13))
     {
-        if major > 5 || (major == 5 && minor >= 13) {
-            // Try ABI v3 first (kernel >= 6.2), fall back to v2/v1.
-            return Some(ABI::V3);
-        }
+        return Some(ABI::V3);
     }
     None
 }
