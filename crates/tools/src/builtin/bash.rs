@@ -171,20 +171,52 @@ fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
 /// Join the streaming reader tasks and concatenate their captured lines into a
 /// single newline-separated string. Used by the timeout/cancel branches to
 /// recover whatever output arrived before the child was killed.
+/// Terminate a streaming child and any processes it spawned.
+///
+/// On Unix a simple `bash -c "<cmd>"` execs into the command, so killing the
+/// child PID is enough. On Windows the shell launches the command as a separate
+/// child that outlives a plain kill and keeps the inherited stdout/stderr pipes
+/// open, so terminate the whole tree to let the pipes close promptly.
+async fn kill_streaming_child(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+    }
+    let _ = child.start_kill();
+}
+
 async fn join_streaming_output(
     stdout_handle: tokio::task::JoinHandle<Vec<String>>,
     stderr_handle: tokio::task::JoinHandle<Vec<String>>,
 ) -> String {
-    let stdout_lines = stdout_handle.await.unwrap_or_default();
-    let stderr_lines = stderr_handle.await.unwrap_or_default();
-    let mut combined = String::new();
-    for line in stdout_lines.iter().chain(stderr_lines.iter()) {
-        if !combined.is_empty() {
-            combined.push('\n');
+    // After a kill, the reader tasks finish once the child's pipes close. A
+    // grandchild that inherited a pipe (e.g. a command launched via the shell)
+    // can keep it open until it exits on its own, so bound the wait and abort
+    // the readers rather than block for the full command duration.
+    let stdout_abort = stdout_handle.abort_handle();
+    let stderr_abort = stderr_handle.abort_handle();
+    let collect = async {
+        let stdout_lines = stdout_handle.await.unwrap_or_default();
+        let stderr_lines = stderr_handle.await.unwrap_or_default();
+        let mut combined = String::new();
+        for line in stdout_lines.iter().chain(stderr_lines.iter()) {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(line);
         }
-        combined.push_str(line);
+        combined
+    };
+    if let Ok(combined) = tokio::time::timeout(Duration::from_millis(500), collect).await {
+        combined
+    } else {
+        stdout_abort.abort();
+        stderr_abort.abort();
+        String::new()
     }
-    combined
 }
 
 pub struct BashTool;
@@ -605,12 +637,12 @@ impl BashTool {
                 }
             }
             () = tokio::time::sleep(timeout) => {
-                let _ = child.kill().await;
+                kill_streaming_child(&mut child).await;
                 let partial = join_streaming_output(stdout_handle, stderr_handle).await;
                 Ok(ToolOutput::error(format!("Command timed out\n{partial}")))
             }
             () = cancel.cancelled() => {
-                let _ = child.kill().await;
+                kill_streaming_child(&mut child).await;
                 let partial = join_streaming_output(stdout_handle, stderr_handle).await;
                 Ok(ToolOutput::error(format!("Command cancelled\n{partial}")))
             }
