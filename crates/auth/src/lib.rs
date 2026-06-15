@@ -7,6 +7,7 @@ pub mod gcp_identity;
 pub mod keychain;
 pub mod oauth;
 pub mod resolver;
+pub mod sigv4;
 #[cfg(feature = "vertex")]
 pub mod vertex_auth;
 
@@ -32,6 +33,19 @@ pub struct OAuthToken {
     pub access_token: String,
 }
 
+/// Headers a provider commits to for one specific request.
+///
+/// Returned by [`AuthProvider::sign_request`] for request-bound auth schemes
+/// (AWS `SigV4`), where the signature covers the exact method, path, and body.
+/// The caller must attach every entry verbatim and skip the static
+/// `x-api-key` / `Authorization: Bearer` header.
+#[derive(Debug, Clone, Default)]
+pub struct SignedHeaders {
+    /// `(name, value)` pairs, e.g. `authorization`, `x-amz-date`,
+    /// `x-amz-security-token`.
+    pub headers: Vec<(String, String)>,
+}
+
 /// Provides authentication credentials for LLM API calls.
 ///
 /// Implementations must be `Send + Sync` for use across async tasks.
@@ -39,6 +53,22 @@ pub struct OAuthToken {
 pub trait AuthProvider: Send + Sync {
     /// Resolve the current auth credentials.
     fn get_auth(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<AuthMethod>> + Send + '_>>;
+
+    /// Sign one concrete request, returning the headers it commits to.
+    ///
+    /// Returns `None` for schemes that need no per-request signing (API key,
+    /// bearer token); the caller then falls back to [`AuthProvider::get_auth`].
+    /// `SigV4` providers return `Some` with the `Authorization` / `x-amz-*`
+    /// headers bound to this exact request.
+    fn sign_request(
+        &self,
+        _method: &str,
+        _host: &str,
+        _path: &str,
+        _body: &[u8],
+    ) -> Option<SignedHeaders> {
+        None
+    }
 
     /// Refresh credentials (no-op for API key providers).
     fn refresh(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>>;
@@ -113,6 +143,16 @@ mod tests {
             AuthMethod::ApiKey(k) => assert_eq!(k, "my-key"),
             AuthMethod::OAuth(_) => panic!("expected ApiKey"),
         }
+    }
+
+    #[test]
+    fn api_key_provider_sign_request_returns_none() {
+        let provider = ApiKeyProvider::new("key".into());
+        assert!(
+            provider
+                .sign_request("POST", "api.anthropic.com", "/v1/messages", b"{}")
+                .is_none()
+        );
     }
 
     #[test]

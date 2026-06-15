@@ -11,7 +11,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crate::{AuthMethod, AuthProvider, OAuthToken};
+use crab_utils::time::epoch_secs;
+
+use crate::sigv4::{self, CanonicalRequest, SigningCredentials};
+use crate::{AuthMethod, AuthProvider, OAuthToken, SignedHeaders};
 
 /// Default session duration for assumed roles (1 hour).
 const DEFAULT_SESSION_DURATION_SECS: u64 = 3600;
@@ -94,20 +97,33 @@ impl StsCredentials {
         self.expires_at > Instant::now() + Duration::from_secs(REFRESH_MARGIN_SECS)
     }
 
-    /// Format as `SigV4`-compatible authorization header.
-    #[must_use]
-    pub fn to_auth_header(&self, service: &str) -> String {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        let timestamp = now.as_secs();
-        let date_stamp = format_date_stamp(timestamp);
-        let credential_scope = format!("{date_stamp}/{}/{service}/aws4_request", self.region);
-
-        format!(
-            "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=placeholder",
-            self.access_key_id,
+    /// Sign a Bedrock Runtime request with these temporary credentials.
+    fn sign(&self, method: &str, host: &str, path: &str, body: &[u8]) -> sigv4::SignedRequest {
+        sigv4::sign(
+            &CanonicalRequest {
+                method,
+                host,
+                path,
+                query: "",
+                headers: &[("content-type", "application/json")],
+                payload: body,
+            },
+            &SigningCredentials {
+                access_key_id: self.access_key_id.clone(),
+                secret_access_key: self.secret_access_key.clone(),
+                session_token: Some(self.session_token.clone()),
+            },
+            &self.region,
+            "bedrock",
+            epoch_secs(),
         )
+    }
+
+    /// `Authorization` header for a Bedrock Runtime call signed with these
+    /// temporary credentials.
+    fn bedrock_auth_header(&self) -> String {
+        let host = format!("bedrock-runtime.{}.amazonaws.com", self.region);
+        self.sign("POST", &host, "/", b"").authorization
     }
 }
 
@@ -199,23 +215,45 @@ impl AssumeRoleProvider {
         }
 
         let body = url_encode_params(&params);
+        let host = format!("sts.{}.amazonaws.com", self.config.region);
+        let signed = sigv4::sign(
+            &CanonicalRequest {
+                method: "POST",
+                host: &host,
+                path: "/",
+                query: "",
+                headers: &[(
+                    "content-type",
+                    "application/x-www-form-urlencoded; charset=utf-8",
+                )],
+                payload: body.as_bytes(),
+            },
+            &SigningCredentials {
+                access_key_id: self.source_access_key_id.clone(),
+                secret_access_key: self.source_secret_access_key.clone(),
+                session_token: self.source_session_token.clone(),
+            },
+            &self.config.region,
+            "sts",
+            epoch_secs(),
+        );
+
         let client = reqwest::Client::new();
-        let resp: reqwest::Response = client
+        let mut request = client
             .post(&sts_url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
             .header(
-                "Authorization",
-                build_sts_auth(
-                    &self.source_access_key_id,
-                    &self.source_secret_access_key,
-                    self.source_session_token.as_deref(),
-                    &self.config.region,
-                ),
+                "Content-Type",
+                "application/x-www-form-urlencoded; charset=utf-8",
             )
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| crab_core::Error::Auth(format!("STS AssumeRole request failed: {e}")))?;
+            .header("X-Amz-Date", &signed.amz_date)
+            .header("Authorization", &signed.authorization);
+        if let Some(token) = &signed.session_token {
+            request = request.header("X-Amz-Security-Token", token);
+        }
+        let resp: reqwest::Response =
+            request.body(body).send().await.map_err(|e| {
+                crab_core::Error::Auth(format!("STS AssumeRole request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -252,14 +290,14 @@ impl AuthProvider for AssumeRoleProvider {
                     && creds.is_valid()
                 {
                     return Ok(AuthMethod::OAuth(OAuthToken {
-                        access_token: creds.to_auth_header("bedrock"),
+                        access_token: creds.bedrock_auth_header(),
                     }));
                 }
             }
 
             // Assume role
             let creds = self.assume_role().await?;
-            let header = creds.to_auth_header("bedrock");
+            let header = creds.bedrock_auth_header();
 
             // Cache
             {
@@ -273,6 +311,16 @@ impl AuthProvider for AssumeRoleProvider {
         })
     }
 
+    fn sign_request(
+        &self,
+        method: &str,
+        host: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Option<SignedHeaders> {
+        sign_with_cached(&self.cached, method, host, path, body)
+    }
+
     fn refresh(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
         Box::pin(async move {
             let mut guard = self.cached.lock().await;
@@ -281,6 +329,27 @@ impl AuthProvider for AssumeRoleProvider {
             Ok(())
         })
     }
+}
+
+/// Sign a request using cached STS credentials if a valid set is available.
+///
+/// `sign_request` is synchronous, so this only signs when the cache can be
+/// acquired without blocking and holds non-expired credentials; otherwise it
+/// returns `None` and the caller warms the cache via `get_auth` / `refresh`.
+fn sign_with_cached(
+    cached: &tokio::sync::Mutex<Option<StsCredentials>>,
+    method: &str,
+    host: &str,
+    path: &str,
+    body: &[u8],
+) -> Option<SignedHeaders> {
+    let guard = cached.try_lock().ok()?;
+    let headers = guard
+        .as_ref()
+        .filter(|c| c.is_valid())
+        .map(|c| c.sign(method, host, path, body).header_pairs());
+    drop(guard);
+    Some(SignedHeaders { headers: headers? })
 }
 
 /// Auth provider using `AssumeRoleWithWebIdentity` (OIDC).
@@ -410,13 +479,13 @@ impl AuthProvider for WebIdentityProvider {
                     && creds.is_valid()
                 {
                     return Ok(AuthMethod::OAuth(OAuthToken {
-                        access_token: creds.to_auth_header("bedrock"),
+                        access_token: creds.bedrock_auth_header(),
                     }));
                 }
             }
 
             let creds = self.assume_role_with_web_identity().await?;
-            let header = creds.to_auth_header("bedrock");
+            let header = creds.bedrock_auth_header();
 
             {
                 let mut guard = self.cached.lock().await;
@@ -427,6 +496,16 @@ impl AuthProvider for WebIdentityProvider {
                 access_token: header,
             }))
         })
+    }
+
+    fn sign_request(
+        &self,
+        method: &str,
+        host: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Option<SignedHeaders> {
+        sign_with_cached(&self.cached, method, host, path, body)
     }
 
     fn refresh(&self) -> Pin<Box<dyn Future<Output = crab_core::Result<()>> + Send + '_>> {
@@ -465,43 +544,6 @@ fn simple_url_encode(s: &str) -> String {
         }
     }
     out
-}
-
-/// Build a minimal STS auth header from source credentials.
-fn build_sts_auth(
-    access_key_id: &str,
-    _secret_access_key: &str,
-    session_token: Option<&str>,
-    region: &str,
-) -> String {
-    // Simplified — in production this would compute a full SigV4 signature.
-    let token_part = session_token
-        .map(|t| format!(", X-Amz-Security-Token={t}"))
-        .unwrap_or_default();
-    format!("AWS4-HMAC-SHA256 Credential={access_key_id}/sts/{region}/aws4_request{token_part}")
-}
-
-/// Format Unix timestamp as `YYYYMMDD`.
-fn format_date_stamp(timestamp_secs: u64) -> String {
-    let days = timestamp_secs / 86400;
-    let (year, month, day) = days_to_ymd(days);
-    format!("{year:04}{month:02}{day:02}")
-}
-
-/// Convert days since Unix epoch to (year, month, day).
-/// Howard Hinnant's `civil_from_days` algorithm.
-fn days_to_ymd(z: u64) -> (u64, u64, u64) {
-    let z = z + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }
 
 /// Parse the XML response from STS `AssumeRole` / `AssumeRoleWithWebIdentity`.
@@ -600,11 +642,13 @@ mod tests {
             region: "us-west-2".into(),
             expires_at: Instant::now() + Duration::from_secs(3600),
         };
-        let header = creds.to_auth_header("bedrock");
-        assert!(header.starts_with("AWS4-HMAC-SHA256"));
-        assert!(header.contains("AKIAEXAMPLE"));
-        assert!(header.contains("us-west-2"));
-        assert!(header.contains("bedrock"));
+        let header = creds.bedrock_auth_header();
+        assert!(header.starts_with("AWS4-HMAC-SHA256 "));
+        assert!(header.contains("Credential=AKIAEXAMPLE/"));
+        assert!(header.contains("/us-west-2/bedrock/aws4_request"));
+        assert!(header.contains("x-amz-security-token"));
+        assert!(header.contains("Signature="));
+        assert!(!header.contains("placeholder"));
     }
 
     #[test]
@@ -675,28 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn format_date_stamp_epoch() {
-        assert_eq!(format_date_stamp(0), "19700101");
-    }
-
-    #[test]
-    fn format_date_stamp_known() {
-        // 2024-01-15 12:00:00 UTC = 1705320000
-        assert_eq!(format_date_stamp(1_705_320_000), "20240115");
-    }
-
-    #[test]
-    fn days_to_ymd_epoch() {
-        assert_eq!(days_to_ymd(0), (1970, 1, 1));
-    }
-
-    #[test]
-    fn days_to_ymd_leap_day() {
-        // 2024-02-29 = day 19782
-        assert_eq!(days_to_ymd(19_782), (2024, 2, 29));
-    }
-
-    #[test]
     fn web_identity_provider_read_inline_token() {
         let config = WebIdentityConfig {
             role_arn: "arn:aws:iam::123:role/Test".into(),
@@ -758,19 +780,5 @@ mod tests {
         let provider = WebIdentityProvider::new(config);
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(provider.refresh()).unwrap();
-    }
-
-    #[test]
-    fn build_sts_auth_without_session_token() {
-        let header = build_sts_auth("AKIATEST", "secret", None, "us-east-1");
-        assert!(header.contains("AKIATEST"));
-        assert!(header.contains("us-east-1"));
-        assert!(!header.contains("X-Amz-Security-Token"));
-    }
-
-    #[test]
-    fn build_sts_auth_with_session_token() {
-        let header = build_sts_auth("AKIATEST", "secret", Some("sess-tok"), "us-west-2");
-        assert!(header.contains("X-Amz-Security-Token=sess-tok"));
     }
 }

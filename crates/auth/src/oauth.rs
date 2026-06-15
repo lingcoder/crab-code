@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+use crab_utils::time::epoch_secs;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -53,7 +55,7 @@ impl StoredToken {
     /// Check if the token has expired (with buffer).
     #[must_use]
     pub fn is_expired(&self) -> bool {
-        self.is_expired_at(now_secs())
+        self.is_expired_at(epoch_secs())
     }
 
     /// Check expiry at a given timestamp (for testability).
@@ -110,7 +112,7 @@ impl TokenStore {
 /// Return the default token file path: `~/.crab/auth/tokens.json`.
 #[must_use]
 pub fn default_token_path() -> PathBuf {
-    crab_utils::path::home_dir()
+    crab_utils::path::home_dir_or_cwd()
         .join(".crab")
         .join(TOKEN_DIR)
         .join(TOKEN_FILE)
@@ -485,7 +487,7 @@ impl TokenResponse {
     /// Convert to a `StoredToken` with the current timestamp.
     #[must_use]
     pub fn to_stored_token(&self, provider: &str) -> StoredToken {
-        self.to_stored_token_at(provider, now_secs())
+        self.to_stored_token_at(provider, epoch_secs())
     }
 
     /// Convert to a `StoredToken` at a given timestamp (for testability).
@@ -650,38 +652,29 @@ impl crate::AuthProvider for OAuth2Provider {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crab_core::Result<()>> + Send + '_>>
     {
         Box::pin(async move {
-            // In a full implementation, this would:
-            // 1. Load the refresh token
-            // 2. Call the token endpoint with grant_type=refresh_token
-            // 3. Store the new access + refresh tokens
-            // For skeleton, just verify we have a refresh token available
             let cached = self
                 .cached_token
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            match cached {
-                Some(token) if token.can_refresh() => {
-                    // Placeholder — real implementation would do HTTP call here
-                    Ok(())
-                }
-                _ => Err(crab_core::Error::Auth(format!(
+            let Some(token) = cached.filter(StoredToken::can_refresh) else {
+                return Err(crab_core::Error::Auth(format!(
                     "no refresh token available for '{}'",
                     self.config.provider
-                ))),
-            }
+                )));
+            };
+            let refresh_token = token.refresh_token.as_deref().unwrap_or_else(|| {
+                unreachable!("can_refresh() already verified refresh_token is Some")
+            });
+            let resp = refresh_access_token(&self.config, refresh_token)
+                .await
+                .map_err(crab_core::Error::from)?;
+            let new_token = resp.to_stored_token(&self.config.provider);
+            self.store_token(new_token)
+                .map_err(crab_core::Error::from)?;
+            Ok(())
         })
     }
-}
-
-// ── Utilities ──────────────────────────────────────────────────────────
-
-/// Current Unix timestamp in seconds.
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 #[cfg(test)]
@@ -700,20 +693,20 @@ mod tests {
 
     #[test]
     fn stored_token_not_expired() {
-        let token = make_token("test", Some(now_secs() + 3600));
+        let token = make_token("test", Some(epoch_secs() + 3600));
         assert!(!token.is_expired());
     }
 
     #[test]
     fn stored_token_expired() {
-        let token = make_token("test", Some(now_secs() - 100));
+        let token = make_token("test", Some(epoch_secs() - 100));
         assert!(token.is_expired());
     }
 
     #[test]
     fn stored_token_within_buffer_is_expired() {
         // Token expires in 4 minutes — within the 5-minute buffer
-        let token = make_token("test", Some(now_secs() + 240));
+        let token = make_token("test", Some(epoch_secs() + 240));
         assert!(token.is_expired());
     }
 
@@ -930,7 +923,7 @@ mod tests {
             provider: "test-provider".into(),
             access_token: "my-access".into(),
             refresh_token: Some("my-refresh".into()),
-            expires_at: Some(now_secs() + 3600),
+            expires_at: Some(epoch_secs() + 3600),
             token_type: "Bearer".into(),
         };
         provider.store_token(token).unwrap();
@@ -952,7 +945,7 @@ mod tests {
             provider: "test-provider".into(),
             access_token: "expired-access".into(),
             refresh_token: Some("my-refresh".into()),
-            expires_at: Some(now_secs() - 100), // expired
+            expires_at: Some(epoch_secs() - 100), // expired
             token_type: "Bearer".into(),
         };
         provider.store_token(token).unwrap();
@@ -972,7 +965,7 @@ mod tests {
 
         let provider = OAuth2Provider::new(test_config(), path.clone());
         provider
-            .store_token(make_token("test-provider", Some(now_secs() + 3600)))
+            .store_token(make_token("test-provider", Some(epoch_secs() + 3600)))
             .unwrap();
         assert!(provider.get_token().is_ok());
 
@@ -1017,7 +1010,7 @@ mod tests {
                 provider: "test-provider".into(),
                 access_token: "oauth-access-token".into(),
                 refresh_token: None,
-                expires_at: Some(now_secs() + 3600),
+                expires_at: Some(epoch_secs() + 3600),
                 token_type: "Bearer".into(),
             })
             .unwrap();
@@ -1049,19 +1042,33 @@ mod tests {
     }
 
     #[test]
-    fn oauth2_provider_refresh_with_token() {
-        let dir = std::env::temp_dir().join("crab-auth-oauth-refresh-ok");
+    fn oauth2_provider_refresh_with_token_hits_endpoint() {
+        // With a refresh token present, refresh() performs a real token-endpoint
+        // HTTP exchange. Against an unreachable/invalid endpoint it fails at the
+        // network/parse stage — not with the "no refresh token available" error
+        // — proving the call is no longer a no-op placeholder.
+        let dir = std::env::temp_dir().join("crab-auth-oauth-refresh-real");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("tokens.json");
 
-        let provider = OAuth2Provider::new(test_config(), path);
+        let config = OAuth2Config {
+            token_url: "http://127.0.0.1:1/token".into(),
+            ..test_config()
+        };
+        let provider = OAuth2Provider::new(config, path);
         provider
-            .store_token(make_token("test-provider", Some(now_secs() + 3600)))
+            .store_token(make_token("test-provider", Some(epoch_secs() + 3600)))
             .unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(crate::AuthProvider::refresh(&provider));
-        assert!(result.is_ok());
+        let err = result.expect_err("refresh against an invalid endpoint must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("token refresh"),
+            "expected a token-refresh failure, got: {msg}"
+        );
+        assert!(!msg.contains("no refresh token available"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
