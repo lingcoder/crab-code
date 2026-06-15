@@ -5,7 +5,7 @@
 //! assembly, no REPL state, no swarm — those live in `crab-agents` which
 //! wraps the engine.
 //!
-//! The daemon and any SDK consumer should depend on `crab-engine` directly
+//! Headless hosts and any SDK consumer should depend on `crab-engine` directly
 //! rather than pulling in the full `crab-agents` surface.
 
 use std::sync::Arc;
@@ -89,7 +89,7 @@ pub struct QueryConfig {
 
 /// Query engine — bundles the immutable handles needed to run the loop.
 ///
-/// Created once per session by `crab-agents` (or a daemon) and reused for
+/// Created once per session by `crab-agents` (or a headless host) and reused for
 /// every query. Holds references to the backend, tool executor, and
 /// configuration; does not own the `Conversation` (passed in per call).
 pub struct QueryEngine {

@@ -13,6 +13,7 @@ use crab_api::streaming::CompletedToolBlock;
 use crab_core::event::Event;
 use crab_core::permission::PermissionDecision;
 use crab_core::tool::{ToolContext, ToolOutput};
+use crab_hooks::{HookExecutor, HookTrigger};
 use crab_tools::executor::apply_result_budget;
 use crab_tools::permission::check_permission;
 use crab_tools::registry::ToolRegistry;
@@ -30,8 +31,9 @@ pub struct StreamingToolExecutor {
     /// Query-level cancel token; child tokens are derived per task so the
     /// whole batch unwinds when the query is cancelled.
     cancel: CancellationToken,
-    /// Spawned task handles — each yields `(tool_use_id, ToolOutput)`.
-    pending: Vec<JoinHandle<(String, ToolOutput)>>,
+    /// Spawned tasks, each paired with its `tool_use` id so a panicked task
+    /// still maps back to the block it was executing.
+    pending: Vec<(String, JoinHandle<(String, ToolOutput)>)>,
     /// IDs of tool blocks already spawned, so the caller can skip them when
     /// running the post-stream batch for ineligible blocks.
     spawned: HashSet<String>,
@@ -51,8 +53,8 @@ impl StreamingToolExecutor {
     /// Spawn `block` eagerly if its tool reports `is_concurrency_safe(&input)`.
     ///
     /// Returns `true` when a task was spawned (caller should treat the block
-    /// as in-flight) and `false` when the block is ineligible or unknown
-    /// (caller should fall back to post-stream batch execution).
+    /// as in-flight) and `false` when the block is ineligible, unknown, gated,
+    /// or has a `PreToolUse` hook (in which case it defers to the batch).
     ///
     /// Each spawned task derives a child cancel token from `self.cancel`,
     /// emits `ToolUseStart` before invoking the tool, applies the configured
@@ -63,25 +65,41 @@ impl StreamingToolExecutor {
         block: &CompletedToolBlock,
         registry: Arc<ToolRegistry>,
         ctx: ToolContext,
+        hook_executor: Option<&HookExecutor>,
         event_tx: mpsc::Sender<Event>,
     ) -> bool {
         let Some(tool) = registry.get(&block.name) else {
             return false;
         };
-        if !tool.is_concurrency_safe(&block.input) {
+        // Malformed tool input never streams inline — the batch path reports it
+        // as an error tool result instead of executing a degraded call.
+        let Ok(input) = &block.input else {
+            return false;
+        };
+        if !tool.is_concurrency_safe(input) {
             return false;
         }
 
-        // Gate the eager path with the same policy as the batch executor. Only
-        // an outright Allow streams inline; Deny/AskUser fall through to the
-        // post-stream batch (return false), which has the permission handler
-        // wired and renders the canonical deny/prompt outcome.
+        // A tool with a configured PreToolUse hook must not stream inline: the
+        // hook has to run before the tool. Defer it to the batch, which runs
+        // the hook then the tool. The eager path here has no hook plumbing.
+        if hook_executor.is_some_and(|h| h.has_matching_hook(HookTrigger::PreToolUse, &block.name))
+        {
+            return false;
+        }
+
+        // Gate the eager path through the same `check_permission` the executor
+        // uses, but accept only an outright `Allow`: this inline pre-filter has
+        // no permission handler, so `Deny`/`AskUser` fall through to the
+        // post-stream batch (return false), which owns the handler and renders
+        // the canonical deny/prompt outcome. This is the no-prompt arm of the
+        // executor's unified permission gate.
         let decision = check_permission(
             &ctx.permission_policy,
             &block.name,
             &tool.source(),
             tool.is_read_only(),
-            &block.input,
+            input,
             &ctx.working_dir,
         );
         if !matches!(decision, PermissionDecision::Allow) {
@@ -90,7 +108,7 @@ impl StreamingToolExecutor {
 
         let id = block.id.clone();
         let name = block.name.clone();
-        let input = block.input.clone();
+        let input = input.clone();
         let max_chars = tool.max_result_chars();
         let task_token = self.cancel.child_token();
 
@@ -126,7 +144,7 @@ impl StreamingToolExecutor {
             (id, output)
         });
 
-        self.pending.push(handle);
+        self.pending.push((block.id.clone(), handle));
         self.spawned.insert(block.id.clone());
         true
     }
@@ -139,17 +157,28 @@ impl StreamingToolExecutor {
     /// message for every `tool_use` block in the assistant turn.
     pub async fn collect_all(&mut self) -> Vec<(String, ToolOutput)> {
         let mut results = Vec::with_capacity(self.pending.len());
-        for handle in self.pending.drain(..) {
+        for (id, handle) in self.pending.drain(..) {
             match handle.await {
                 Ok(pair) => results.push(pair),
                 Err(join_err) => {
-                    let id = String::new();
                     let output = ToolOutput::error(format!("task panicked: {join_err}"));
                     results.push((id, output));
                 }
             }
         }
         results
+    }
+
+    /// Abort every in-flight task and drain the handle list without awaiting
+    /// results. Used when a stream attempt fails and will be retried: the tasks
+    /// spawned during the doomed attempt must not survive to emit stale
+    /// `ToolResult` events against the next attempt.
+    pub fn abort_all(&mut self) {
+        self.cancel.cancel();
+        for (_, handle) in self.pending.drain(..) {
+            handle.abort();
+        }
+        self.spawned.clear();
     }
 
     /// IDs of `tool_use` blocks already dispatched in this turn.
@@ -247,7 +276,15 @@ mod tests {
         CompletedToolBlock {
             id: id.into(),
             name: name.into(),
-            input: serde_json::json!({}),
+            input: Ok(serde_json::json!({})),
+        }
+    }
+
+    fn malformed_block(id: &str, name: &str) -> CompletedToolBlock {
+        CompletedToolBlock {
+            id: id.into(),
+            name: name.into(),
+            input: Err("tool input JSON was malformed or truncated".into()),
         }
     }
 
@@ -273,6 +310,7 @@ mod tests {
             &block("tu_1", "missing"),
             Arc::clone(&registry),
             test_ctx(),
+            None,
             tx,
         );
         assert!(!spawned);
@@ -294,6 +332,7 @@ mod tests {
             &block("tu_1", "writer"),
             Arc::clone(&registry),
             test_ctx(),
+            None,
             tx,
         );
         assert!(!spawned);
@@ -315,6 +354,7 @@ mod tests {
             &block("tu_1", "reader"),
             Arc::clone(&registry),
             test_ctx(),
+            None,
             tx,
         );
         assert!(spawned);
@@ -355,8 +395,13 @@ mod tests {
 
         // Even though the tool is concurrency-safe, a deny rule must keep it off
         // the eager inline path (it falls through to the gated batch executor).
-        let spawned =
-            ste.spawn_if_eligible(&block("tu_1", "reader"), Arc::clone(&registry), ctx, tx);
+        let spawned = ste.spawn_if_eligible(
+            &block("tu_1", "reader"),
+            Arc::clone(&registry),
+            ctx,
+            None,
+            tx,
+        );
         assert!(!spawned, "denied read-only tool must not stream inline");
         assert!(ste.is_empty());
     }
@@ -405,8 +450,13 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.cancellation_token = cancel.child_token();
 
-        let spawned =
-            ste.spawn_if_eligible(&block("tu_slow", "slow"), Arc::clone(&registry), ctx, tx);
+        let spawned = ste.spawn_if_eligible(
+            &block("tu_slow", "slow"),
+            Arc::clone(&registry),
+            ctx,
+            None,
+            tx,
+        );
         assert!(spawned);
 
         // Cancel and ensure collection still completes (with an error result).
@@ -414,5 +464,141 @@ mod tests {
         let results = ste.collect_all().await;
         assert_eq!(results.len(), 1);
         assert!(results[0].1.is_error);
+    }
+
+    #[tokio::test]
+    async fn spawn_if_eligible_skips_malformed_input() {
+        let registry = make_registry(TestTool {
+            name: "reader",
+            concurrency_safe: true,
+            call_count: Arc::new(AtomicUsize::new(0)),
+        });
+        let (tx, _rx) = mpsc::channel::<Event>(8);
+        let mut ste = StreamingToolExecutor::new(CancellationToken::new());
+
+        // A block whose JSON failed to parse must never stream inline; it falls
+        // through to the batch path which reports the error as a tool result.
+        let spawned = ste.spawn_if_eligible(
+            &malformed_block("tu_1", "reader"),
+            Arc::clone(&registry),
+            test_ctx(),
+            None,
+            tx,
+        );
+        assert!(!spawned, "malformed input must not stream inline");
+        assert!(ste.is_empty());
+        assert!(ste.spawned_ids().is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_if_eligible_defers_tool_with_pre_hook() {
+        use crab_hooks::{HookDef, HookExecutor, HookTrigger};
+
+        let registry = make_registry(TestTool {
+            name: "reader",
+            concurrency_safe: true,
+            call_count: Arc::new(AtomicUsize::new(0)),
+        });
+        let (tx, _rx) = mpsc::channel::<Event>(8);
+        let mut ste = StreamingToolExecutor::new(CancellationToken::new());
+
+        // A PreToolUse hook scoped to "reader" must keep it off the eager path
+        // (the hook has to run before the tool), even though it is read-only,
+        // concurrency-safe, and permission-allowed.
+        let hooks = HookExecutor::with_hooks(vec![HookDef {
+            trigger: HookTrigger::PreToolUse,
+            command: "guard".into(),
+            timeout_secs: 10,
+            tool_filter: vec!["reader".into()],
+            match_pattern: None,
+        }]);
+
+        let spawned = ste.spawn_if_eligible(
+            &block("tu_1", "reader"),
+            Arc::clone(&registry),
+            test_ctx(),
+            Some(&hooks),
+            tx.clone(),
+        );
+        assert!(
+            !spawned,
+            "a tool with a PreToolUse hook must not stream inline"
+        );
+        assert!(ste.is_empty());
+
+        // Same tool, no matching hook → it streams inline as before.
+        let unrelated = HookExecutor::with_hooks(vec![HookDef {
+            trigger: HookTrigger::PreToolUse,
+            command: "guard".into(),
+            timeout_secs: 10,
+            tool_filter: vec!["other_tool".into()],
+            match_pattern: None,
+        }]);
+        let spawned = ste.spawn_if_eligible(
+            &block("tu_2", "reader"),
+            Arc::clone(&registry),
+            test_ctx(),
+            Some(&unrelated),
+            tx,
+        );
+        assert!(spawned, "no matching hook → inline path is taken");
+    }
+
+    #[tokio::test]
+    async fn abort_all_clears_pending_and_spawned() {
+        /// Tool that never completes on its own.
+        struct HangTool;
+        impl Tool for HangTool {
+            fn name(&self) -> &'static str {
+                "hang"
+            }
+            fn description(&self) -> &'static str {
+                "hang"
+            }
+            fn input_schema(&self) -> Value {
+                serde_json::json!({})
+            }
+            fn execute(
+                &self,
+                _input: Value,
+                _ctx: &ToolContext,
+            ) -> Pin<Box<dyn Future<Output = crab_core::Result<ToolOutput>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    std::future::pending::<()>().await;
+                    unreachable!()
+                })
+            }
+            fn is_concurrency_safe(&self, _input: &Value) -> bool {
+                true
+            }
+            fn is_read_only(&self) -> bool {
+                true
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(HangTool));
+        let registry = Arc::new(registry);
+        let mut ste = StreamingToolExecutor::new(CancellationToken::new());
+        let (tx, _rx) = mpsc::channel::<Event>(8);
+
+        let spawned = ste.spawn_if_eligible(
+            &block("tu_hang", "hang"),
+            Arc::clone(&registry),
+            test_ctx(),
+            None,
+            tx,
+        );
+        assert!(spawned);
+        assert_eq!(ste.len(), 1);
+        assert!(ste.spawned_ids().contains("tu_hang"));
+
+        ste.abort_all();
+        assert!(ste.is_empty(), "abort_all must drain pending tasks");
+        assert!(
+            ste.spawned_ids().is_empty(),
+            "abort_all must clear spawned ids so a retry cannot double-skip"
+        );
     }
 }

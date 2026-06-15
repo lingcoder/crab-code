@@ -153,6 +153,17 @@ impl HookExecutor {
         Ok(Self::with_hooks(hooks))
     }
 
+    /// Whether any configured hook would fire for this trigger and tool.
+    ///
+    /// Lets a caller cheaply decide, without running anything, whether a tool
+    /// has an applicable hook — e.g. the inline streaming path uses this to
+    /// avoid eagerly executing a tool that has a `PreToolUse` hook, which must
+    /// run before the tool does.
+    #[must_use]
+    pub fn has_matching_hook(&self, trigger: HookTrigger, tool_name: &str) -> bool {
+        !self.matching_hooks(trigger, tool_name).is_empty()
+    }
+
     /// Get hooks matching a trigger point and tool name.
     fn matching_hooks(&self, trigger: HookTrigger, tool_name: &str) -> Vec<&HookDef> {
         self.hooks
@@ -537,6 +548,26 @@ mod tests {
 
         let post = executor.matching_hooks(HookTrigger::PostToolUse, "bash");
         assert_eq!(post.len(), 1);
+    }
+
+    #[test]
+    fn has_matching_hook_predicate() {
+        let executor = HookExecutor::with_hooks(vec![HookDef {
+            trigger: HookTrigger::PreToolUse,
+            command: "guard".into(),
+            timeout_secs: 10,
+            tool_filter: vec!["Read".into()],
+            match_pattern: None,
+        }]);
+
+        // A PreToolUse hook scoped to Read matches Read, nothing else.
+        assert!(executor.has_matching_hook(HookTrigger::PreToolUse, "Read"));
+        assert!(!executor.has_matching_hook(HookTrigger::PreToolUse, "Write"));
+        assert!(!executor.has_matching_hook(HookTrigger::PostToolUse, "Read"));
+
+        // No hooks → never matches.
+        let empty = HookExecutor::new();
+        assert!(!empty.has_matching_hook(HookTrigger::PreToolUse, "Read"));
     }
 
     #[test]

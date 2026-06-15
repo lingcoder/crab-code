@@ -1,7 +1,7 @@
 pub mod error;
 pub mod result;
 
-pub use error::Error;
+pub use error::{ApiErrorKind, Error};
 pub use result::Result;
 
 pub mod conversation;
