@@ -267,7 +267,6 @@ mod tests {
             .output()
             .unwrap();
 
-        // Create a commit
         fs::write(path.join("file.txt"), "content").unwrap();
         Command::new("git")
             .args(["add", "."])

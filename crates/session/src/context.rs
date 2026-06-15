@@ -25,8 +25,12 @@ impl Default for ContextManager {
 
 impl ContextManager {
     /// Check usage and return the appropriate action.
+    ///
+    /// Occupancy is taken from [`Conversation::effective_token_estimate`],
+    /// which prefers the real `input_tokens` from the latest API response over
+    /// the char-based heuristic.
     pub fn check(&self, conversation: &Conversation) -> ContextAction {
-        let used = conversation.estimated_tokens();
+        let used = conversation.effective_token_estimate();
         let limit = conversation.context_window;
         if limit == 0 {
             return ContextAction::Ok;
@@ -173,6 +177,58 @@ mod tests {
         assert!(
             matches!(action, ContextAction::NeedsUpgrade { .. }),
             "Expected NeedsUpgrade, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn check_uses_real_input_tokens_over_char_estimate() {
+        use crab_core::model::TokenUsage;
+        let cm = ContextManager {
+            warn_threshold_percent: 30,
+            upgrade_threshold_percent: 50,
+            compact_threshold_percent: 80,
+        };
+        // Short content → tiny char estimate, but the API reported a large real
+        // prompt size (e.g. CJK that chars/4 underestimates). The compaction
+        // decision must honor the real token count.
+        let mut conv = Conversation::new("s".into(), String::new(), 1_000);
+        conv.push_user("短");
+        assert!(
+            matches!(cm.check(&conv), ContextAction::Ok),
+            "char estimate alone is below all thresholds"
+        );
+        conv.record_usage(TokenUsage {
+            input_tokens: 850,
+            ..TokenUsage::default()
+        });
+        assert!(
+            matches!(cm.check(&conv), ContextAction::NeedsCompaction { .. }),
+            "real input_tokens (850/1000) must trigger compaction"
+        );
+    }
+
+    #[test]
+    fn check_adds_post_usage_messages_to_real_tokens() {
+        use crab_core::model::TokenUsage;
+        let cm = ContextManager {
+            warn_threshold_percent: 30,
+            upgrade_threshold_percent: 50,
+            compact_threshold_percent: 80,
+        };
+        let mut conv = Conversation::new("s".into(), String::new(), 1_000);
+        conv.push_user("first");
+        conv.record_usage(TokenUsage {
+            input_tokens: 400,
+            ..TokenUsage::default()
+        });
+        // 400 real tokens = 40% → Warning band only.
+        assert!(matches!(cm.check(&conv), ContextAction::Warning { .. }));
+        // Append a large message (~500 tokens) not yet seen by any API call.
+        conv.push_user("x".repeat(2000));
+        // 400 + ~500 = ~900 → above compact threshold.
+        assert!(
+            matches!(cm.check(&conv), ContextAction::NeedsCompaction { .. }),
+            "appended messages must be folded into the real-token estimate"
         );
     }
 

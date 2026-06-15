@@ -34,6 +34,12 @@ pub struct TuiConfig {
     pub skill_dirs: Vec<PathBuf>,
     /// MCP server configuration from settings (for dynamic tool registration).
     pub mcp_servers: Option<serde_json::Value>,
+    /// Raw `hooks` JSON from settings, wired into the runtime's hook executor.
+    pub hooks: Option<serde_json::Value>,
+    /// When `true`, all hooks are skipped (`disable_all_hooks` / `--bare`).
+    pub disable_hooks: bool,
+    /// Enable Anthropic prompt caching (off only for providers that can't use it).
+    pub cache_enabled: bool,
     /// Validation warnings from settings loading (shown as toasts after init).
     pub settings_warnings: Vec<String>,
     /// Text to seed the input box with at startup (from `--prefill`), without
@@ -143,6 +149,9 @@ mod tests {
             ))),
             skill_dirs: vec![],
             mcp_servers: None,
+            hooks: None,
+            disable_hooks: false,
+            cache_enabled: true,
             settings_warnings: vec![],
             prefill: None,
             open_resume_picker: false,

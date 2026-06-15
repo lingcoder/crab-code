@@ -12,6 +12,13 @@ pub struct Conversation {
     pub inner: CoreConversation,
     /// Cumulative token usage across all API calls in this session.
     pub total_usage: TokenUsage,
+    /// Input tokens reported by the most recent API response. This is the
+    /// authoritative measure of how full the context window is right now —
+    /// the char-based estimate is only a fallback for content added since.
+    pub last_input_tokens: u64,
+    /// Number of messages present when `last_input_tokens` was recorded, so
+    /// the context check can estimate only the messages appended since.
+    pub messages_at_last_usage: usize,
     /// Maximum context window size (in tokens) for the active model.
     pub context_window: u64,
 }
@@ -29,6 +36,8 @@ impl Conversation {
             system_prompt,
             inner: CoreConversation::new(),
             total_usage: TokenUsage::default(),
+            last_input_tokens: 0,
+            messages_at_last_usage: 0,
             context_window,
         }
     }
@@ -121,8 +130,39 @@ impl Conversation {
     }
 
     /// Record token usage from an API response.
+    ///
+    /// Besides accumulating the session total, this captures the response's
+    /// `input_tokens` as the authoritative size of the prompt at this point,
+    /// along with the message count, so [`effective_token_estimate`] can fold
+    /// in only what was appended afterwards.
+    ///
+    /// [`effective_token_estimate`]: Self::effective_token_estimate
     pub fn record_usage(&mut self, usage: TokenUsage) {
+        if usage.input_tokens > 0 {
+            self.last_input_tokens = usage.input_tokens;
+            self.messages_at_last_usage = self.inner.len();
+        }
         self.total_usage += usage;
+    }
+
+    /// Best available estimate of current context-window occupancy in tokens.
+    ///
+    /// Prefers the real `input_tokens` from the most recent API response (which
+    /// reflects the provider's own tokenizer, including CJK that the chars/4
+    /// heuristic underestimates by 3-4x), then adds a char-based estimate for
+    /// only the messages appended since that response. Before any API call has
+    /// reported usage, falls back entirely to the char-based estimate.
+    pub fn effective_token_estimate(&self) -> u64 {
+        if self.last_input_tokens == 0 {
+            return self.estimated_tokens();
+        }
+        let appended: u64 = self
+            .messages()
+            .iter()
+            .skip(self.messages_at_last_usage)
+            .map(Message::estimated_tokens)
+            .sum();
+        self.last_input_tokens.saturating_add(appended)
     }
 }
 

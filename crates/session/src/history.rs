@@ -158,17 +158,53 @@ impl SessionHistory {
         self.base_dir.join(format!("{session_id}.json"))
     }
 
-    /// Save a session transcript to disk.
+    /// Path to a session's advisory lock file.
+    fn lock_path(&self, session_id: &str) -> PathBuf {
+        self.base_dir.join(format!("{session_id}.lock"))
+    }
+
+    /// Run `op` while holding the session's exclusive advisory lock, blocking
+    /// until the lock is available. Held for the duration of a read-modify-write
+    /// so two processes resuming the same session can't interleave grant writes
+    /// or JSONL appends. The lock is released as soon as `op` returns.
+    fn with_session_lock<T>(
+        &self,
+        session_id: &str,
+        op: impl FnOnce() -> crab_core::Result<T>,
+    ) -> crab_core::Result<T> {
+        self.ensure_dir()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.lock_path(session_id))?;
+        let mut lock = crab_utils::lock::RwLock::new(file);
+        let _guard = lock
+            .write()
+            .map_err(|e| crab_core::Error::Other(format!("failed to lock {session_id}: {e}")))?;
+        op()
+    }
+
+    /// Save a session transcript to disk, preserving any session-level grants
+    /// already on disk.
     ///
-    /// Preserves any session-level grants already on disk: the auto-save
-    /// path doesn't have grants in scope, so reading them back avoids
-    /// silently wiping a user's "always allow" set on every turn.
+    /// The auto-save path doesn't have grants in scope, so the read-modify-write
+    /// (read existing grants, write back with new messages) runs under the
+    /// session's exclusive lock. This makes it atomic against a second process
+    /// resuming the same session, which would otherwise interleave and clobber
+    /// the user's "always allow" set. Interactive callers that own the
+    /// authoritative grant state should use [`save_with_grants`] instead.
     pub fn save(&self, session_id: &str, messages: &[Message]) -> crab_core::Result<()> {
-        let existing_grants = self.load_grants(session_id).unwrap_or_default();
-        self.save_with_metadata(session_id, None, None, messages, &existing_grants)
+        self.with_session_lock(session_id, || {
+            let existing_grants = self.load_grants(session_id).unwrap_or_default();
+            self.write_session_file(session_id, None, None, messages, &existing_grants)
+        })
     }
 
     /// Save a session with optional name and working directory metadata.
+    ///
+    /// Holds the session's exclusive lock for the write so it can't interleave
+    /// with another process's save of the same session.
     pub fn save_with_metadata(
         &self,
         session_id: &str,
@@ -177,7 +213,21 @@ impl SessionHistory {
         messages: &[Message],
         grants: &[String],
     ) -> crab_core::Result<()> {
-        self.ensure_dir()?;
+        self.with_session_lock(session_id, || {
+            self.write_session_file(session_id, name, working_dir, messages, grants)
+        })
+    }
+
+    /// Serialize and atomically write a session file. Callers must already hold
+    /// the session lock.
+    fn write_session_file(
+        &self,
+        session_id: &str,
+        name: Option<&str>,
+        working_dir: Option<&str>,
+        messages: &[Message],
+        grants: &[String],
+    ) -> crab_core::Result<()> {
         let file = SessionFile {
             session_id: session_id.to_string(),
             name: name.map(std::string::ToString::to_string),
@@ -284,7 +334,6 @@ impl SessionHistory {
             let name = name.to_string_lossy();
             if let Some(id) = name.strip_suffix(".json") {
                 let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
-                // Read the file to extract metadata
                 let (session_name, working_dir, message_count, summary) =
                     std::fs::read_to_string(entry.path())
                         .ok()
@@ -476,18 +525,21 @@ impl SessionHistory {
     }
 
     /// Append a single message as one JSONL line (crash-resilient).
+    ///
+    /// Holds the session lock so the append can't interleave with another
+    /// process's snapshot-and-truncate of the same session.
     pub fn append_jsonl(&self, session_id: &str, msg: &Message) -> crab_core::Result<()> {
-        self.ensure_dir()?;
         let mut line = serde_json::to_string(msg)
             .map_err(|e| crab_core::Error::Other(format!("serialize message: {e}")))?;
         line.push('\n');
-
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.jsonl_path(session_id))?;
-        file.write_all(line.as_bytes())?;
-        Ok(())
+        self.with_session_lock(session_id, || {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.jsonl_path(session_id))?;
+            file.write_all(line.as_bytes())?;
+            Ok(())
+        })
     }
 
     /// Load messages from a JSONL transcript. Returns `None` if the file
@@ -499,11 +551,21 @@ impl SessionHistory {
             return Ok(None);
         }
         let data = std::fs::read_to_string(&path)?;
-        let messages: Vec<Message> = data
-            .lines()
-            .filter(|l| !l.is_empty())
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
+        let mut messages = Vec::new();
+        let mut skipped = 0usize;
+        for line in data.lines().filter(|l| !l.is_empty()) {
+            match serde_json::from_str::<Message>(line) {
+                Ok(msg) => messages.push(msg),
+                Err(_) => skipped += 1,
+            }
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                session_id,
+                skipped,
+                "skipped malformed JSONL lines during crash-log load"
+            );
+        }
         Ok(Some(messages))
     }
 
@@ -636,12 +698,7 @@ fn find_matches(session_id: &str, messages: &[Message], query: &str) -> Vec<Sear
             if let Some(text) = block_text(block)
                 && text.to_lowercase().contains(&query_lower)
             {
-                // Take a snippet: first 120 chars of the matching text
-                let snippet = if text.len() > 120 {
-                    format!("{}...", &text[..120])
-                } else {
-                    text.to_string()
-                };
+                let snippet = crab_utils::text::truncate_chars(text, 120, "...");
                 results.push(SearchResult {
                     session_id: session_id.to_string(),
                     message_index: idx,
@@ -1081,6 +1138,21 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].snippet.ends_with("..."));
         assert!(results[0].snippet.len() <= 124); // 120 + "..."
+    }
+
+    #[test]
+    fn search_snippet_multibyte_does_not_panic() {
+        // The previous byte-slice implementation panicked when byte 120
+        // landed inside a multi-byte codepoint of a CJK transcript.
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        let long_text = format!("关键词 {}", "这是一段很长的中文会话记录".repeat(20));
+        history.save("s1", &[Message::user(&long_text)]).unwrap();
+
+        let results = history.search_session("s1", "关键词").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].snippet.ends_with("..."));
+        assert_eq!(results[0].snippet.chars().count(), 123); // 120 + "..."
     }
 
     // ── Export tests ───────────────────────────────────────────────
@@ -1720,6 +1792,45 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].text(), "good");
         assert_eq!(msgs[1].text(), "also good");
+    }
+
+    #[test]
+    fn save_with_metadata_holds_session_lock() {
+        // Acquiring the session lock around the write must not deadlock or
+        // leave the lock file in a broken state across repeated saves.
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        for i in 0..5 {
+            history
+                .save_with_metadata(
+                    "s1",
+                    None,
+                    None,
+                    &[Message::user(format!("turn {i}"))],
+                    &["bash".to_string()],
+                )
+                .unwrap();
+        }
+        let (msgs, grants) = history.load_with_grants("s1").unwrap().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(grants, vec!["bash".to_string()]);
+        assert!(dir.path().join("s1.lock").exists());
+    }
+
+    #[test]
+    fn save_preserves_grants_under_lock_without_disk_reread_clobber() {
+        // The auto-save path (`save`, no grants in scope) reads existing grants
+        // and writes them back under the lock — the user's "always allow" set
+        // must survive a plain save after a grant was recorded.
+        let dir = tempfile::tempdir().unwrap();
+        let history = SessionHistory::new(dir.path().to_path_buf());
+        history
+            .save_with_grants("s1", &[Message::user("a")], &["edit".to_string()])
+            .unwrap();
+        history
+            .save("s1", &[Message::user("a"), Message::assistant("b")])
+            .unwrap();
+        assert_eq!(history.load_grants("s1").unwrap(), vec!["edit".to_string()]);
     }
 
     #[test]

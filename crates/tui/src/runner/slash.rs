@@ -116,8 +116,8 @@ fn build_command_ctx<'a>(rt: &'a AgentRuntime, session_id: &'a str) -> CommandCo
             api_calls: summary.api_calls,
         },
         estimated_tokens,
-        context_window: rt.conversation().context_window,
-        message_count: rt.conversation().len(),
+        context_window: rt.conversation_snapshot().context_window,
+        message_count: rt.conversation_snapshot().message_count,
         memory_dir: rt.memory_dir(),
     }
 }

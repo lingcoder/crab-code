@@ -453,11 +453,7 @@ fn extract_topic(msg: &Message) -> Option<String> {
 
 /// Truncate a line to max length, adding "..." if truncated.
 fn truncate_line(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
-    }
+    crab_utils::text::truncate_chars_within(s, max, "...")
 }
 
 #[cfg(test)]

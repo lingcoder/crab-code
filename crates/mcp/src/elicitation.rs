@@ -196,8 +196,12 @@ mod tests {
             request_id: None,
             is_confirmation: false,
         };
+        // `approve(Null)` still carries `Some(data)`, so it passes the
+        // presence check but fails schema validation against an object type.
         let resp = ElicitationResponse::approve(serde_json::Value::Null);
-        // Data is Null which is still Some; let's test with confirm
+        let err = validate_response(&req, &resp).unwrap_err();
+        assert!(err.contains("does not conform"));
+
         let resp2 = ElicitationResponse {
             approved: true,
             data: None,

@@ -19,6 +19,10 @@ use crate::transport::Transport;
 /// Connection timeout for the initial WebSocket handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Per-request timeout — a request that gets no response within this window
+/// fails rather than hanging forever (e.g. the server died mid-request).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Receiver for server-initiated JSON-RPC notifications.
 ///
 /// Returned by [`WsTransport::take_notifications`] exactly once per
@@ -230,12 +234,21 @@ impl Transport for WsTransport {
             tracing::debug!(method = %req.method, id, url = %self.url, "sending WS request");
             self.send_text(&json).await?;
 
-            // Wait for the response from the reader task.
-            rx.await.map_err(|_| {
-                crab_core::Error::Other(
+            // Wait for the response, bounded by REQUEST_TIMEOUT so a dead or
+            // wedged server can't hang the caller indefinitely.
+            match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                Ok(Ok(resp)) => Ok(resp),
+                Ok(Err(_)) => Err(crab_core::Error::Other(
                     "WebSocket connection closed before response received".into(),
-                )
-            })
+                )),
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    Err(crab_core::Error::Other(format!(
+                        "MCP server at {} did not respond within {REQUEST_TIMEOUT:?}",
+                        self.url
+                    )))
+                }
+            }
         })
     }
 

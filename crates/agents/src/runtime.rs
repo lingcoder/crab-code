@@ -1,11 +1,11 @@
 //! [`AgentRuntime`] — high-level facade that owns all L2 service state
 //! and exposes a minimal API for the TUI layer.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crab_core::event::Event;
@@ -18,7 +18,8 @@ use crab_session::{
     SessionHistory, SessionMetadata, compact_with_config, expand_at_mentions,
 };
 use crab_skills::SkillRegistry;
-use crab_tools::builtin::create_default_registry;
+use crab_tools::builtin::cron::{FiredPromptQueue, SharedCronStore, shared_cron_store};
+use crab_tools::builtin::register_all_builtins;
 use crab_tools::executor::{PermissionHandler, PermissionResult, ToolExecutor};
 use crab_tools::registry::ToolRegistry;
 
@@ -38,6 +39,18 @@ pub struct RuntimeInitConfig {
     /// summary-style sidequeries that need a real model. When `None`,
     /// the runtime falls back to the deterministic heuristic summariser.
     pub backend: Option<Arc<crab_api::LlmBackend>>,
+    /// Raw `hooks` JSON from user settings (the `hooks` field of
+    /// `crab_config::Config`). When present and not disabled, the runtime
+    /// builds a [`crab_hooks::HookExecutor`] from it and wires it into the
+    /// engine so `PreToolUse` / `PostToolUse` / `Stop` / `Compact` /
+    /// `Notification` hooks actually run.
+    pub hooks: Option<serde_json::Value>,
+    /// When `true`, all hooks are skipped even if `hooks` is populated
+    /// (mirrors `Config::disable_all_hooks` and `--bare`).
+    pub disable_hooks: bool,
+    /// Enable Anthropic prompt caching. Defaults to `true` at the call site;
+    /// only Anthropic-style backends act on it, others ignore it.
+    pub cache_enabled: bool,
 }
 
 /// Data returned alongside an [`AgentRuntime`] from [`AgentRuntime::init`].
@@ -74,6 +87,13 @@ pub type NotificationHookSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 /// and drives all agent interaction through this facade.
 pub struct AgentRuntime {
     conversation: Conversation,
+    /// Authoritative conversation metadata that stays valid even while
+    /// [`take_conversation`](AgentRuntime::take_conversation) has moved the
+    /// real conversation into a spawned query task (leaving a `Default`
+    /// placeholder behind). TUI reads that only need id / context window /
+    /// message count route through this so a mid-query settings reload never
+    /// observes the empty-shell values (`id=""`, `context_window=0`).
+    snapshot: ConversationSnapshot,
     executor: Arc<ToolExecutor>,
     tool_ctx: ToolContext,
     loop_config: QueryConfig,
@@ -108,6 +128,46 @@ pub struct AgentRuntime {
     /// (bash commands, sub-agents, teammates). Shared with tools that need
     /// to read or modify task state (`TaskStopTool`, `TaskOutputTool`).
     task_registry: Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>,
+    /// Authoritative session-level "always allow" grants. Seeded from a
+    /// resumed session and updated by interactive frontends as the user grants
+    /// tools. Auto-save reads this instead of re-reading disk, so a concurrent
+    /// process resuming the same session can't clobber it.
+    session_grants: std::sync::Mutex<Vec<String>>,
+    /// Cron store backing the `CronCreate`/`CronDelete`/`CronList` tools and
+    /// the live scheduler. Owned here so the runtime can delete one-shot jobs
+    /// once their fired prompt has been consumed.
+    cron_store: SharedCronStore,
+    /// Queue the cron scheduler pushes fired prompts onto. The frontend drains
+    /// it between turns via [`drain_due_cron_prompts`](Self::drain_due_cron_prompts)
+    /// and injects each prompt as a new user turn.
+    cron_fired_queue: FiredPromptQueue,
+}
+
+/// Lightweight authoritative view of the conversation that survives
+/// [`AgentRuntime::take_conversation`].
+///
+/// Holds only the cheap-to-copy metadata the TUI reads out-of-band (id,
+/// context window, message count). It is refreshed whenever a conversation
+/// is installed on the runtime, so it always reflects the last in-process
+/// conversation even while the live one is owned by a running query task.
+#[derive(Debug, Clone, Default)]
+pub struct ConversationSnapshot {
+    /// Session/conversation id.
+    pub id: String,
+    /// Total context window in tokens (fixed for the session).
+    pub context_window: u64,
+    /// Message count at the time the snapshot was taken.
+    pub message_count: usize,
+}
+
+impl ConversationSnapshot {
+    fn from_conversation(conv: &Conversation) -> Self {
+        Self {
+            id: conv.id.clone(),
+            context_window: conv.context_window,
+            message_count: conv.len(),
+        }
+    }
 }
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
@@ -153,7 +213,15 @@ impl AgentRuntime {
     /// This is the agent-side equivalent of the old `background_init()` in
     /// `tui/runner.rs`. Call from a spawned task so the TUI stays responsive.
     pub async fn init(config: RuntimeInitConfig) -> (Self, RuntimeInitMeta) {
-        let mut registry = create_default_registry();
+        // Build the real cron store (reloads durable jobs from disk and
+        // re-registers them with the scheduler) and thread it into the registry
+        // so the cron tools and the runtime's fired-prompt drain share one
+        // store. Registered before the Coordinator strip below so a coordinator
+        // leader still loses the cron tools.
+        let cron_store = shared_cron_store().await;
+        let cron_fired_queue = cron_store.lock().await.fired_queue();
+        let mut registry = ToolRegistry::new();
+        register_all_builtins(&mut registry, None, Some(Arc::clone(&cron_store)));
 
         // Coordinator Mode (Layer 2b): strip the leader's registry to the
         // coordinator allow-list and overlay its prompt. `None` for plain
@@ -201,10 +269,10 @@ impl AgentRuntime {
         let tool_schemas = registry.tool_schemas();
         let mut executor = ToolExecutor::new(Arc::clone(&registry));
 
-        executor.set_permission_handler(Arc::new(ChannelPermissionHandler {
-            event_tx: config.perm_event_tx,
-            response_rx: Arc::new(tokio::sync::Mutex::new(config.perm_resp_rx)),
-        }));
+        executor.set_permission_handler(Arc::new(ChannelPermissionHandler::new(
+            config.perm_event_tx,
+            config.perm_resp_rx,
+        )));
         let executor = Arc::new(executor);
 
         let memory_store = config
@@ -336,6 +404,11 @@ impl AgentRuntime {
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         };
 
+        // Build the hook executor from user settings. The on-disk format is
+        // `crab_config::hooks::Hook`; map it to `crab_hooks::HookDef` so the
+        // engine's hook branches fire on real user-configured commands.
+        let hook_executor = build_hook_executor(config.hooks.as_ref(), config.disable_hooks);
+
         let compaction_config = CompactionConfig::default();
         let compaction_client: Option<Arc<dyn CompactionClient>> =
             config.backend.as_ref().map(|backend| {
@@ -358,10 +431,10 @@ impl AgentRuntime {
             max_tokens: config.session_config.max_tokens,
             temperature: config.session_config.temperature,
             tool_schemas,
-            cache_enabled: false,
+            cache_enabled: config.cache_enabled,
             budget_tokens: None,
-            retry_policy: None,
-            hook_executor: None,
+            retry_policy: Some(crab_api::rate_limit::RetryPolicy::default()),
+            hook_executor,
             session_id: Some(session_id),
             effort: None,
             fallback_model: config.session_config.fallback_model.map(ModelId::from),
@@ -400,8 +473,10 @@ impl AgentRuntime {
 
         let skill_dirs = config.skill_dirs.clone();
 
+        let snapshot = ConversationSnapshot::from_conversation(&conversation);
         let runtime = Self {
             conversation,
+            snapshot,
             executor,
             tool_ctx,
             loop_config,
@@ -419,6 +494,9 @@ impl AgentRuntime {
             coordinator,
             worker_base_prompt,
             task_registry,
+            session_grants: std::sync::Mutex::new(resumed_grants.clone()),
+            cron_store,
+            cron_fired_queue,
         };
 
         let meta = RuntimeInitMeta {
@@ -441,17 +519,62 @@ impl AgentRuntime {
         &mut self.conversation
     }
 
+    /// Authoritative conversation metadata that stays valid during a query.
+    ///
+    /// While a query task owns the real conversation, [`conversation`] returns
+    /// an empty placeholder (`id=""`, `context_window=0`). Callers that only
+    /// need id / context window / message count should read this snapshot
+    /// instead so they never observe the empty shell.
+    #[must_use]
+    pub fn conversation_snapshot(&self) -> &ConversationSnapshot {
+        &self.snapshot
+    }
+
+    /// Context window in tokens — valid even mid-query (unlike
+    /// `conversation().context_window`, which is 0 while a query owns the
+    /// conversation).
+    #[must_use]
+    pub fn context_window(&self) -> u64 {
+        self.snapshot.context_window
+    }
+
     /// Take ownership of the conversation (e.g. to move into a spawned task).
     ///
-    /// The runtime's conversation is replaced with an empty placeholder.
-    /// Call [`restore_conversation`](Self::restore_conversation) after the
-    /// task completes.
+    /// The runtime's conversation is replaced with an empty placeholder, but
+    /// [`conversation_snapshot`](Self::conversation_snapshot) keeps reflecting
+    /// the taken conversation's metadata until it is restored. Call
+    /// [`restore_conversation`](Self::restore_conversation) after the task
+    /// completes.
     pub fn take_conversation(&mut self) -> Conversation {
+        self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
         std::mem::take(&mut self.conversation)
     }
 
     pub fn restore_conversation(&mut self, conversation: Conversation) {
+        self.snapshot = ConversationSnapshot::from_conversation(&conversation);
         self.conversation = conversation;
+    }
+
+    // ── Cron fired-prompt injection ─────────────────────────────────────
+
+    /// Drain prompts fired by cron jobs since the last call, returning each
+    /// prompt's text in fire order for the frontend to inject as a user turn.
+    ///
+    /// One-shot jobs (`recurring == false`) are deleted from the store after
+    /// their fire is consumed here, so they run exactly once. Recurring jobs
+    /// are left scheduled. Returns an empty vec when nothing fired.
+    ///
+    /// Intended to be called between turns (e.g. on an idle tick) while no
+    /// query owns the conversation.
+    pub async fn drain_due_cron_prompts(&self) -> Vec<String> {
+        drain_and_consume_cron(&self.cron_fired_queue, &self.cron_store).await
+    }
+
+    /// Whether any cron prompts are waiting to be drained. Cheap, non-blocking;
+    /// lets a frontend skip the async drain path on idle ticks with no work.
+    #[must_use]
+    pub fn has_pending_cron_prompts(&self) -> bool {
+        !self.cron_fired_queue.is_empty()
     }
 
     // ── Query loop ──────────────────────────────────────────────────────
@@ -627,6 +750,7 @@ impl AgentRuntime {
             match compact_with_config(&mut self.conversation, &self.compaction_config, client).await
             {
                 Ok(report) => {
+                    self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
                     let strategy = format!("llm-{:?}", report.strategy_used).to_lowercase();
                     return CompactNowResult {
                         before_tokens: report.tokens_before,
@@ -655,6 +779,7 @@ impl AgentRuntime {
                 .push_user(format!("{prefix}\n\n{summary_text}"));
         }
 
+        self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
         let after_tokens = self.conversation.estimated_tokens();
         let removed = before_count.saturating_sub(self.conversation.len());
         CompactNowResult {
@@ -832,20 +957,29 @@ impl AgentRuntime {
 
     /// Persist the current conversation, recording the working directory so
     /// `--continue` can stay within this project. The on-disk session name is
-    /// preserved; grants are taken from `grants` when supplied, otherwise read
-    /// back from disk so auto-save does not wipe the user's "always allow" set.
+    /// preserved; grants are taken from `grants` when supplied (and adopted as
+    /// the runtime's authoritative set), otherwise the runtime's in-memory
+    /// grant set is used so auto-save never wipes the user's "always allow" set
+    /// and never re-reads disk (which a concurrent process could be rewriting).
     fn persist_session(&self, session_id: &str, grants: Option<&[String]>) {
         let Some(history) = self.session_history.as_ref() else {
             return;
         };
         let working_dir = self.tool_ctx.working_dir.to_str();
         let name = history.load_name(session_id);
-        // Preserve the user's "always allow" set: use the supplied grants, or
-        // read back the on-disk set when auto-saving without them in scope.
-        let grants = grants.map_or_else(
-            || history.load_grants(session_id).unwrap_or_default(),
-            <[String]>::to_vec,
-        );
+        let grants = match grants {
+            Some(g) => {
+                if let Ok(mut store) = self.session_grants.lock() {
+                    *store = g.to_vec();
+                }
+                g.to_vec()
+            }
+            None => self
+                .session_grants
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default(),
+        };
         if let Err(e) = history.save_with_metadata(
             session_id,
             name.as_deref(),
@@ -901,6 +1035,7 @@ impl AgentRuntime {
             self.conversation.system_prompt.clone(),
             self.conversation.context_window,
         );
+        self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
     }
 
     /// Switch to a different session by loading its messages.
@@ -920,6 +1055,12 @@ impl AgentRuntime {
                 );
                 for msg in crab_session::sanitize_for_resume(messages) {
                     self.conversation.push(msg);
+                }
+                self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
+                // Adopt the target session's on-disk grants as authoritative so
+                // the outgoing session's grants don't leak into this one.
+                if let Ok(mut store) = self.session_grants.lock() {
+                    *store = history.load_grants(target_id).unwrap_or_default();
                 }
                 true
             }
@@ -950,6 +1091,10 @@ impl AgentRuntime {
                 );
                 for msg in crab_session::sanitize_for_resume(messages) {
                     self.conversation.push(msg);
+                }
+                self.snapshot = ConversationSnapshot::from_conversation(&self.conversation);
+                if let Ok(mut store) = self.session_grants.lock() {
+                    store.clone_from(&grants);
                 }
                 Some(grants)
             }
@@ -1004,16 +1149,90 @@ impl AgentRuntime {
     }
 }
 
+/// Build a [`crab_hooks::HookExecutor`] from the raw settings `hooks` JSON.
+///
+/// Returns `None` when hooks are disabled, the value is absent, or it
+/// contains no usable hook definitions. The on-disk schema is
+/// `crab_config::hooks::Hook` (`toolName` / `timeoutMs`); this maps each one
+/// to the engine-facing `crab_hooks::HookDef` (`match_pattern` /
+/// `timeout_secs`), so the two schemas stay decoupled.
+fn build_hook_executor(
+    hooks: Option<&serde_json::Value>,
+    disable_hooks: bool,
+) -> Option<Arc<crab_hooks::HookExecutor>> {
+    if disable_hooks {
+        return None;
+    }
+    let value = hooks?;
+    let parsed = match crab_config::hooks::parse_hooks(value) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to parse hooks from settings; hooks disabled");
+            return None;
+        }
+    };
+    if parsed.is_empty() {
+        return None;
+    }
+    let defs: Vec<crab_hooks::HookDef> = parsed
+        .into_iter()
+        .map(|h| crab_hooks::HookDef {
+            trigger: h.trigger,
+            command: h.command,
+            timeout_secs: h.timeout_ms.div_ceil(1000).max(1),
+            tool_filter: Vec::new(),
+            match_pattern: h.tool_name,
+        })
+        .collect();
+    Some(Arc::new(crab_hooks::HookExecutor::with_hooks(defs)))
+}
+
+/// Permission response payload routed from the TUI: `(allowed, feedback)`.
+type PermissionResponse = (bool, Option<String>);
+
+/// Map of in-flight permission requests, keyed by request id, each holding a
+/// `oneshot::Sender` that delivers exactly that request's response.
+type PendingPermissions =
+    Arc<tokio::sync::Mutex<std::collections::HashMap<String, oneshot::Sender<PermissionResponse>>>>;
+
 /// Channel-based permission handler wired to the TUI event system.
 ///
-/// When a tool needs permission, sends `Event::PermissionRequest` through
-/// the channel and waits for a response. The response carries an optional
-/// free-text feedback note that the executor surfaces back to the model.
-type PermissionResponseRx = mpsc::UnboundedReceiver<(String, bool, Option<String>)>;
-
+/// When a tool needs permission, sends `Event::PermissionRequest` through the
+/// event channel and waits on a per-request `oneshot`. A single dispatcher
+/// task (spawned in [`AgentRuntime::init`]) owns the shared response receiver
+/// and routes each `(request_id, allowed, feedback)` to the matching pending
+/// request. This prevents the response-stealing hang that a single shared
+/// receiver allowed: two concurrent asks (e.g. a teammate worker and the main
+/// loop) can no longer consume each other's responses.
 struct ChannelPermissionHandler {
     event_tx: mpsc::Sender<Event>,
-    response_rx: Arc<tokio::sync::Mutex<PermissionResponseRx>>,
+    pending: PendingPermissions,
+}
+
+impl ChannelPermissionHandler {
+    /// Build the handler and spawn the dispatcher task that fans responses
+    /// out to per-request oneshots.
+    fn new(
+        event_tx: mpsc::Sender<Event>,
+        mut response_rx: mpsc::UnboundedReceiver<(String, bool, Option<String>)>,
+    ) -> Self {
+        let pending: PendingPermissions = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let dispatch_pending = Arc::clone(&pending);
+        tokio::spawn(async move {
+            while let Some((id, allowed, feedback)) = response_rx.recv().await {
+                let sender = dispatch_pending.lock().await.remove(&id);
+                if let Some(sender) = sender {
+                    let _ = sender.send((allowed, feedback));
+                } else {
+                    tracing::debug!(
+                        request_id = %id,
+                        "permission response for unknown/expired request dropped"
+                    );
+                }
+            }
+        });
+        Self { event_tx, pending }
+    }
 }
 
 impl PermissionHandler for ChannelPermissionHandler {
@@ -1028,25 +1247,237 @@ impl PermissionHandler for ChannelPermissionHandler {
         let tool_input = tool_input.clone();
         let request_id = crab_utils::id::new_ulid();
         let event_tx = self.event_tx.clone();
-        let response_rx = self.response_rx.clone();
+        let pending = Arc::clone(&self.pending);
 
         Box::pin(async move {
-            let _ = event_tx
+            let (tx, rx) = oneshot::channel::<PermissionResponse>();
+            pending.lock().await.insert(request_id.clone(), tx);
+
+            if event_tx
                 .send(Event::PermissionRequest {
                     tool_name,
                     input_summary: prompt,
                     request_id: request_id.clone(),
                     tool_input,
                 })
-                .await;
-
-            let mut rx = response_rx.lock().await;
-            while let Some((id, allowed, feedback)) = rx.recv().await {
-                if id == request_id {
-                    return PermissionResult { allowed, feedback };
-                }
+                .await
+                .is_err()
+            {
+                pending.lock().await.remove(&request_id);
+                return PermissionResult::deny();
             }
-            PermissionResult::deny()
+
+            // Dispatcher drops the sender if the TUI channel closes — deny then.
+            if let Ok((allowed, feedback)) = rx.await {
+                PermissionResult { allowed, feedback }
+            } else {
+                pending.lock().await.remove(&request_id);
+                PermissionResult::deny()
+            }
         })
+    }
+}
+
+/// Drain the cron fired-prompt queue, deleting one-shot jobs once their fire is
+/// consumed, and return the prompts in fire order.
+///
+/// Factored out of [`AgentRuntime::drain_due_cron_prompts`] so the
+/// drain-and-consume contract can be unit-tested against a bare store and queue
+/// without standing up a full runtime.
+async fn drain_and_consume_cron(queue: &FiredPromptQueue, store: &SharedCronStore) -> Vec<String> {
+    let fired = queue.drain();
+    if fired.is_empty() {
+        return Vec::new();
+    }
+
+    let mut store = store.lock().await;
+    for fire in &fired {
+        // Delete one-shot jobs once consumed. A recurring job, or one already
+        // deleted, leaves the store untouched.
+        if store.get(&fire.job_id).is_some_and(|job| !job.recurring) {
+            store.delete(&fire.job_id).await;
+        }
+    }
+    drop(store);
+
+    fired.into_iter().map(|fire| fire.prompt).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crab_core::permission::PermissionPolicy;
+    use crab_tools::builtin::cron::{CronStore, FiredPrompt};
+
+    fn test_session_config() -> SessionConfig {
+        SessionConfig {
+            session_id: "test-session".into(),
+            system_prompt: "You are helpful.".into(),
+            model: ModelId::from("claude-sonnet-4-20250514"),
+            max_tokens: 4096,
+            temperature: None,
+            context_window: 200_000,
+            working_dir: std::env::temp_dir(),
+            permission_policy: PermissionPolicy::default(),
+            memory_dir: None,
+            sessions_dir: None,
+            resume_session_id: None,
+            effort: None,
+            thinking_mode: None,
+            additional_dirs: Vec::new(),
+            session_name: None,
+            max_turns: None,
+            max_budget_usd: None,
+            fallback_model: None,
+            bare_mode: false,
+            worktree_name: None,
+            fork_session: false,
+            from_pr: None,
+            custom_session_id: None,
+            json_schema: None,
+            plugin_dirs: Vec::new(),
+            disable_skills: false,
+            beta_headers: Vec::new(),
+            ide_connect: false,
+            coordinator_mode: false,
+            default_shell: "bash".into(),
+        }
+    }
+
+    fn init_config(hooks: Option<serde_json::Value>, disable_hooks: bool) -> RuntimeInitConfig {
+        let (perm_event_tx, _perm_event_rx) = mpsc::channel(8);
+        let (_perm_resp_tx, perm_resp_rx) = mpsc::unbounded_channel();
+        RuntimeInitConfig {
+            session_config: test_session_config(),
+            mcp_servers: None,
+            skill_dirs: Vec::new(),
+            perm_event_tx,
+            perm_resp_rx,
+            backend: None,
+            hooks,
+            disable_hooks,
+            cache_enabled: true,
+        }
+    }
+
+    #[test]
+    fn build_hook_executor_none_when_disabled() {
+        let hooks = serde_json::json!([{"trigger": "pre_tool_use", "command": "echo hi"}]);
+        assert!(build_hook_executor(Some(&hooks), true).is_none());
+    }
+
+    #[test]
+    fn build_hook_executor_none_when_absent_or_empty() {
+        assert!(build_hook_executor(None, false).is_none());
+        let empty = serde_json::json!([]);
+        assert!(build_hook_executor(Some(&empty), false).is_none());
+    }
+
+    #[test]
+    fn build_hook_executor_maps_config_hooks() {
+        let hooks = serde_json::json!([
+            {"trigger": "pre_tool_use", "toolName": "bash", "command": "check", "timeoutMs": 2500},
+            {"trigger": "stop", "command": "echo done"}
+        ]);
+        let exec = build_hook_executor(Some(&hooks), false).expect("executor built");
+        assert_eq!(exec.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn assembly_wires_hooks_cache_and_retry() {
+        let hooks = serde_json::json!([{"trigger": "pre_tool_use", "command": "echo hi"}]);
+        let (runtime, _meta) = AgentRuntime::init(init_config(Some(hooks), false)).await;
+        let cfg = runtime.loop_config();
+        assert!(cfg.hook_executor.is_some(), "hooks should be wired");
+        assert!(cfg.cache_enabled, "prompt caching should be enabled");
+        assert!(cfg.retry_policy.is_some(), "retry policy should be set");
+    }
+
+    #[tokio::test]
+    async fn assembly_omits_hooks_when_disabled() {
+        let hooks = serde_json::json!([{"trigger": "pre_tool_use", "command": "echo hi"}]);
+        let (runtime, _meta) = AgentRuntime::init(init_config(Some(hooks), true)).await;
+        assert!(runtime.loop_config().hook_executor.is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_survives_take_conversation() {
+        let (mut runtime, _meta) = AgentRuntime::init(init_config(None, false)).await;
+        let window = runtime.context_window();
+        assert_eq!(window, 200_000);
+
+        let conv = runtime.take_conversation();
+        // While the conversation is taken, the live one is an empty placeholder.
+        assert_eq!(runtime.conversation().context_window, 0);
+        // But the snapshot still reports the authoritative window and id.
+        assert_eq!(runtime.context_window(), 200_000);
+        assert_eq!(runtime.conversation_snapshot().id, "test-session");
+
+        runtime.restore_conversation(conv);
+        assert_eq!(runtime.context_window(), 200_000);
+    }
+
+    // ── Cron fired-prompt drain ─────────────────────────────────────────
+
+    /// Build a store + queue pair, seed two jobs (one recurring, one one-shot),
+    /// and fire both onto the queue.
+    async fn seeded_cron() -> (FiredPromptQueue, SharedCronStore) {
+        let mut store = CronStore::new();
+        let queue = store.fired_queue();
+        // Use a per-minute expression so the scheduler does not fire on its own
+        // during the test; we push the fires manually.
+        store
+            .create("0 * * * *".into(), "recurring prompt".into(), true, false)
+            .await
+            .unwrap();
+        store
+            .create("0 * * * *".into(), "one-shot prompt".into(), false, false)
+            .await
+            .unwrap();
+        queue.push(FiredPrompt {
+            job_id: "cron_1".into(),
+            prompt: "recurring prompt".into(),
+        });
+        queue.push(FiredPrompt {
+            job_id: "cron_2".into(),
+            prompt: "one-shot prompt".into(),
+        });
+        let shared: SharedCronStore = Arc::new(tokio::sync::Mutex::new(store));
+        (queue, shared)
+    }
+
+    #[tokio::test]
+    async fn drain_returns_prompts_in_fire_order() {
+        let (queue, store) = seeded_cron().await;
+        let prompts = drain_and_consume_cron(&queue, &store).await;
+        assert_eq!(prompts, vec!["recurring prompt", "one-shot prompt"]);
+        assert!(queue.is_empty(), "queue is emptied by the drain");
+    }
+
+    #[tokio::test]
+    async fn drain_deletes_one_shot_keeps_recurring() {
+        let (queue, store) = seeded_cron().await;
+        drain_and_consume_cron(&queue, &store).await;
+        let jobs = store.lock().await.list();
+        // The one-shot job is gone; the recurring job remains scheduled.
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "cron_1");
+        assert!(jobs[0].recurring);
+    }
+
+    #[tokio::test]
+    async fn drain_empty_queue_is_noop() {
+        let store: SharedCronStore = Arc::new(tokio::sync::Mutex::new(CronStore::new()));
+        let queue = store.lock().await.fired_queue();
+        let prompts = drain_and_consume_cron(&queue, &store).await;
+        assert!(prompts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_exposes_cron_drain() {
+        // The wired runtime starts with an empty cron queue and reports so.
+        let (runtime, _meta) = AgentRuntime::init(init_config(None, false)).await;
+        assert!(!runtime.has_pending_cron_prompts());
+        assert!(runtime.drain_due_cron_prompts().await.is_empty());
     }
 }

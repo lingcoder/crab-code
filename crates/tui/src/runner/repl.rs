@@ -65,6 +65,14 @@ pub(super) async fn run_loop(
 
     let mut frame_rx = frame_requester.subscribe();
 
+    // Poll the runtime's cron fired-prompt queue on a fixed cadence. Cron jobs
+    // fire on the scheduler's own tasks and enqueue prompts the runtime exposes
+    // via `drain_due_cron_prompts`; this timer injects them as a user turn when
+    // the session is idle. The cadence only bounds injection latency — the
+    // queue itself never drops fires between ticks.
+    let mut cron_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    cron_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     let mut sigcont_stream = SigcontStream::new()?;
     // Sticky high-water mark for the inline viewport height. Streaming
     // chunks add and remove rows in bursts; without smoothing the viewport
@@ -128,7 +136,7 @@ pub(super) async fn run_loop(
                 init_rx = None;
                 if let Ok((runtime, meta)) = result {
                     app.tool_registry = Some(meta.tool_registry);
-                    app.context_window_size = runtime.conversation().context_window;
+                    app.context_window_size = runtime.context_window();
                     app.session_sidebar.set_sessions(to_sidebar_entries(&meta.sidebar_entries));
                     for name in &meta.mcp_failures {
                         app.notifications.warn(format!("MCP server '{name}' failed to connect"));
@@ -323,6 +331,38 @@ pub(super) async fn run_loop(
                 let _ = enable_raw_mode();
                 let _ = execute!(io::stdout(), EnableBracketedPaste);
                 terminal.clear()?;
+                needs_redraw = true;
+                continue;
+            }
+            _ = cron_tick.tick() => {
+                // Inject prompts fired by cron jobs as a user turn, but only
+                // when idle: no query in flight, and the user is not mid-input.
+                // The first prompt starts a turn; any others queue behind it.
+                // A fired job thus never interrupts a live turn or typing.
+                if conv_return.is_none()
+                    && app.input.is_empty()
+                    && app.command_queue.is_empty()
+                    && let Some(ref rt) = state
+                    && rt.has_pending_cron_prompts()
+                {
+                    let mut prompts = rt.drain_due_cron_prompts().await;
+                    if !prompts.is_empty()
+                        && let Some(ref mut rt) = state
+                    {
+                        for extra in prompts.drain(1..) {
+                            app.command_queue.push(extra);
+                        }
+                        let first = prompts.remove(0);
+                        cancel = tokio_util::sync::CancellationToken::new();
+                        rt.tool_ctx_mut().cancellation_token = cancel.clone();
+                        let user_msg = rt.expand_input(&first);
+                        rt.conversation_mut().push(user_msg);
+                        query_epoch = query_epoch.wrapping_add(1);
+                        let engine_tx = spawn_query_event_forwarder(query_epoch, &tagged_tx);
+                        conv_return = Some(rt.spawn_query(&backend, engine_tx, cancel.clone()));
+                        app.state = crate::app::AppState::Processing;
+                    }
+                }
                 needs_redraw = true;
                 continue;
             }

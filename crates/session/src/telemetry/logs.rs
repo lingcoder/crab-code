@@ -8,16 +8,8 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Get current timestamp as milliseconds since epoch.
-fn now_epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
-}
+use crab_utils::time::epoch_millis;
 
 // ── Recorder ──────────────────────────────────────────────────────────
 
@@ -50,7 +42,7 @@ impl SessionRecorder {
     /// `~/.crab/sessions/<session_id>/transcript.jsonl`.
     #[must_use]
     pub fn new(session_id: &str) -> Self {
-        let output_path = crab_utils::path::home_dir()
+        let output_path = crab_utils::path::home_dir_or_cwd()
             .join(".crab")
             .join("sessions")
             .join(session_id)
@@ -69,7 +61,7 @@ impl SessionRecorder {
     ///
     /// Returns `Err` if the file cannot be opened or written.
     pub fn record_message(&mut self, role: &str, content: &str) -> std::io::Result<()> {
-        let ts = now_epoch_ms();
+        let ts = epoch_millis();
         let record = serde_json::json!({
             "type": "message",
             "role": role,
@@ -96,7 +88,7 @@ impl SessionRecorder {
         input: &str,
         output: &str,
     ) -> std::io::Result<()> {
-        let ts = now_epoch_ms();
+        let ts = epoch_millis();
         let record = serde_json::json!({
             "type": "tool_use",
             "tool": tool,

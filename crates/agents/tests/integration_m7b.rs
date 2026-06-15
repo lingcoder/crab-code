@@ -25,7 +25,6 @@ use crab_tools::builtin::glob::GLOB_TOOL_NAME;
 use crab_tools::builtin::grep::GREP_TOOL_NAME;
 use crab_tools::builtin::notebook::NOTEBOOK_EDIT_TOOL_NAME;
 use crab_tools::builtin::read::READ_TOOL_NAME;
-use crab_tools::builtin::remote_trigger::REMOTE_TRIGGER_TOOL_NAME;
 use crab_tools::builtin::task::{
     TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_OUTPUT_TOOL_NAME,
     TASK_STOP_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
@@ -483,7 +482,6 @@ fn default_registry_includes_all_builtin_tools() {
         CRON_CREATE_TOOL_NAME,
         CRON_DELETE_TOOL_NAME,
         CRON_LIST_TOOL_NAME,
-        REMOTE_TRIGGER_TOOL_NAME,
     ];
 
     for name in &expected {

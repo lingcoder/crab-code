@@ -356,17 +356,24 @@ impl WorkerPool {
 
 /// Truncate a string to `max_len` chars, appending "…" if truncated.
 fn truncate_preview(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max_len])
-    }
+    crab_utils::text::truncate_chars(s, max_len, "…")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crab_session::Conversation;
+
+    #[test]
+    fn truncate_preview_multibyte_does_not_panic() {
+        // The previous byte-slice implementation panicked when `max_len`
+        // landed inside a multi-byte codepoint.
+        let prompt = "实现一个跨平台的终端用户界面组件".repeat(10);
+        let out = truncate_preview(&prompt, 80);
+        assert_eq!(out.chars().count(), 81);
+        assert!(out.ends_with('…'));
+        assert_eq!(truncate_preview("短", 80), "短");
+    }
 
     #[test]
     fn coordinator_creation() {

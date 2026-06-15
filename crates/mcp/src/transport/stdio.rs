@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -9,6 +10,10 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::transport::Transport;
+
+/// Per-request timeout — a request that gets no response within this window
+/// fails rather than hanging forever (e.g. the server died mid-request).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stdin/stdout transport for MCP servers launched as child processes.
 ///
@@ -72,18 +77,23 @@ impl StdioTransport {
             loop {
                 match read_message(&mut reader).await {
                     Ok(Some(data)) => {
-                        // Try to parse as a response (has "id" field)
+                        // A response carries an "id"; a notification does not.
                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&data) {
                             let mut map = pending_clone.lock().await;
                             if let Some(tx) = map.remove(&resp.id) {
                                 let _ = tx.send(resp);
                             }
+                        } else if let Ok(notif) = serde_json::from_str::<JsonRpcNotification>(&data)
+                        {
+                            // No consumer surface for stdio server notifications
+                            // yet; log so they're observable but not lost silently.
+                            tracing::debug!(
+                                method = notif.method,
+                                "received MCP server notification (no consumer wired)"
+                            );
                         }
-                        // Notifications from server are silently dropped for now.
-                        // TODO: emit server notifications through a channel.
                     }
                     Ok(None) => {
-                        // EOF — server process closed stdout
                         tracing::debug!("MCP server stdout closed");
                         break;
                     }
@@ -93,6 +103,10 @@ impl StdioTransport {
                     }
                 }
             }
+            // Reader is exiting (EOF or error): drop every pending sender so
+            // in-flight `rx.await` callers get an error promptly instead of
+            // hanging forever waiting on a dead server.
+            pending_clone.lock().await.clear();
         });
 
         Ok(Self {
@@ -142,10 +156,20 @@ impl Transport for StdioTransport {
             tracing::debug!(method = %req.method, id, "sending MCP request");
             self.write_message(&json).await?;
 
-            // Wait for the response from the reader task.
-            rx.await.map_err(|_| {
-                crab_core::Error::Other("MCP server closed connection before responding".into())
-            })
+            // Wait for the response, bounded by REQUEST_TIMEOUT so a dead or
+            // wedged server can't hang the caller indefinitely.
+            match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                Ok(Ok(resp)) => Ok(resp),
+                Ok(Err(_)) => Err(crab_core::Error::Other(
+                    "MCP server closed connection before responding".into(),
+                )),
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    Err(crab_core::Error::Other(format!(
+                        "MCP server did not respond within {REQUEST_TIMEOUT:?}"
+                    )))
+                }
+            }
         })
     }
 
@@ -257,5 +281,47 @@ mod tests {
         let mut reader = BufReader::new(&data[..]);
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         assert_eq!(msg, "{}");
+    }
+
+    #[test]
+    fn request_timeout_is_bounded() {
+        assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(30));
+    }
+
+    /// A server that exits immediately (closing stdout) must cause an in-flight
+    /// request to fail promptly rather than hang forever. The reader task hits
+    /// EOF, drains `pending`, and the dropped sender resolves `rx.await` with an
+    /// error well before the 30s request timeout.
+    #[tokio::test]
+    async fn send_errors_when_server_dies_before_responding() {
+        let (command, args) = if cfg!(windows) {
+            (
+                "cmd".to_string(),
+                vec!["/C".to_string(), "exit".to_string()],
+            )
+        } else {
+            (
+                "sh".to_string(),
+                vec!["-c".to_string(), "exit 0".to_string()],
+            )
+        };
+
+        let transport = StdioTransport::spawn(&command, &args, None)
+            .await
+            .expect("spawn short-lived server");
+
+        let req = JsonRpcRequest::new("initialize", None);
+        // Bound the whole call so a regression (a real hang) fails the test
+        // instead of stalling the suite.
+        let result = tokio::time::timeout(Duration::from_secs(5), transport.send(req)).await;
+
+        assert!(
+            result.is_ok(),
+            "send hung instead of erroring on dead server"
+        );
+        assert!(
+            result.unwrap().is_err(),
+            "send should error when the server dies before responding"
+        );
     }
 }

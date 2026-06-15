@@ -111,7 +111,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
 
     // Load persistent permission grants from ~/.crab/permissions.json so
     // "always allow" decisions survive across sessions.
-    app.init_persistent_permissions(&crab_utils::path::home_dir());
+    app.init_persistent_permissions(&crab_utils::path::home_dir_or_cwd());
 
     // Set the global reduced-motion preference so all animation sites can
     // check it without threading a flag through the component tree.
@@ -169,6 +169,9 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
         perm_event_tx: event_tx.clone(),
         perm_resp_rx,
         backend: Some(Arc::clone(&config.backend)),
+        hooks: config.hooks.clone(),
+        disable_hooks: config.disable_hooks,
+        cache_enabled: config.cache_enabled,
     };
     let (init_tx, init_rx) = tokio::sync::oneshot::channel::<(AgentRuntime, RuntimeInitMeta)>();
     tokio::spawn(async move {
@@ -178,7 +181,7 @@ pub(super) fn prepare(config: TuiConfig) -> anyhow::Result<PreparedRuntime> {
 
     // ── Phase 4c: Settings & skills filesystem watcher ─────────────────
 
-    let home = crab_utils::path::home_dir();
+    let home = crab_utils::path::home_dir_or_cwd();
     let config_file = crab_config::config::config_file_name();
     let mut settings_watch_paths = vec![home.join(".crab").join(config_file)];
     if let Ok(cwd) = std::env::current_dir() {

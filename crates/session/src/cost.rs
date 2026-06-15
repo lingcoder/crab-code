@@ -320,7 +320,7 @@ impl fmt::Display for CostAccumulator {
 /// `~/.crab/sessions/costs.json`.
 #[must_use]
 pub fn default_cost_path() -> PathBuf {
-    crab_utils::path::home_dir()
+    crab_utils::path::home_dir_or_cwd()
         .join(".crab")
         .join("sessions")
         .join("costs.json")
