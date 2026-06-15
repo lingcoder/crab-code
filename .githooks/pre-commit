@@ -5,7 +5,7 @@
 # CI equivalence (see .github/workflows/ci.yml):
 #   env: RUSTFLAGS=-Dwarnings
 #   1. cargo fmt --all --check
-#   2. cargo clippy --workspace -- -D warnings
+#   2. cargo clippy --workspace --all-targets -- -D warnings
 #   3. cargo check --workspace
 #   4. cargo check -p crab-cli --no-default-features
 #   5. cargo check -p crab-cli -F full
@@ -20,7 +20,7 @@ cargo fmt --all --check || {
 }
 
 echo "==> [2/5] cargo clippy (warnings = errors)..."
-cargo clippy --workspace --quiet -- -D warnings || {
+cargo clippy --workspace --all-targets --quiet -- -D warnings || {
     echo "ERROR: clippy check failed. Fix all warnings before committing."
     exit 1
 }

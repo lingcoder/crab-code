@@ -40,7 +40,7 @@ jobs:
           # the next run (after fix) can benefit.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo check --workspace
       - run: cargo check -p crab-cli --no-default-features
       - run: cargo check -p crab-cli -F full
