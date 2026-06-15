@@ -123,6 +123,8 @@ mod tests {
         let cloned = config.clone();
         assert_eq!(cloned.project_id, "test-123");
         assert_eq!(cloned.region, "asia-southeast1");
+        // Original remains usable: the clone is independent.
+        assert_eq!(config.model_id, cloned.model_id);
     }
 
     #[test]

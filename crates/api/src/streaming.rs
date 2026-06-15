@@ -20,8 +20,11 @@ pub struct CompletedToolBlock {
     pub id: String,
     /// Tool name.
     pub name: String,
-    /// Parsed JSON input. Empty object on parse failure.
-    pub input: Value,
+    /// Parsed JSON input on success, or the parse error message when the
+    /// accumulated buffer was not valid JSON (truncated or malformed stream).
+    /// Callers must surface the error as a tool result rather than executing
+    /// the tool with degraded input.
+    pub input: std::result::Result<Value, String>,
 }
 
 /// Tracks the state of a single `tool_use` block being assembled from stream deltas.
@@ -80,6 +83,28 @@ impl ToolUseAccumulator {
     pub fn parse_input(&self) -> Value {
         serde_json::from_str(&self.json_buffer)
             .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+    }
+
+    /// Parse the final input JSON, preserving the error on failure.
+    ///
+    /// An empty buffer is treated as an empty object (a tool taking no
+    /// arguments). A non-empty buffer that fails to parse yields an `Err`
+    /// describing the failure plus a truncated copy of the raw buffer, so the
+    /// caller can report it back to the model instead of silently degrading
+    /// the input to `{}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the formatted parse error when the buffer is non-empty and not
+    /// valid JSON.
+    pub fn parse_input_checked(&self) -> std::result::Result<Value, String> {
+        if self.json_buffer.is_empty() {
+            return Ok(Value::Object(serde_json::Map::new()));
+        }
+        serde_json::from_str(&self.json_buffer).map_err(|e| {
+            let preview: String = self.json_buffer.chars().take(2000).collect();
+            format!("tool input JSON was malformed or truncated: {e}; raw input: {preview}")
+        })
     }
 }
 
@@ -177,7 +202,7 @@ impl StreamingToolParser {
                     let block = CompletedToolBlock {
                         id: acc.id.clone(),
                         name: acc.name.clone(),
-                        input: acc.parse_input(),
+                        input: acc.parse_input_checked(),
                     };
                     self.completed.push(acc);
                     return Some(block);
@@ -368,6 +393,36 @@ mod tests {
         assert!(val.as_object().unwrap().is_empty());
     }
 
+    #[test]
+    fn accumulator_parse_input_checked_empty_is_ok() {
+        let acc = ToolUseAccumulator::new(0, "tc_1".into(), "test".into());
+        let val = acc
+            .parse_input_checked()
+            .expect("empty buffer is empty object");
+        assert!(val.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn accumulator_parse_input_checked_valid() {
+        let mut acc = ToolUseAccumulator::new(0, "tc_1".into(), "test".into());
+        acc.append_delta(r#"{"path": "/tmp/x"}"#);
+        let val = acc.parse_input_checked().unwrap();
+        assert_eq!(val["path"], "/tmp/x");
+    }
+
+    #[test]
+    fn accumulator_parse_input_checked_malformed_errs() {
+        let mut acc = ToolUseAccumulator::new(0, "tc_1".into(), "test".into());
+        // Truncated mid-stream — not valid JSON.
+        acc.append_delta(r#"{"path": "/tmp/x"#);
+        let err = acc.parse_input_checked().unwrap_err();
+        assert!(err.contains("malformed or truncated"));
+        assert!(
+            err.contains("/tmp/x"),
+            "raw input preview should be included"
+        );
+    }
+
     // ─── StreamingToolParser ───
 
     #[test]
@@ -439,7 +494,7 @@ mod tests {
         let block = completed.expect("tool block should complete on ContentBlockStop");
         assert_eq!(block.id, "toolu_01");
         assert_eq!(block.name, "read_file");
-        assert_eq!(block.input["path"], "/tmp/test.rs");
+        assert_eq!(block.input.as_ref().unwrap()["path"], "/tmp/test.rs");
         assert_eq!(parser.completed_tools().len(), 1);
         assert_eq!(parser.completed_tools()[0].name, "read_file");
         assert_eq!(

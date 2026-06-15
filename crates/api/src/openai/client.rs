@@ -7,6 +7,14 @@ use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
 use super::convert;
 
+/// Connection-establishment timeout. Bounds only the TCP/TLS handshake, not the
+/// streaming body, so long responses are never cut off.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Maximum idle gap between SSE chunks before the stream is treated as a
+/// transport timeout. Bounds stalls without capping total response duration.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Chat Completions API client.
 ///
 /// Compatible with `OpenAI`, Ollama, `DeepSeek`, vLLM, and any provider
@@ -20,7 +28,7 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(CONNECT_TIMEOUT)
             .pool_max_idle_per_host(4)
             .build()
             .unwrap_or_else(|e| {
@@ -61,7 +69,7 @@ impl OpenAiClient {
 
         // We need to use stream::once + flatten to handle the async request
         // setup followed by the streaming response.
-        stream::once(async move {
+        let inner = stream::once(async move {
             let resp = self.build_request(&chat_req).send().await.map_err(|e| {
                 if e.is_timeout() {
                     ApiError::Timeout
@@ -72,11 +80,7 @@ impl OpenAiClient {
 
             let status = resp.status();
             if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(ApiError::Api {
-                    status: status.as_u16(),
-                    message: body,
-                });
+                return Err(error_from_response(resp).await);
             }
 
             Ok(parse_sse_stream(resp))
@@ -84,7 +88,9 @@ impl OpenAiClient {
         .flat_map(|result| match result {
             Ok(event_stream) => event_stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
-        })
+        });
+
+        crate::stream_timeout::with_idle_timeout(inner, STREAM_IDLE_TIMEOUT)
     }
 
     /// Non-streaming call — POST `/chat/completions`.
@@ -105,11 +111,7 @@ impl OpenAiClient {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ApiError::Api {
-                status: status.as_u16(),
-                message: body,
-            });
+            return Err(error_from_response(resp).await);
         }
 
         let body: super::types::ChatCompletionResponse = resp.json().await?;
@@ -212,6 +214,20 @@ impl OpenAiClient {
     }
 }
 
+/// Map a non-2xx response to an `ApiError`, preserving the `Retry-After` header
+/// for 429/529 and the real status code for every other error.
+async fn error_from_response(resp: reqwest::Response) -> ApiError {
+    let status = resp.status();
+    if crate::retry_after::is_rate_limit_status(status.as_u16()) {
+        return crate::retry_after::rate_limited_from_headers(resp.headers());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    ApiError::Api {
+        status: status.as_u16(),
+        message: body,
+    }
+}
+
 /// Parse an SSE response body into a stream of `StreamEvent`s.
 ///
 /// Each `data: {...}` line is parsed as a `ChatCompletionChunk` and converted
@@ -240,10 +256,13 @@ fn parse_sse_stream(resp: reqwest::Response) -> impl Stream<Item = Result<Stream
                                 .collect();
                         stream::iter(events).boxed()
                     }
-                    Err(e) => stream::once(async move {
-                        Err(ApiError::Sse(format!("failed to parse SSE chunk: {e}")))
-                    })
-                    .boxed(),
+                    Err(e) => {
+                        tracing::debug!(
+                            error = %e,
+                            "skipping unrecognized chat completion SSE chunk"
+                        );
+                        stream::iter(Vec::new()).boxed()
+                    }
                 }
             }
             Err(e) => {

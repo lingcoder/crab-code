@@ -71,6 +71,31 @@ pub fn to_anthropic_request(req: &MessageRequest<'_>, stream: bool) -> Anthropic
     }
 }
 
+/// `anthropic_version` value required in the Bedrock `InvokeModel` body.
+const BEDROCK_ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
+
+/// Serialize an Anthropic request as a Bedrock `InvokeModel` body.
+///
+/// Bedrock carries the model id in the URL, not the body, and selects
+/// streaming via the endpoint rather than a `stream` flag, so both fields are
+/// removed. The required `anthropic_version` discriminator is injected.
+///
+/// # Errors
+///
+/// Returns `ApiError::Json` if the request cannot be serialized.
+pub fn to_bedrock_body(api_req: &AnthropicRequest) -> Result<Vec<u8>> {
+    let mut value = serde_json::to_value(api_req).map_err(crate::error::ApiError::Json)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("model");
+        obj.remove("stream");
+        obj.insert(
+            "anthropic_version".to_string(),
+            serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.to_string()),
+        );
+    }
+    serde_json::to_vec(&value).map_err(crate::error::ApiError::Json)
+}
+
 /// Convert an internal `Message` to Anthropic format.
 fn message_to_anthropic(msg: &Message) -> AnthropicMessage {
     let role = match msg.role {
@@ -210,6 +235,10 @@ pub fn sse_event_to_stream_event(event: AnthropicSseEvent) -> Option<StreamEvent
                 event_type: "signature_delta".into(),
                 data: serde_json::json!({ "index": index, "signature": signature }),
             }),
+            AnthropicDelta::Unknown => {
+                tracing::debug!("skipping unknown Anthropic content block delta type");
+                None
+            }
         },
         AnthropicSseEvent::ContentBlockStop { index } => {
             Some(StreamEvent::ContentBlockStop { index })
@@ -228,6 +257,10 @@ pub fn sse_event_to_stream_event(event: AnthropicSseEvent) -> Option<StreamEvent
             message: error.message,
         }),
         AnthropicSseEvent::Ping => None,
+        AnthropicSseEvent::Unknown => {
+            tracing::debug!("skipping unknown Anthropic SSE event type");
+            None
+        }
     }
 }
 
@@ -255,6 +288,34 @@ mod tests {
             response_format: None,
             tool_choice: None,
         }
+    }
+
+    // ─── to_bedrock_body tests ───
+
+    #[test]
+    fn bedrock_body_drops_model_and_stream_adds_version() {
+        let req = make_request();
+        let api_req = to_anthropic_request(&req, true);
+        let bytes = to_bedrock_body(&api_req).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let obj = value.as_object().unwrap();
+        assert!(!obj.contains_key("model"), "model must move to the URL");
+        assert!(!obj.contains_key("stream"), "stream is implied by endpoint");
+        assert_eq!(obj["anthropic_version"], "bedrock-2023-05-31");
+        // Substantive fields survive the transform.
+        assert_eq!(obj["max_tokens"], 4096);
+        assert!(obj.contains_key("messages"));
+    }
+
+    #[test]
+    fn bedrock_body_preserves_thinking_when_set() {
+        let mut req = make_request();
+        req.budget_tokens = Some(8000);
+        let api_req = to_anthropic_request(&req, false);
+        let bytes = to_bedrock_body(&api_req).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 8000);
     }
 
     // ─── to_anthropic_request tests ───
@@ -607,6 +668,50 @@ mod tests {
     fn sse_ping_returns_none() {
         let event = AnthropicSseEvent::Ping;
         assert!(sse_event_to_stream_event(event).is_none());
+    }
+
+    #[test]
+    fn sse_unknown_event_returns_none() {
+        assert!(sse_event_to_stream_event(AnthropicSseEvent::Unknown).is_none());
+    }
+
+    #[test]
+    fn sse_unknown_delta_returns_none() {
+        let event = AnthropicSseEvent::ContentBlockDelta {
+            index: 0,
+            delta: AnthropicDelta::Unknown,
+        };
+        assert!(sse_event_to_stream_event(event).is_none());
+    }
+
+    #[test]
+    fn stream_with_unknown_events_yields_full_text() {
+        let data_lines = [
+            json!({"type": "message_start", "message": {
+                "id": "msg_1", "model": "claude",
+                "usage": {"input_tokens": 1, "output_tokens": 0}
+            }}),
+            json!({"type": "future_event", "whatever": true}),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "Hello "}}),
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "citations_delta", "citation": {"q": 1}}}),
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "world"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_stop"}),
+        ];
+
+        let mut text = String::new();
+        for line in data_lines {
+            let event: AnthropicSseEvent = serde_json::from_value(line).unwrap();
+            if let Some(StreamEvent::ContentDelta { delta, .. }) = sse_event_to_stream_event(event)
+            {
+                text.push_str(&delta);
+            }
+        }
+        assert_eq!(text, "Hello world");
     }
 
     // ─── Usage conversion ───

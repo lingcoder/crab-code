@@ -144,6 +144,10 @@ pub enum AnthropicSseEvent {
     Error {
         error: AnthropicApiError,
     },
+    /// Any event type not recognized above. Anthropic requires clients to
+    /// ignore unknown SSE event types rather than fail the stream.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Message start payload.
@@ -185,6 +189,10 @@ pub enum AnthropicDelta {
     SignatureDelta {
         signature: String,
     },
+    /// Any delta type not recognized above (e.g. `citations_delta`). Skipped
+    /// rather than failing the stream.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Message delta body.
@@ -332,6 +340,49 @@ mod tests {
         assert!(matches!(event, AnthropicSseEvent::Error { error }
             if error.error_type == "overloaded_error" && error.message == "Overloaded"
         ));
+    }
+
+    #[test]
+    fn unknown_sse_event_type_deserializes_to_unknown() {
+        let json = json!({
+            "type": "some_future_event",
+            "payload": {"anything": 1}
+        });
+        let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
+        assert!(matches!(event, AnthropicSseEvent::Unknown));
+    }
+
+    #[test]
+    fn unknown_delta_type_deserializes_to_unknown() {
+        let json = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "citations_delta", "citation": {"x": 1}}
+        });
+        let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            event,
+            AnthropicSseEvent::ContentBlockDelta {
+                delta: AnthropicDelta::Unknown,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn known_event_with_extra_unknown_fields_still_parses() {
+        let json = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+            "future_field": "ignored"
+        });
+        let event: AnthropicSseEvent = serde_json::from_value(json).unwrap();
+        assert!(
+            matches!(event, AnthropicSseEvent::ContentBlockDelta { delta: AnthropicDelta::TextDelta { text }, .. }
+                if text == "Hello"
+            )
+        );
     }
 
     #[test]

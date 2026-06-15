@@ -50,7 +50,11 @@ pub fn create_bedrock_client(config: &BedrockConfig) -> crab_core::Result<Anthro
     let auth_provider = crab_auth::bedrock_auth::BedrockAuthProvider::new(credentials);
     let base_url = config.endpoint_url();
 
-    Ok(AnthropicClient::new(&base_url, Box::new(auth_provider)))
+    Ok(AnthropicClient::new_bedrock(
+        &base_url,
+        Box::new(auth_provider),
+        config.effective_model_id(),
+    ))
 }
 
 /// Create an `AnthropicClient` for Bedrock with explicit credentials.
@@ -60,7 +64,11 @@ pub fn create_bedrock_client_with_credentials(
 ) -> AnthropicClient {
     let auth_provider = crab_auth::bedrock_auth::BedrockAuthProvider::new(credentials);
     let base_url = config.endpoint_url();
-    AnthropicClient::new(&base_url, Box::new(auth_provider))
+    AnthropicClient::new_bedrock(
+        &base_url,
+        Box::new(auth_provider),
+        config.effective_model_id(),
+    )
 }
 
 #[cfg(test)]
@@ -158,5 +166,7 @@ mod tests {
         let cloned = config.clone();
         assert_eq!(cloned.region, "ap-northeast-1");
         assert_eq!(cloned.inference_profile.as_deref(), Some("arn:test"));
+        // Original remains usable: the clone is independent.
+        assert_eq!(config.region, cloned.region);
     }
 }

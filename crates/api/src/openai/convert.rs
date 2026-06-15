@@ -673,6 +673,45 @@ mod tests {
     }
 
     #[test]
+    fn chunk_with_unknown_fields_still_parses() {
+        // Ollama / vLLM compatible servers add extra fields; serde ignores
+        // unknown fields by default so the chunk still yields its text delta.
+        let raw = r#"{
+            "id":"x","object":"chat.completion.chunk","model":"llama",
+            "system_fingerprint":"fp_unknown","created":123,
+            "choices":[{"index":0,"delta":{"content":"hi","extra":"ignored"},
+                        "finish_reason":null,"logprobs":null}]
+        }"#;
+        let chunk: ChatCompletionChunk = serde_json::from_str(raw).unwrap();
+        let events = chunk_to_stream_event(&chunk);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], StreamEvent::ContentDelta { delta, .. } if delta == "hi"));
+    }
+
+    #[test]
+    fn stream_text_survives_unparseable_chunk_skip() {
+        // Mirror the client's skip-on-parse-failure behaviour: a malformed
+        // line contributes nothing, surrounding valid chunks still produce text.
+        let lines = [
+            r#"{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"Hello "},"finish_reason":null}]}"#,
+            r#"{"this is not":"a valid chunk"#,
+            r#"{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"world"},"finish_reason":null}]}"#,
+        ];
+        let mut text = String::new();
+        for line in lines {
+            let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(line) else {
+                continue;
+            };
+            for ev in chunk_to_stream_event(&chunk) {
+                if let StreamEvent::ContentDelta { delta, .. } = ev {
+                    text.push_str(&delta);
+                }
+            }
+        }
+        assert_eq!(text, "Hello world");
+    }
+
+    #[test]
     fn from_completion_usage_maps_tokens() {
         let usage = CompletionUsage {
             prompt_tokens: 100,
