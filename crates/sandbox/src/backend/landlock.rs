@@ -10,7 +10,8 @@
 //! Landlock and are silently ignored.
 
 use landlock::{
-    ABI, AccessFs, LandlockStatus, Ruleset, RulesetAttr, RulesetCreatedAttr, path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, LandlockStatus, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    path_beneath_rules,
 };
 
 use crate::policy::{PathAccess, SandboxPolicy};
@@ -133,7 +134,7 @@ fn parse_kernel_version(version: &str) -> Option<(u32, u32)> {
 }
 
 /// Convert our `PathAccess` to Landlock `AccessFs` flags.
-fn path_access_to_landlock(access: PathAccess, abi: ABI) -> AccessFs {
+fn path_access_to_landlock(access: PathAccess, abi: ABI) -> BitFlags<AccessFs> {
     match access {
         PathAccess::ReadOnly => AccessFs::from_read(abi),
         PathAccess::ReadWrite => AccessFs::from_read(abi) | AccessFs::from_write(abi),
