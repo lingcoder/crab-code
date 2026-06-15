@@ -15,7 +15,7 @@
 
 ---
 
-> **积极开发中** — 4900+ 测试 · 27 crate · ~158k LOC
+> **积极开发中** — 4970 测试 · 26 crate · ~161k LOC
 
 Crab Code 是一个 Rust 原生的 Agentic Coding CLI。它对齐 Claude Code 的工具集、权限模型和交互方式，同时支持任意 LLM 提供商（Anthropic / OpenAI / DeepSeek / Bedrock / Vertex）。
 
@@ -110,12 +110,12 @@ env（runtime 层）永远赢 file。互斥变量按"高优先级先生效"。
 
 ## 架构
 
-27 个 Rust crate，4 层依赖。详见 [`docs/architecture.md`](docs/architecture.md)。
+26 个 Rust crate，4 层依赖。详见 [`docs/architecture.md`](docs/architecture.md)。
 
 ```
-入口    cli · daemon · acp
+入口    cli
 编排    agents · engine · session · tui · remote
-服务    api · tools · commands · hooks · mcp · skills · plugin · telemetry · ide · sandbox · swarm · cron · fs · memory · process
+服务    api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · swarm · cron · fs · memory · process
 基础    core · utils · config · auth
 ```
 
@@ -124,7 +124,7 @@ env（runtime 层）永远赢 file。互斥变量按"高优先级先生效"。
 ```bash
 cargo build --workspace
 cargo nextest run --workspace          # 或: cargo test --workspace
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ## 贡献
