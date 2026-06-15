@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 
 /// Default grace period between SIGTERM and SIGKILL on Unix.
 const DEFAULT_GRACE_PERIOD: Duration = Duration::from_secs(3);
@@ -127,26 +128,27 @@ async fn graceful_kill(
     let _ = child.wait().await;
 }
 
-/// Read all bytes from an optional stdout pipe using lossy UTF-8 conversion.
-async fn read_pipe_lossy(pipe: Option<tokio::process::ChildStdout>) -> String {
-    if let Some(mut r) = pipe {
+/// Drain an async reader to EOF, returning the bytes read. Spawned as its own
+/// task so that stdout and stderr are consumed concurrently with the child's
+/// execution — a child that writes more than a pipe buffer (~64KB) would
+/// otherwise block on write while the parent waits, producing a false timeout.
+fn spawn_drain<R>(reader: Option<R>) -> JoinHandle<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
         let mut buf = Vec::new();
-        let _ = tokio::io::AsyncReadExt::read_to_end(&mut r, &mut buf).await;
-        String::from_utf8_lossy(&buf).into_owned()
-    } else {
-        String::new()
-    }
+        if let Some(mut r) = reader {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut r, &mut buf).await;
+        }
+        buf
+    })
 }
 
-/// Read all bytes from an optional stderr pipe using lossy UTF-8 conversion.
-async fn read_stderr_lossy(pipe: Option<tokio::process::ChildStderr>) -> String {
-    if let Some(mut r) = pipe {
-        let mut buf = Vec::new();
-        let _ = tokio::io::AsyncReadExt::read_to_end(&mut r, &mut buf).await;
-        String::from_utf8_lossy(&buf).into_owned()
-    } else {
-        String::new()
-    }
+/// Await a drain task, converting captured bytes to a lossy UTF-8 string.
+async fn join_drain(handle: JoinHandle<Vec<u8>>) -> String {
+    let buf = handle.await.unwrap_or_default();
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// Execute a command and wait for completion.
@@ -170,25 +172,27 @@ pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
 
     let mut child = cmd.spawn()?;
 
-    // Write stdin if provided, then drop to signal EOF
-    if let Some(ref data) = opts.stdin_data
+    // Drain stdout/stderr in their own tasks and feed stdin concurrently, so a
+    // child that produces (or expects) more than a pipe buffer's worth of data
+    // never blocks on write while we wait for it to exit.
+    let stdout_handle = spawn_drain(child.stdout.take());
+    let stderr_handle = spawn_drain(child.stderr.take());
+
+    if let Some(data) = opts.stdin_data.clone()
         && let Some(mut stdin) = child.stdin.take()
     {
-        stdin.write_all(data.as_bytes()).await?;
+        tokio::spawn(async move {
+            let _ = stdin.write_all(data.as_bytes()).await;
+            // Dropping `stdin` here signals EOF to the child.
+        });
     }
 
     let result = if let Some(timeout) = opts.timeout {
-        // Collect stdout/stderr handles before consuming child.
-        let stdout_pipe = child.stdout.take();
-        let stderr_pipe = child.stderr.take();
-
         if let Ok(status) = tokio::time::timeout(timeout, child.wait()).await {
             let status = status?;
-            let stdout_buf = read_pipe_lossy(stdout_pipe).await;
-            let stderr_buf = read_stderr_lossy(stderr_pipe).await;
             SpawnOutput {
-                stdout: stdout_buf,
-                stderr: stderr_buf,
+                stdout: join_drain(stdout_handle).await,
+                stderr: join_drain(stderr_handle).await,
                 exit_code: status.code().unwrap_or(-1),
                 timed_out: false,
             }
@@ -196,21 +200,19 @@ pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
             // Timeout — graceful shutdown then force kill.
             let grace = opts.kill_grace_period.unwrap_or(DEFAULT_GRACE_PERIOD);
             graceful_kill(&mut child, grace).await;
-            let stdout_buf = read_pipe_lossy(stdout_pipe).await;
-            let stderr_buf = read_stderr_lossy(stderr_pipe).await;
             SpawnOutput {
-                stdout: stdout_buf,
-                stderr: stderr_buf,
+                stdout: join_drain(stdout_handle).await,
+                stderr: join_drain(stderr_handle).await,
                 exit_code: -1,
                 timed_out: true,
             }
         }
     } else {
-        let output = child.wait_with_output().await?;
+        let status = child.wait().await?;
         SpawnOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            exit_code: output.status.code().unwrap_or(-1),
+            stdout: join_drain(stdout_handle).await,
+            stderr: join_drain(stderr_handle).await,
+            exit_code: status.code().unwrap_or(-1),
             timed_out: false,
         }
     };
@@ -889,5 +891,140 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         assert!(!out.timed_out);
         assert!(out.stdout.trim().contains("fast"));
+    }
+
+    #[tokio::test]
+    async fn run_large_output_with_timeout_does_not_deadlock() {
+        // A child emitting well past the OS pipe buffer (~64KB) must complete
+        // promptly and return the full output even when a timeout is set —
+        // this is the regression guard for the read-after-wait deadlock.
+        const LINES: usize = 8_000; // ~256KB at ~32 bytes/line
+        let opts = if cfg!(windows) {
+            SpawnOptions {
+                command: "cmd".into(),
+                args: vec![
+                    "/C".into(),
+                    format!("for /L %i in (1,1,{LINES}) do @echo padding_line_number_%i"),
+                ],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_secs(60)),
+                stdin_data: None,
+                clear_env: false,
+                kill_grace_period: None,
+            }
+        } else {
+            SpawnOptions {
+                command: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!("for i in $(seq 1 {LINES}); do echo padding_line_number_$i; done"),
+                ],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_secs(60)),
+                stdin_data: None,
+                clear_env: false,
+                kill_grace_period: None,
+            }
+        };
+        let out = run(opts).await.unwrap();
+        assert!(!out.timed_out, "large output falsely timed out");
+        assert_eq!(out.exit_code, 0);
+        // The child emits well past a pipe buffer (>64KB). A truncated read
+        // would lose the final line, so assert the last line survived and that
+        // the total comfortably exceeds the buffer.
+        assert!(
+            out.stdout.len() > 128 * 1024,
+            "output truncated: {} bytes",
+            out.stdout.len()
+        );
+        assert!(out.stdout.contains(&format!("padding_line_number_{LINES}")));
+    }
+
+    #[tokio::test]
+    async fn run_large_stdin_with_large_output_no_deadlock() {
+        // Large stdin combined with large stdout would two-way deadlock if
+        // stdin were written serially before reading: the child blocks writing
+        // its echo (filling the stdout pipe) while we block writing stdin.
+        // Many short lines stay within `findstr`'s line-length limit on Windows
+        // while still pushing both directions past the pipe buffer.
+        const LINES: usize = 8_000;
+        let payload = (0..LINES).fold(String::new(), |mut s, i| {
+            use std::fmt::Write;
+            let _ = writeln!(s, "echo_line_{i}");
+            s
+        });
+        let opts = if cfg!(windows) {
+            SpawnOptions {
+                command: "findstr".into(),
+                args: vec!["echo_line".into()],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_secs(60)),
+                stdin_data: Some(payload),
+                clear_env: false,
+                kill_grace_period: None,
+            }
+        } else {
+            SpawnOptions {
+                command: "cat".into(),
+                args: vec![],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_secs(60)),
+                stdin_data: Some(payload),
+                clear_env: false,
+                kill_grace_period: None,
+            }
+        };
+        let out = run(opts).await.unwrap();
+        assert!(!out.timed_out, "large stdin/stdout falsely timed out");
+        // Both directions must exceed the pipe buffer; the last echoed line
+        // proves nothing was lost to a deadlock-forced truncation.
+        assert!(
+            out.stdout.len() > 64 * 1024,
+            "echo truncated: {} bytes",
+            out.stdout.len()
+        );
+        assert!(out.stdout.contains(&format!("echo_line_{}", LINES - 1)));
+    }
+
+    #[tokio::test]
+    async fn run_timeout_preserves_partial_output_after_buffer_fill() {
+        // A child that emits a marker, then hangs, must surface the partial
+        // output captured before the real timeout fired.
+        let opts = if cfg!(windows) {
+            SpawnOptions {
+                command: "cmd".into(),
+                args: vec![
+                    "/C".into(),
+                    "echo PARTIAL_MARKER && ping -n 30 127.0.0.1 >nul".into(),
+                ],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_millis(400)),
+                stdin_data: None,
+                clear_env: false,
+                kill_grace_period: Some(Duration::from_millis(50)),
+            }
+        } else {
+            SpawnOptions {
+                command: "sh".into(),
+                args: vec!["-c".into(), "echo PARTIAL_MARKER; sleep 30".into()],
+                working_dir: None,
+                env: vec![],
+                timeout: Some(Duration::from_millis(400)),
+                stdin_data: None,
+                clear_env: false,
+                kill_grace_period: Some(Duration::from_millis(50)),
+            }
+        };
+        let out = run(opts).await.unwrap();
+        assert!(out.timed_out);
+        assert!(
+            out.stdout.contains("PARTIAL_MARKER"),
+            "partial output lost on timeout"
+        );
     }
 }

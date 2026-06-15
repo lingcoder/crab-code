@@ -52,8 +52,6 @@ full = [
     "crab-plugin/wasm",
     "crab-api/bedrock",
     "crab-api/vertex",
-    "crab-process/pty",
-    "crab-telemetry/otlp",
     "crab-agents/mem-ranker",
 ]
 

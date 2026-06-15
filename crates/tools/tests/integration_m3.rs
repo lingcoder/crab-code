@@ -532,30 +532,6 @@ async fn permission_missing_tool_is_error() {
     assert!(result.is_err(), "nonexistent tool should return Err");
 }
 
-#[tokio::test]
-async fn execute_unchecked_skips_permission() {
-    let executor = make_executor();
-    let tmp = tempfile::tempdir().unwrap();
-    let file = tmp.path().join("unchecked.txt");
-    std::fs::write(&file, "unchecked content\n").unwrap();
-
-    // Even with denied list, execute_unchecked should work
-    let mut ctx = make_ctx(tmp.path(), PermissionMode::Default);
-    ctx.permission_policy.denied_tools = vec![READ_TOOL_NAME.into()];
-
-    let input = serde_json::json!({ "file_path": file.to_str().unwrap() });
-    let output = executor
-        .execute_unchecked(READ_TOOL_NAME, input, &ctx)
-        .await
-        .unwrap();
-    assert!(
-        !output.is_error,
-        "unchecked should bypass denial: {}",
-        output.text()
-    );
-    assert!(output.text().contains("unchecked content"));
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // 8. register_all_builtins() verification
 // ═══════════════════════════════════════════════════════════════════
@@ -568,23 +544,12 @@ fn register_all_builtins_produces_expected_tools() {
 }
 
 /// Expected total tool count. PowerShell is opt-in on Windows via
-/// `CRAB_USE_POWERSHELL_TOOL`. `ComputerUse` is always on Windows, conditional
-/// on `DISPLAY`/`WAYLAND_DISPLAY` elsewhere.
+/// `CRAB_USE_POWERSHELL_TOOL`.
 fn expected_builtin_count() -> usize {
     let ps_enabled = cfg!(windows)
         && std::env::var("CRAB_USE_POWERSHELL_TOOL")
             .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-    let cu_enabled = cfg!(windows)
-        || std::env::var("DISPLAY").is_ok()
-        || std::env::var("WAYLAND_DISPLAY").is_ok();
-    let mut count = 44;
-    if ps_enabled {
-        count += 1;
-    }
-    if cu_enabled {
-        count += 1;
-    }
-    count
+    if ps_enabled { 41 } else { 40 }
 }
 
 #[test]
@@ -619,7 +584,6 @@ fn all_expected_tools_registered() {
         "CronCreate",
         "CronDelete",
         "CronList",
-        "RemoteTrigger",
         "Config",
         "Brief",
         "Sleep",
@@ -630,9 +594,6 @@ fn all_expected_tools_registered() {
         "ListMcpResources",
         "ReadMcpResource",
         "McpAuth",
-        "WebBrowser",
-        "Workflow",
-        "Monitor",
         "SendUserFile",
     ];
     for name in &expected {
@@ -688,10 +649,10 @@ fn tool_schemas_are_sorted_by_name() {
 #[test]
 fn register_same_tool_twice_overwrites() {
     let mut registry = ToolRegistry::new();
-    register_all_builtins(&mut registry, None);
+    register_all_builtins(&mut registry, None, None);
     let count_before = registry.len();
     // Re-register — should overwrite, not duplicate
-    register_all_builtins(&mut registry, None);
+    register_all_builtins(&mut registry, None, None);
     assert_eq!(registry.len(), count_before);
 }
 

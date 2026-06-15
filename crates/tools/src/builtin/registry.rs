@@ -8,10 +8,9 @@ use std::sync::Arc;
 use crate::registry::ToolRegistry;
 
 use super::{
-    agent, ask_user, bash, brief, computer_use, config_tool, cron, edit, glob, grep, lsp, mcp_auth,
-    mcp_resource, monitor, notebook, plan_mode, read, remote_trigger, send_user_file, sleep, snip,
-    task, team, todo_write, tool_search, verify_plan, web_browser, web_fetch, web_search, workflow,
-    worktree, write,
+    agent, ask_user, bash, brief, config_tool, cron, edit, glob, grep, lsp, mcp_auth, mcp_resource,
+    notebook, plan_mode, read, send_user_file, sleep, snip, task, team, todo_write, tool_search,
+    verify_plan, web_fetch, web_search, worktree, write,
 };
 
 #[cfg(target_os = "windows")]
@@ -29,12 +28,18 @@ fn is_powershell_tool_enabled() -> bool {
 
 /// Register all built-in tools with the given registry.
 ///
-/// Accepts an optional shared task store. If `None`, a new one is created.
+/// Accepts an optional shared task store and cron store. When `None`, fresh
+/// in-memory ones are created. The runtime passes a durable-reloaded cron
+/// store (built via [`cron::shared_cron_store`]) so the cron tools and the
+/// runtime's fired-prompt drain share the same store.
 pub fn register_all_builtins(
     registry: &mut ToolRegistry,
     task_store: Option<task::SharedTaskStore>,
+    cron_store: Option<cron::SharedCronStore>,
 ) {
     let store = task_store.unwrap_or_else(task::shared_task_store);
+
+    bash::sweep_stale_task_outputs();
 
     registry.register(Arc::new(bash::BashTool));
     registry.register(Arc::new(read::ReadTool));
@@ -62,22 +67,15 @@ pub fn register_all_builtins(
     registry.register(Arc::new(team::SendMessageTool));
     registry.register(Arc::new(task::TaskStopTool));
     registry.register(Arc::new(task::TaskOutputTool));
-    // ccb-compatible aliases
     registry.register_alias("TaskStop", "KillShell");
     registry.register_alias("TaskOutput", "BashOutput");
     registry.register_alias("TaskOutput", "AgentOutput");
 
-    let cron_store = cron::shared_cron_store();
+    let cron_store = cron_store.unwrap_or_else(cron::shared_cron_store_empty);
     registry.register(Arc::new(cron::CronCreateTool::new(Arc::clone(&cron_store))));
     registry.register(Arc::new(cron::CronDeleteTool::new(Arc::clone(&cron_store))));
     registry.register(Arc::new(cron::CronListTool::new(cron_store)));
 
-    let trigger_store = remote_trigger::shared_trigger_store();
-    registry.register(Arc::new(remote_trigger::RemoteTriggerTool::new(
-        trigger_store,
-    )));
-
-    // P1 tools
     registry.register(Arc::new(config_tool::ConfigTool));
     registry.register(Arc::new(brief::BriefTool));
     registry.register(Arc::new(sleep::SleepTool));
@@ -89,10 +87,6 @@ pub fn register_all_builtins(
     registry.register(Arc::new(mcp_resource::ReadMcpResourceTool));
     registry.register(Arc::new(mcp_auth::McpAuthTool));
 
-    // P2 tools
-    registry.register(Arc::new(web_browser::WebBrowserTool));
-    registry.register(Arc::new(workflow::WorkflowTool));
-    registry.register(Arc::new(monitor::MonitorTool));
     registry.register(Arc::new(send_user_file::SendUserFileTool));
 
     // PowerShell tool — Windows only, opt-in via CRAB_USE_POWERSHELL_TOOL
@@ -100,34 +94,19 @@ pub fn register_all_builtins(
     if is_powershell_tool_enabled() {
         registry.register(Arc::new(powershell::PowerShellTool));
     }
-
-    // ComputerUse tool — always on Windows, requires display on Linux/macOS
-    #[cfg(target_os = "windows")]
-    registry.register(Arc::new(computer_use::ComputerUseTool));
-
-    #[cfg(not(target_os = "windows"))]
-    if std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok() {
-        registry.register(Arc::new(computer_use::ComputerUseTool));
-    }
 }
 
 /// Create a `ToolRegistry` pre-populated with all built-in tools.
 #[must_use]
 pub fn create_default_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    register_all_builtins(&mut registry, None);
+    register_all_builtins(&mut registry, None, None);
     registry
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn is_computer_use_available() -> bool {
-        cfg!(windows)
-            || std::env::var("DISPLAY").is_ok()
-            || std::env::var("WAYLAND_DISPLAY").is_ok()
-    }
 
     #[test]
     fn register_all_builtins_populates_registry() {
@@ -163,9 +142,7 @@ mod tests {
         assert!(registry.get("CronCreate").is_some());
         assert!(registry.get("CronDelete").is_some());
         assert!(registry.get("CronList").is_some());
-        assert!(registry.get("RemoteTrigger").is_some());
 
-        // P1 tools
         assert!(registry.get("Config").is_some());
         assert!(registry.get("Brief").is_some());
         assert!(registry.get("Sleep").is_some());
@@ -177,15 +154,7 @@ mod tests {
         assert!(registry.get("ReadMcpResource").is_some());
         assert!(registry.get("McpAuth").is_some());
 
-        // P2 tools
-        assert!(registry.get("WebBrowser").is_some());
-        assert!(registry.get("Workflow").is_some());
-        assert!(registry.get("Monitor").is_some());
         assert!(registry.get("SendUserFile").is_some());
-
-        // ComputerUse tool (conditional based on display availability)
-        #[cfg(target_os = "windows")]
-        assert!(registry.get("ComputerUse").is_some());
     }
 
     #[test]
@@ -195,10 +164,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 45 } else { 44 };
-        if is_computer_use_available() {
-            expected += 1;
-        }
+        let expected = if ps_enabled { 41 } else { 40 };
         assert_eq!(registry.len(), expected);
     }
 
@@ -210,10 +176,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let mut expected = if ps_enabled { 45 } else { 44 };
-        if is_computer_use_available() {
-            expected += 1;
-        }
+        let expected = if ps_enabled { 41 } else { 40 };
         assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());

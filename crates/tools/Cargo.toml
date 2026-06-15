@@ -10,10 +10,12 @@ description = "Built-in tool implementations for Crab Code"
 [dependencies]
 crab-core.workspace = true
 crab-config.workspace = true
+crab-cron.workspace = true
 crab-fs.workspace = true
 crab-process.workspace = true
 crab-sandbox.workspace = true
 crab-mcp.workspace = true
+crab-utils.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
@@ -31,10 +33,6 @@ strip-ansi-escapes = { workspace = true, optional = true }
 default = ["pdf"]
 pdf = ["pdf_oxide"]
 pty = ["portable-pty", "strip-ansi-escapes"]
-macos-ax = []
-win-native = []
-x11 = []
-wayland = []
 
 [dev-dependencies]
 tokio-util.workspace = true

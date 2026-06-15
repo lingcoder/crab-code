@@ -4,9 +4,9 @@
 //! approval, rejection, and revision states. Each state change is recorded
 //! in an `ApprovalHistory` with optional feedback.
 
+use crab_utils::time::epoch_secs;
 use std::fmt;
 use std::fmt::Write as _;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ impl PlanApproval {
     #[must_use]
     pub fn new() -> Self {
         let record = ApprovalRecord {
-            timestamp: now_secs(),
+            timestamp: epoch_secs(),
             status: ApprovalStatus::Draft,
             feedback: None,
         };
@@ -165,20 +165,12 @@ impl PlanApproval {
     fn transition(&mut self, new_status: ApprovalStatus, feedback: Option<String>) -> bool {
         self.status = new_status;
         self.history.push(ApprovalRecord {
-            timestamp: now_secs(),
+            timestamp: epoch_secs(),
             status: new_status,
             feedback,
         });
         true
     }
-}
-
-/// Get current time as seconds since UNIX epoch.
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────

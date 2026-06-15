@@ -116,6 +116,43 @@ fn shell_invocation(command: String) -> Option<(String, Vec<String>)> {
     Some((shell.clone(), vec!["-c".to_owned(), command]))
 }
 
+/// Filename prefix for background bash task output files in the temp dir.
+const TASK_OUTPUT_PREFIX: &str = "crab-task-";
+/// Filename suffix for background bash task output files.
+const TASK_OUTPUT_SUFFIX: &str = ".output";
+/// Age past which an orphaned task output file is swept on init.
+const TASK_OUTPUT_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Remove stale `crab-task-*.output` files from the temp dir.
+///
+/// Background bash tasks spill their output to `std::env::temp_dir()` for
+/// `TaskOutput` to read back. Files outlive the process that created them, so
+/// this sweeps any older than [`TASK_OUTPUT_MAX_AGE`]. Best-effort: I/O errors
+/// are logged and skipped, never propagated.
+pub fn sweep_stale_task_outputs() {
+    let dir = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(TASK_OUTPUT_PREFIX) || !name.ends_with(TASK_OUTPUT_SUFFIX) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > TASK_OUTPUT_MAX_AGE);
+        if stale && let Err(e) = std::fs::remove_file(entry.path()) {
+            tracing::warn!(path = %entry.path().display(), "failed to sweep stale task output: {e}");
+        }
+    }
+}
+
 /// Combine stdout and stderr from a process output into a single string.
 fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
     let mut combined = String::new();
@@ -127,6 +164,25 @@ fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
             combined.push('\n');
         }
         combined.push_str(&output.stderr);
+    }
+    combined
+}
+
+/// Join the streaming reader tasks and concatenate their captured lines into a
+/// single newline-separated string. Used by the timeout/cancel branches to
+/// recover whatever output arrived before the child was killed.
+async fn join_streaming_output(
+    stdout_handle: tokio::task::JoinHandle<Vec<String>>,
+    stderr_handle: tokio::task::JoinHandle<Vec<String>>,
+) -> String {
+    let stdout_lines = stdout_handle.await.unwrap_or_default();
+    let stderr_lines = stderr_handle.await.unwrap_or_default();
+    let mut combined = String::new();
+    for line in stdout_lines.iter().chain(stderr_lines.iter()) {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(line);
     }
     combined
 }
@@ -219,7 +275,8 @@ impl Tool for BashTool {
                 }
 
                 // Set up an output file for TaskOutputTool to read later.
-                let output_path = std::env::temp_dir().join(format!("crab-task-{task_id}.output"));
+                let output_path = std::env::temp_dir()
+                    .join(format!("{TASK_OUTPUT_PREFIX}{task_id}{TASK_OUTPUT_SUFFIX}"));
                 let output_path_str = output_path.to_string_lossy().to_string();
                 reg.lock()
                     .unwrap_or_else(|e| {
@@ -261,11 +318,23 @@ impl Tool for BashTool {
                     match result {
                         Ok(output) => {
                             let combined = format_output(&output);
-                            let _ = std::fs::write(&output_path, &combined);
+                            if let Err(e) = std::fs::write(&output_path, &combined) {
+                                tracing::warn!(
+                                    task = %task_id_spawn,
+                                    path = %output_path.display(),
+                                    "failed to write background task output: {e}"
+                                );
+                            }
                             reg.set_exit_code(&task_id_spawn, output.exit_code);
                         }
                         Err(e) => {
-                            let _ = std::fs::write(&output_path, e.to_string());
+                            if let Err(write_err) = std::fs::write(&output_path, e.to_string()) {
+                                tracing::warn!(
+                                    task = %task_id_spawn,
+                                    path = %output_path.display(),
+                                    "failed to write background task error: {write_err}"
+                                );
+                            }
                             reg.set_error(&task_id_spawn, e.to_string());
                         }
                     }
@@ -537,11 +606,13 @@ impl BashTool {
             }
             () = tokio::time::sleep(timeout) => {
                 let _ = child.kill().await;
-                Ok(ToolOutput::error(format!("Command timed out\n{combined}")))
+                let partial = join_streaming_output(stdout_handle, stderr_handle).await;
+                Ok(ToolOutput::error(format!("Command timed out\n{partial}")))
             }
             () = cancel.cancelled() => {
                 let _ = child.kill().await;
-                Ok(ToolOutput::error(format!("Command cancelled\n{combined}")))
+                let partial = join_streaming_output(stdout_handle, stderr_handle).await;
+                Ok(ToolOutput::error(format!("Command cancelled\n{partial}")))
             }
         };
 

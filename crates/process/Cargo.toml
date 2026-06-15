@@ -15,9 +15,5 @@ sysinfo.workspace = true
 
 [dev-dependencies]
 
-[features]
-default = []
-pty = []
-
 [lints]
 workspace = true

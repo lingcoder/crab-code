@@ -133,7 +133,6 @@ impl Tool for EditTool {
                 ));
             }
 
-            // Read the file
             let content = tokio::fs::read_to_string(path)
                 .await
                 .map_err(|e| crab_core::Error::Other(format!("failed to read {file_path}: {e}")))?;
@@ -178,7 +177,6 @@ impl Tool for EditTool {
                 track(path, content.as_bytes());
             }
 
-            // Write the file back
             tokio::fs::write(path, &new_content).await.map_err(|e| {
                 crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;

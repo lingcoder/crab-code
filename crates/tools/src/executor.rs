@@ -37,16 +37,24 @@ pub fn apply_result_budget(output: ToolOutput, max_chars: usize, tool_use_id: &s
     }
 
     let storage_dir = std::env::temp_dir().join(TOOL_RESULT_STORAGE_SUBDIR);
-    let _ = std::fs::create_dir_all(&storage_dir);
     let path = storage_dir.join(format!("{tool_use_id}.txt"));
-    let _ = std::fs::write(&path, &text);
+    let saved = std::fs::create_dir_all(&storage_dir)
+        .and_then(|()| std::fs::write(&path, &text))
+        .map_err(|e| {
+            tracing::warn!(path = %path.display(), "failed to spill oversized tool output: {e}");
+        })
+        .is_ok();
 
     let preview = truncate_with_preview(&text, RESULT_PREVIEW_CHARS);
-    let reference = format!(
-        "\n\n[Full output saved to {}, use Read tool to access]",
-        path.display()
-    );
-    ToolOutput::success(format!("{preview}{reference}"))
+    if saved {
+        let reference = format!(
+            "\n\n[Full output saved to {}, use Read tool to access]",
+            path.display()
+        );
+        ToolOutput::success(format!("{preview}{reference}"))
+    } else {
+        ToolOutput::success(preview)
+    }
 }
 
 /// Canonical reject text. Fixed phrasing primes the model to stop and wait for instructions.
@@ -81,6 +89,19 @@ impl StreamingOutput {
     pub async fn send(&self, delta: impl Into<String>) {
         let _ = self.tx.send(delta.into()).await;
     }
+}
+
+/// Resolved permission decision: either the call may proceed, or it is
+/// rejected with the `ToolOutput` to return in its place.
+///
+/// Produced by [`ToolExecutor::resolve_permission`], the single place that
+/// turns a [`PermissionDecision`] (plus handler/unattended policy) into an
+/// outcome, so every execution entry point gates identically.
+enum PermissionGate {
+    /// The tool may execute.
+    Proceed,
+    /// The tool is blocked; return this output instead of running it.
+    Reject(ToolOutput),
 }
 
 /// Outcome of a permission prompt.
@@ -188,14 +209,32 @@ impl ToolExecutor {
         self.allow_unattended = allow;
     }
 
-    /// Resolve an `AskUser` decision when no handler is installed: `None` means
-    /// proceed (unattended auto-approve), `Some(reject)` means fail closed.
-    fn unattended_outcome(&self) -> Option<ToolOutput> {
-        if self.allow_unattended {
-            None
-        } else {
-            Some(ToolOutput::error(reject_message_with_feedback(None)))
-        }
+    /// Run the permission check and resolve the resulting decision into a
+    /// [`PermissionGate`] — the single gate every execution entry point shares.
+    ///
+    /// `Allow` proceeds; `Deny` rejects with its reason; `AskUser` prompts the
+    /// installed handler (rejecting on a no, attaching any feedback) or, with no
+    /// handler, falls closed unless `allow_unattended` is set. Keeping this in
+    /// one place means `execute`, `execute_bash_streaming`, and
+    /// `execute_streaming` cannot drift apart in how they honor a decision.
+    async fn resolve_permission(
+        &self,
+        tool_name: &str,
+        source: &ToolSource,
+        is_read_only: bool,
+        input: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> PermissionGate {
+        resolve_permission_gate(
+            self.permission_handler.as_deref(),
+            self.allow_unattended,
+            tool_name,
+            source,
+            is_read_only,
+            input,
+            ctx,
+        )
+        .await
     }
 
     /// Returns a reference to the underlying registry.
@@ -230,35 +269,12 @@ impl ToolExecutor {
             .get(tool_name)
             .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
 
-        let decision = check_permission(
-            &ctx.permission_policy,
-            tool_name,
-            &tool.source(),
-            tool.is_read_only(),
-            &input,
-            &ctx.working_dir,
-        );
-
-        match decision {
-            PermissionDecision::Allow => tool.execute(input, ctx).await,
-            PermissionDecision::Deny(reason) => Ok(ToolOutput::error(reason)),
-            PermissionDecision::AskUser(prompt) => {
-                if let Some(handler) = &self.permission_handler {
-                    let result = handler.ask_permission(tool_name, &prompt, &input).await;
-                    if result.allowed {
-                        tool.execute(input, ctx).await
-                    } else {
-                        Ok(ToolOutput::error(reject_message_with_feedback(
-                            result.feedback.as_deref(),
-                        )))
-                    }
-                } else if let Some(rejection) = self.unattended_outcome() {
-                    // No handler and not opted into unattended — fail closed.
-                    Ok(rejection)
-                } else {
-                    tool.execute(input, ctx).await
-                }
-            }
+        match self
+            .resolve_permission(tool_name, &tool.source(), tool.is_read_only(), &input, ctx)
+            .await
+        {
+            PermissionGate::Proceed => tool.execute(input, ctx).await,
+            PermissionGate::Reject(output) => Ok(output),
         }
     }
 
@@ -277,36 +293,12 @@ impl ToolExecutor {
     ) -> crab_core::Result<ToolOutput> {
         use crate::builtin::bash::{BASH_TOOL_NAME, BashTool};
 
-        let decision = check_permission(
-            &ctx.permission_policy,
-            BASH_TOOL_NAME,
-            &ToolSource::BuiltIn,
-            false,
-            &input,
-            &ctx.working_dir,
-        );
-
-        match decision {
-            PermissionDecision::Allow => BashTool.execute_streaming(input, ctx, streaming).await,
-            PermissionDecision::Deny(reason) => Ok(ToolOutput::error(reason)),
-            PermissionDecision::AskUser(prompt) => {
-                if let Some(handler) = &self.permission_handler {
-                    let result = handler
-                        .ask_permission(BASH_TOOL_NAME, &prompt, &input)
-                        .await;
-                    if result.allowed {
-                        BashTool.execute_streaming(input, ctx, streaming).await
-                    } else {
-                        Ok(ToolOutput::error(reject_message_with_feedback(
-                            result.feedback.as_deref(),
-                        )))
-                    }
-                } else if let Some(rejection) = self.unattended_outcome() {
-                    Ok(rejection)
-                } else {
-                    BashTool.execute_streaming(input, ctx, streaming).await
-                }
-            }
+        match self
+            .resolve_permission(BASH_TOOL_NAME, &ToolSource::BuiltIn, false, &input, ctx)
+            .await
+        {
+            PermissionGate::Proceed => BashTool.execute_streaming(input, ctx, streaming).await,
+            PermissionGate::Reject(output) => Ok(output),
         }
     }
 
@@ -339,32 +331,18 @@ impl ToolExecutor {
                 .get(&tool_name)
                 .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
 
-            let policy = &ctx.permission_policy;
-            let decision = check_permission(
-                policy,
+            if let PermissionGate::Reject(output) = resolve_permission_gate(
+                permission_handler.as_deref(),
+                allow_unattended,
                 &tool_name,
                 &tool.source(),
                 tool.is_read_only(),
                 &input,
-                &ctx.working_dir,
-            );
-
-            match decision {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Deny(reason) => return Ok(ToolOutput::error(reason)),
-                PermissionDecision::AskUser(prompt) => {
-                    if let Some(handler) = &permission_handler {
-                        let result = handler.ask_permission(&tool_name, &prompt, &input).await;
-                        if !result.allowed {
-                            return Ok(ToolOutput::error(reject_message_with_feedback(
-                                result.feedback.as_deref(),
-                            )));
-                        }
-                    } else if !allow_unattended {
-                        // No handler and not opted into unattended — fail closed.
-                        return Ok(ToolOutput::error(reject_message_with_feedback(None)));
-                    }
-                }
+                &ctx,
+            )
+            .await
+            {
+                return Ok(output);
             }
 
             // Execute with streaming context
@@ -381,21 +359,51 @@ impl ToolExecutor {
 
         (rx, handle)
     }
+}
 
-    /// Execute a tool without any permission checks.
-    ///
-    /// Used internally by sub-agents that inherit parent permissions.
-    pub async fn execute_unchecked(
-        &self,
-        tool_name: &str,
-        input: serde_json::Value,
-        ctx: &ToolContext,
-    ) -> crab_core::Result<ToolOutput> {
-        let tool = self
-            .registry
-            .get(tool_name)
-            .ok_or_else(|| crab_core::Error::Other(format!("tool not found: {tool_name}")))?;
-        tool.execute(input, ctx).await
+/// Run the permission check and resolve the decision into a [`PermissionGate`].
+///
+/// Free-standing (rather than a method) so the `'static` spawned task in
+/// [`ToolExecutor::execute_streaming`] can call it with cloned handler/policy
+/// state, sharing the exact gate logic that [`ToolExecutor::resolve_permission`]
+/// uses on the inline path.
+async fn resolve_permission_gate(
+    handler: Option<&dyn PermissionHandler>,
+    allow_unattended: bool,
+    tool_name: &str,
+    source: &ToolSource,
+    is_read_only: bool,
+    input: &serde_json::Value,
+    ctx: &ToolContext,
+) -> PermissionGate {
+    let decision = check_permission(
+        &ctx.permission_policy,
+        tool_name,
+        source,
+        is_read_only,
+        input,
+        &ctx.working_dir,
+    );
+
+    match decision {
+        PermissionDecision::Allow => PermissionGate::Proceed,
+        PermissionDecision::Deny(reason) => PermissionGate::Reject(ToolOutput::error(reason)),
+        PermissionDecision::AskUser(prompt) => {
+            if let Some(handler) = handler {
+                let result = handler.ask_permission(tool_name, &prompt, input).await;
+                if result.allowed {
+                    PermissionGate::Proceed
+                } else {
+                    PermissionGate::Reject(ToolOutput::error(reject_message_with_feedback(
+                        result.feedback.as_deref(),
+                    )))
+                }
+            } else if allow_unattended {
+                PermissionGate::Proceed
+            } else {
+                PermissionGate::Reject(ToolOutput::error(reject_message_with_feedback(None)))
+            }
+        }
     }
 }
 
@@ -506,17 +514,6 @@ mod tests {
             .await
             .unwrap();
         assert!(!output.is_error);
-    }
-
-    #[tokio::test]
-    async fn execute_unchecked_works() {
-        let executor = make_executor();
-        let ctx = make_ctx(PermissionMode::Default);
-        let output = executor
-            .execute_unchecked("echo", serde_json::json!({"text": "raw"}), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(output.text(), "raw");
     }
 
     /// A handler that always denies permission.

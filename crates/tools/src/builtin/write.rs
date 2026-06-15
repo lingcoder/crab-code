@@ -122,7 +122,6 @@ impl Tool for WriteTool {
                 track(path, &old_content);
             }
 
-            // Write the file
             tokio::fs::write(path, content).await.map_err(|e| {
                 crab_core::Error::Other(format!("failed to write {file_path}: {e}"))
             })?;
