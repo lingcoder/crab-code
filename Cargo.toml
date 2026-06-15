@@ -5,7 +5,7 @@ members = ["crates/*", "xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 license = "Apache-2.0"
 repository = "https://github.com/lingcoder/crab-code.git"
 homepage = "https://github.com/lingcoder/crab-code"
@@ -34,6 +34,7 @@ owo-colors = "4"
 reqwest = { version = "0.13", features = ["json", "stream", "form", "multipart"] }
 mime_guess = "2"
 eventsource-stream = "0.2"
+httpdate = "1"
 either = "1"
 
 # ─── TUI ───
@@ -82,12 +83,6 @@ keyring = "4"
 keyring-core = "1"
 oauth2 = "5"
 
-# ─── Observability ───
-opentelemetry = "0.32"
-opentelemetry-otlp = "0.32"
-opentelemetry_sdk = "0.32"
-tracing-opentelemetry = "0.33"
-
 # ─── WebSocket / MCP ───
 tokio-tungstenite = "0.29"
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
@@ -101,6 +96,7 @@ portable-pty = "0.9"
 # ─── Encoding & Crypto ───
 base64 = "0.22"
 sha2 = "0.11"
+hmac = "0.13"
 rand = "0.10"
 
 # ─── PDF ───
@@ -128,7 +124,11 @@ nucleo-matcher = "0.3"
 # ─── Remote / Sandbox / Jobs ───
 # rust_crypto: pure-rust HMAC/RSA backend; avoids cmake + aws_lc_rs build deps
 # across Windows / Linux CI.
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+# AWS event-stream (vnd.amazon.eventstream) framing for Bedrock streaming.
+aws-smithy-eventstream = "0.60"
+aws-smithy-types = "1"
+bytes = "1"
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
 agent-client-protocol = "0.14"
 async-trait = "0.1"
