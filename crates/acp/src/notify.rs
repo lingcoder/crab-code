@@ -1,7 +1,7 @@
 //! Forward crab engine events to the ACP client as session
 //! notifications.
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     AgentNotification, ContentBlock, ContentChunk, SessionId, SessionNotification, SessionUpdate,
     TextContent,
 };

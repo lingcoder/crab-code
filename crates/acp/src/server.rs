@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use agent_client_protocol as sdk;
-use sdk::schema::{
+use sdk::schema::v1::{
     AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
@@ -162,7 +162,9 @@ fn build_agent<H: AgentHandler>(
         )
         // ── ext_notification (via ClientNotification enum) ──────────
         .on_receive_notification(
-            async move |_notif: sdk::ClientNotification, _cx: ConnectionTo<Client>| Ok(()),
+            async move |_notif: sdk::schema::v1::ClientNotification, _cx: ConnectionTo<Client>| {
+                Ok(())
+            },
             sdk::on_receive_notification!(),
         )
 }
@@ -235,7 +237,7 @@ fn flatten_prompt_blocks(blocks: &[ContentBlock]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdk::schema::TextContent;
+    use sdk::schema::v1::TextContent;
 
     #[test]
     fn flatten_joins_text_blocks_with_newlines() {

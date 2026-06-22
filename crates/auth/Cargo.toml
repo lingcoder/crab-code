@@ -12,7 +12,6 @@ crab-utils.workspace = true
 crab-config.workspace = true
 crab-core.workspace = true
 keyring.workspace = true
-keyring-core.workspace = true
 oauth2.workspace = true
 reqwest.workspace = true
 serde.workspace = true
