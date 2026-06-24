@@ -142,7 +142,11 @@ impl McpClient {
         service: RmcpClientService,
         server_name: &str,
     ) -> crab_core::Result<Self> {
-        let peer_info = service.peer().peer_info().cloned().unwrap_or_default();
+        let peer_info = service
+            .peer()
+            .peer_info()
+            .map(|info| info.as_ref().clone())
+            .unwrap_or_default();
 
         tracing::info!(
             server = server_name,

@@ -5,7 +5,6 @@ members = ["crates/*", "xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.96"
 license = "Apache-2.0"
 repository = "https://github.com/lingcoder/crab-code.git"
 homepage = "https://github.com/lingcoder/crab-code"
@@ -87,7 +86,7 @@ tokio-tungstenite = "0.29"
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
-wasmtime = "45"
+wasmtime = "46"
 
 # ─── Process ───
 portable-pty = "0.9"

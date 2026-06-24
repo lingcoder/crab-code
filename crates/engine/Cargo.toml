@@ -2,7 +2,6 @@
 name = "crab-engine"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw query loop for Crab Code — extracted from crab-agents in v2.3"
