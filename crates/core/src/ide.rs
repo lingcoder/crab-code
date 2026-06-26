@@ -64,7 +64,10 @@ impl IdeSelection {
         if self.line_count == 0 {
             return None;
         }
-        self.line_start.map(|s| s + self.line_count - 1)
+        // Saturating: `line_start`/`line_count` come straight off the wire, so
+        // a malicious or buggy peer must not overflow-panic here.
+        self.line_start
+            .map(|s| s.saturating_add(self.line_count).saturating_sub(1))
     }
 }
 

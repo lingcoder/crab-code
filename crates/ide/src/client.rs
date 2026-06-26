@@ -28,6 +28,10 @@ use crate::state::IdeHandles;
 
 /// Minimum wait between reconnect attempts.
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
+/// A connection that lasts at least this long counts as real progress and
+/// resets the backoff. Anything shorter is treated as a flap so the
+/// supervisor keeps backing off instead of busy-spinning on reconnect.
+const STABLE_CONNECTION_MIN: Duration = Duration::from_secs(2);
 /// Maximum wait between reconnect attempts (caps exponential growth).
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Capacity of the at-mention broadcast. Overflows are dropped at the
@@ -121,16 +125,22 @@ async fn supervise(
 ) {
     let mut backoff = BACKOFF_MIN;
     loop {
-        let mut connected_once = false;
+        let mut made_progress = false;
         for ep in &endpoints {
+            let started = std::time::Instant::now();
             match connect_once(ep, handles.clone(), mention_tx.clone()).await {
                 Ok(()) => {
-                    connected_once = true;
                     // `connect_once` returns when the dispatch loop exits —
                     // the connection dropped. Clear state and loop.
                     *handles.connection.write().await = None;
                     *handles.selection.write().await = None;
-                    backoff = BACKOFF_MIN;
+                    // Only a connection that stayed up counts as progress and
+                    // resets the backoff. A connect-then-instant-drop flap must
+                    // still back off, else this loop spins at 100% CPU.
+                    if started.elapsed() >= STABLE_CONNECTION_MIN {
+                        made_progress = true;
+                        backoff = BACKOFF_MIN;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -141,10 +151,10 @@ async fn supervise(
                 }
             }
         }
-        if !connected_once {
+        if !made_progress {
             tracing::debug!(
                 backoff_secs = backoff.as_secs(),
-                "all IDE endpoints failed; sleeping before retry"
+                "all IDE endpoints failed or flapped; sleeping before retry"
             );
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(BACKOFF_MAX);

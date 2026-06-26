@@ -531,10 +531,7 @@ fn collect_dir_agents_md(dir: &Path, results: &mut Vec<AgentsMd>) {
 /// Returns `Some((frontmatter, body))` if valid frontmatter is found.
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_first = &trimmed[4..];
+    let after_first = trimmed.strip_prefix("---")?;
     let end = after_first.find("---")?;
     let frontmatter = after_first[..end].trim();
     let body = after_first[end + 3..].trim();
@@ -609,6 +606,19 @@ mod tests {
     }
 
     // ── Original tests ────────────────────────────────────────────────
+
+    #[test]
+    fn split_frontmatter_does_not_panic_on_short_or_multibyte() {
+        // Exactly "---" must not slice out of bounds.
+        assert_eq!(split_frontmatter("---"), None);
+        // A multibyte char right after the opening fence must not split mid-byte
+        // (the old `&trimmed[4..]` panicked here).
+        assert!(split_frontmatter("---你\nname: x\n---\nbody").is_some());
+        // Well-formed frontmatter still parses.
+        let (front, body) = split_frontmatter("---\nname: x\n---\nbody").unwrap();
+        assert!(front.contains("name: x"));
+        assert_eq!(body, "body");
+    }
 
     #[test]
     fn collect_empty_dir() {

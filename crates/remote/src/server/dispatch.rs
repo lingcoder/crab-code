@@ -38,6 +38,7 @@ pub async fn run_connection(
     handler: Arc<dyn SessionHandler>,
     cancel: CancellationToken,
     server_name: String,
+    claims: crate::auth::jwt::Claims,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -70,6 +71,7 @@ pub async fn run_connection(
                             &mut session,
                             &mut client_info,
                             &server_name,
+                            &claims,
                         ).await {
                             tracing::warn!(error = %e, "dispatch error; closing connection");
                             break;
@@ -129,6 +131,7 @@ async fn handle_text_frame(
     session: &mut Option<SessionHandle>,
     client_info: &mut Option<ClientInfo>,
     server_name: &str,
+    claims: &crate::auth::jwt::Claims,
 ) -> Result<(), DispatchError> {
     let req: JsonRpcRequest = match serde_json::from_str(text) {
         Ok(r) => r,
@@ -145,7 +148,16 @@ async fn handle_text_frame(
     let method = req.method.clone();
     let params = req.params.unwrap_or(Value::Null);
 
-    let result = dispatch(&method, params, handler, session, client_info, server_name).await;
+    let result = dispatch(
+        &method,
+        params,
+        handler,
+        session,
+        client_info,
+        server_name,
+        claims,
+    )
+    .await;
 
     let response = match result {
         Ok(value) => JsonRpcResponse::ok(id, value),
@@ -162,6 +174,7 @@ async fn dispatch(
     session: &mut Option<SessionHandle>,
     client_info: &mut Option<ClientInfo>,
     server_name: &str,
+    claims: &crate::auth::jwt::Claims,
 ) -> Result<Value, JsonRpcError> {
     match method {
         method::INITIALIZE => {
@@ -192,6 +205,14 @@ async fn dispatch(
         }
 
         method::SESSION_CREATE => {
+            // Only "create" tokens (empty subject) may open new sessions; a
+            // token scoped to a specific session must not create others.
+            if !claims.sub.is_empty() {
+                return Err(JsonRpcError::simple(
+                    ErrorCode::Unauthorized.into(),
+                    "this token is scoped to a session and may not create new ones",
+                ));
+            }
             let p: SessionCreateParams = parse_params(params)?;
             match handler.create(p).await {
                 Ok(handle) => {
@@ -205,6 +226,15 @@ async fn dispatch(
 
         method::SESSION_ATTACH => {
             let p: SessionAttachParams = parse_params(params)?;
+            // A session-scoped token (non-empty subject) may only attach to the
+            // session named in its subject. An empty-subject token is an
+            // unrestricted/create token and may attach to any session.
+            if !claims.sub.is_empty() && claims.sub != p.session_id {
+                return Err(JsonRpcError::simple(
+                    ErrorCode::Unauthorized.into(),
+                    "token is not authorized to attach to this session",
+                ));
+            }
             match handler.attach(p).await {
                 Ok(handle) => {
                     let result = attach_result(&handle);

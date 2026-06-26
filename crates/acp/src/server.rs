@@ -178,7 +178,7 @@ async fn handle_prompt<H: AgentHandler>(
     cx: ConnectionTo<Client>,
 ) -> Result<(), sdk::Error> {
     let session_id = req.session_id.to_string();
-    let cancel = state.sessions.cancel_token(&session_id).await;
+    let cancel = state.sessions.begin_turn(&session_id).await;
 
     let prompt = flatten_prompt_blocks(&req.prompt);
     if prompt.trim().is_empty() {

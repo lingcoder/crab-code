@@ -139,13 +139,29 @@ pub fn save_token_store(path: &Path, store: &TokenStore) -> Result<(), AuthError
         std::fs::create_dir_all(parent).map_err(|e| AuthError::Auth {
             message: format!("failed to create token dir: {e}"),
         })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
     }
     let json = serde_json::to_string_pretty(store).map_err(|e| AuthError::Auth {
         message: format!("failed to serialize token store: {e}"),
     })?;
-    std::fs::write(path, json).map_err(|e| AuthError::Auth {
+    std::fs::write(path, &json).map_err(|e| AuthError::Auth {
         message: format!("failed to write token store: {e}"),
-    })
+    })?;
+    // Tokens (incl. long-lived refresh tokens) must not be world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            AuthError::Auth {
+                message: format!("failed to restrict token file permissions: {e}"),
+            }
+        })?;
+    }
+    Ok(())
 }
 
 // ── OAuth2 PKCE configuration ──────────────────────────────────────────

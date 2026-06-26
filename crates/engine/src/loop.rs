@@ -370,8 +370,16 @@ pub async fn query_loop(
         // making subsequent turns appear frozen mid-response.
         state.accumulate(&outcome.usage);
 
-        // Handle max_tokens truncation with escalation + continuation
+        // Handle max_tokens truncation with escalation + continuation.
+        //
+        // Only when the truncated message carries NO tool_use blocks. If it
+        // does, escalating-and-continuing would re-run already-executed inline
+        // tools, and injecting a plain user continuation would leave an orphaned
+        // tool_use that the provider rejects with a 400. A truncated message
+        // with tool calls falls through to normal execution, which builds the
+        // paired tool_result and lets the model continue from there.
         if is_max_tokens_stop(outcome.stop_reason.as_deref())
+            && !outcome.message.has_tool_use()
             && state.output_token_retries < MAX_OUTPUT_TOKEN_RETRIES
         {
             state.output_token_retries += 1;

@@ -430,17 +430,28 @@ impl InputBox {
         }
     }
 
+    /// Clamp `col` to the line length and snap it down to the nearest UTF-8
+    /// char boundary, so vertical motion never strands the cursor mid-codepoint.
+    fn snap_col_to_boundary(&self, row: usize, col: usize) -> usize {
+        let line = &self.lines[row];
+        let mut c = col.min(line.len());
+        while c > 0 && !line.is_char_boundary(c) {
+            c -= 1;
+        }
+        c
+    }
+
     fn move_up(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+            self.cursor_col = self.snap_col_to_boundary(self.cursor_row, self.cursor_col);
         }
     }
 
     fn move_down(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+            self.cursor_col = self.snap_col_to_boundary(self.cursor_row, self.cursor_col);
         }
     }
 
@@ -654,6 +665,21 @@ mod tests {
         input.cursor_col = 0;
         input.handle_key(key(KeyCode::Delete));
         assert_eq!(input.text(), "bc");
+    }
+
+    #[test]
+    fn vertical_move_onto_cjk_line_does_not_panic() {
+        // A byte column carried down from an ASCII line can land mid-codepoint
+        // on a CJK line; snapping to a char boundary must keep Delete safe.
+        let mut input = InputBox::new();
+        input.set_text("abcdef\n你好世界");
+        input.cursor_row = 0;
+        input.cursor_col = 5;
+        input.handle_key(key(KeyCode::Down));
+        // Cursor snaps back to the nearest boundary (start of 好 at byte 3).
+        assert_eq!(input.cursor(), (1, 3));
+        input.handle_key(key(KeyCode::Delete));
+        assert_eq!(input.text(), "abcdef\n你世界");
     }
 
     #[test]

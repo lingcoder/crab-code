@@ -41,11 +41,19 @@ impl MemoryStore {
         &self.dir
     }
 
+    /// Validate `filename` against path-traversal and resolve it inside `dir`.
+    fn resolve(&self, filename: &str) -> crab_core::Result<PathBuf> {
+        let safe = crate::security::validate_memory_key(filename)?;
+        Ok(self.dir.join(safe))
+    }
+
     /// Persist `content` to `<dir>/<filename>`, creating the directory tree
     /// if it does not exist.
     pub fn save(&self, filename: &str, content: &str) -> crab_core::Result<()> {
-        fs::create_dir_all(&self.dir)?;
-        let path = self.dir.join(filename);
+        let path = self.resolve(filename)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(path, content)?;
         Ok(())
     }
@@ -54,7 +62,7 @@ impl MemoryStore {
     ///
     /// Returns `Ok(None)` when the file does not exist.
     pub fn load(&self, filename: &str) -> crab_core::Result<Option<String>> {
-        let path = self.dir.join(filename);
+        let path = self.resolve(filename)?;
         match fs::read_to_string(&path) {
             Ok(content) => Ok(Some(content)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -66,7 +74,7 @@ impl MemoryStore {
     ///
     /// Does **not** return an error when the file is already absent.
     pub fn delete(&self, filename: &str) -> crab_core::Result<()> {
-        let path = self.dir.join(filename);
+        let path = self.resolve(filename)?;
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

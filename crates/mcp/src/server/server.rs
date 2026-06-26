@@ -1,4 +1,4 @@
-//! `McpServer` — JSON-RPC dispatcher + Content-Length frame I/O.
+//! `McpServer` — JSON-RPC dispatcher + newline-delimited JSON frame I/O.
 
 use std::sync::Arc;
 
@@ -217,54 +217,37 @@ impl<H: ToolHandler + 'static> McpServer<H> {
 
 // ─── Message framing ───
 
-/// Read a Content-Length framed message from an async reader.
-/// Returns `Ok(None)` on EOF.
+/// Read a newline-delimited JSON message from an async reader.
+/// Returns `Ok(None)` on EOF. Blank lines are skipped.
 async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
 ) -> crab_core::Result<Option<String>> {
-    let mut content_length: Option<usize> = None;
-    let mut header_line = String::new();
-
+    let mut line = String::new();
     loop {
-        header_line.clear();
+        line.clear();
         let bytes_read = reader
-            .read_line(&mut header_line)
+            .read_line(&mut line)
             .await
-            .map_err(|e| crab_core::Error::Other(format!("failed to read header: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read message: {e}")))?;
 
         if bytes_read == 0 {
             return Ok(None);
         }
 
-        let trimmed = header_line.trim();
+        let trimmed = line.trim();
         if trimmed.is_empty() {
-            break;
+            continue;
         }
-
-        if let Some(value) = trimmed.strip_prefix("Content-Length:") {
-            content_length = value.trim().parse().ok();
-        }
+        return Ok(Some(trimmed.to_string()));
     }
-
-    let length = content_length
-        .ok_or_else(|| crab_core::Error::Other("missing Content-Length header".into()))?;
-
-    let mut body = vec![0u8; length];
-    tokio::io::AsyncReadExt::read_exact(reader, &mut body)
-        .await
-        .map_err(|e| crab_core::Error::Other(format!("failed to read body: {e}")))?;
-
-    String::from_utf8(body)
-        .map(Some)
-        .map_err(|e| crab_core::Error::Other(format!("invalid UTF-8: {e}")))
 }
 
-/// Write a Content-Length framed message to a shared async writer.
+/// Write a newline-delimited JSON message to a shared async writer.
 async fn write_message<W: tokio::io::AsyncWrite + Unpin>(
     writer: &Arc<Mutex<W>>,
     json: &str,
 ) -> crab_core::Result<()> {
-    let frame = format!("Content-Length: {}\r\n\r\n{json}", json.len());
+    let frame = format!("{json}\n");
     let mut w = writer.lock().await;
     w.write_all(frame.as_bytes())
         .await
@@ -395,10 +378,19 @@ mod tests {
         McpServer::new("test-server", "0.1.0", Arc::new(TestHandler::new()))
     }
 
-    /// Encode a JSON-RPC request as a Content-Length framed message.
+    /// Encode a JSON-RPC request as a newline-delimited JSON message.
     fn frame_request(req: &JsonRpcRequest) -> Vec<u8> {
         let json = serde_json::to_string(req).unwrap();
-        format!("Content-Length: {}\r\n\r\n{json}", json.len()).into_bytes()
+        format!("{json}\n").into_bytes()
+    }
+
+    /// Parse a server's newline-delimited JSON output into responses.
+    fn parse_responses(output_str: &str) -> Vec<JsonRpcResponse> {
+        output_str
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
     }
 
     #[tokio::test]
@@ -582,14 +574,7 @@ mod tests {
         server.run(&input[..], &mut output).await.unwrap();
 
         let output_str = String::from_utf8(output).unwrap();
-        let responses: Vec<JsonRpcResponse> = output_str
-            .split("Content-Length: ")
-            .filter(|s| !s.is_empty())
-            .map(|chunk| {
-                let body_start = chunk.find("\r\n\r\n").unwrap() + 4;
-                serde_json::from_str(&chunk[body_start..]).unwrap()
-            })
-            .collect();
+        let responses = parse_responses(&output_str);
 
         assert_eq!(responses.len(), 3);
 
@@ -632,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_message_parses_frame() {
-        let data = b"Content-Length: 13\r\n\r\n{\"test\":true}";
+        let data = b"{\"test\":true}\n";
         let mut reader = BufReader::new(&data[..]);
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         assert_eq!(msg, "{\"test\":true}");
@@ -646,8 +631,7 @@ mod tests {
             let data = writer.lock().await;
             String::from_utf8(data.clone()).unwrap()
         };
-        assert!(text.starts_with("Content-Length: 11\r\n\r\n"));
-        assert!(text.contains("{\"ok\":true}"));
+        assert_eq!(text, "{\"ok\":true}\n");
     }
 
     #[test]
@@ -984,14 +968,7 @@ mod tests {
         server.run(&input[..], &mut output).await.unwrap();
 
         let output_str = String::from_utf8(output).unwrap();
-        let responses: Vec<JsonRpcResponse> = output_str
-            .split("Content-Length: ")
-            .filter(|s| !s.is_empty())
-            .map(|chunk| {
-                let s = chunk.find("\r\n\r\n").unwrap() + 4;
-                serde_json::from_str(&chunk[s..]).unwrap()
-            })
-            .collect();
+        let responses = parse_responses(&output_str);
         assert_eq!(responses.len(), 3);
 
         let init: InitializeResult =
@@ -1338,14 +1315,7 @@ mod tests {
         server.run(&input[..], &mut output).await.unwrap();
 
         let output_str = String::from_utf8(output).unwrap();
-        let responses: Vec<JsonRpcResponse> = output_str
-            .split("Content-Length: ")
-            .filter(|s| !s.is_empty())
-            .map(|chunk| {
-                let s = chunk.find("\r\n\r\n").unwrap() + 4;
-                serde_json::from_str(&chunk[s..]).unwrap()
-            })
-            .collect();
+        let responses = parse_responses(&output_str);
         assert_eq!(responses.len(), 3);
 
         let init: InitializeResult =

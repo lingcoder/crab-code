@@ -28,11 +28,7 @@ pub fn list_sessions() -> anyhow::Result<()> {
         let preview = match history.load(id) {
             Ok(Some(msgs)) if !msgs.is_empty() => {
                 let text = msgs[0].text();
-                if text.len() > 80 {
-                    format!("{}...", &text[..80])
-                } else {
-                    text.clone()
-                }
+                crab_utils::text::truncate_chars(&text, 80, "...")
             }
             _ => String::new(),
         };
@@ -66,8 +62,11 @@ pub fn show_session(session_id: &str) -> anyhow::Result<()> {
     for msg in &messages {
         let role = &msg.role;
         let text = msg.text();
-        let truncated = if text.len() > 2000 {
-            format!("{}... [truncated]", &text[..2000])
+        let truncated = if text.chars().nth(2000).is_some() {
+            format!(
+                "{}... [truncated]",
+                crab_utils::text::truncate_chars(&text, 2000, "")
+            )
         } else {
             text.clone()
         };

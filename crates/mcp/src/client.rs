@@ -28,6 +28,9 @@ pub struct McpClient {
     server_info: ServerInfo,
     capabilities: ServerCapabilities,
     tools: Vec<McpToolDef>,
+    /// Per-server access-control list. Empty (the default) allows every
+    /// tool, resource, and notification.
+    acl: crate::server_acl::ServerAclRegistry,
 }
 
 impl std::fmt::Debug for McpClient {
@@ -97,6 +100,7 @@ impl McpClient {
             server_info: init_result.server_info,
             capabilities: init_result.capabilities,
             tools,
+            acl: crate::server_acl::ServerAclRegistry::new(),
         })
     }
 
@@ -177,15 +181,33 @@ impl McpClient {
             },
             capabilities: convert_server_capabilities(&peer_info.capabilities),
             tools,
+            acl: crate::server_acl::ServerAclRegistry::new(),
         })
     }
 
     /// Call a tool on the connected MCP server.
+    /// Apply per-server access-control rules. Tools denied by the rules are
+    /// dropped from the advertised list, and subsequent [`Self::call_tool`]
+    /// calls for disallowed tools are rejected.
+    pub fn apply_acl(&mut self, rules: crate::server_acl::AclRules) {
+        self.acl
+            .set_server_permissions(self.server_name.clone(), rules);
+        let acl = &self.acl;
+        let server = self.server_name.as_str();
+        self.tools.retain(|t| acl.is_tool_allowed(server, &t.name));
+    }
+
     pub async fn call_tool(
         &self,
         name: &str,
         arguments: serde_json::Value,
     ) -> crab_core::Result<ToolCallResult> {
+        if !self.acl.is_tool_allowed(&self.server_name, name) {
+            return Err(crab_core::Error::Permission(format!(
+                "tool '{name}' is denied by the ACL for MCP server '{}'",
+                self.server_name
+            )));
+        }
         tracing::debug!(server = %self.server_name, tool = name, "calling MCP tool");
 
         match &self.backend {
@@ -751,6 +773,41 @@ mod tests {
         assert_eq!(client.server_info().name, "test-server");
         assert_eq!(client.tools().len(), 1);
         assert_eq!(client.tools()[0].name, "read_file");
+    }
+
+    #[tokio::test]
+    async fn apply_acl_filters_tools_and_blocks_calls() {
+        let transport = MockTransport::new(vec![
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "srv", "version": "1.0"}
+            }),
+            json!({
+                "tools": [
+                    {"name": "read_file", "description": "", "inputSchema": {}},
+                    {"name": "write_file", "description": "", "inputSchema": {}}
+                ]
+            }),
+        ]);
+
+        let mut client = McpClient::connect(Box::new(transport), "srv")
+            .await
+            .unwrap();
+        assert_eq!(client.tools().len(), 2);
+
+        client.apply_acl(crate::server_acl::AclRules {
+            denied_tools: vec!["write_*".into()],
+            ..Default::default()
+        });
+
+        // The denied tool is dropped from the advertised list.
+        assert_eq!(client.tools().len(), 1);
+        assert_eq!(client.tools()[0].name, "read_file");
+
+        // And a direct call to the denied tool is rejected before dispatch.
+        let err = client.call_tool("write_file", json!({})).await.unwrap_err();
+        assert!(matches!(err, crab_core::Error::Permission(_)));
     }
 
     #[tokio::test]

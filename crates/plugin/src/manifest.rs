@@ -69,6 +69,18 @@ impl PluginManifest {
                 "plugin manifest: 'name' must not contain whitespace".into(),
             ));
         }
+        // The name is used as a directory component on install, so it must not
+        // contain path separators, parent references, or null bytes.
+        if self.name.contains('/')
+            || self.name.contains('\\')
+            || self.name.contains('\0')
+            || self.name == ".."
+            || self.name == "."
+        {
+            return Err(crab_core::Error::Other(
+                "plugin manifest: 'name' must not contain path separators or '..'".into(),
+            ));
+        }
         Ok(())
     }
 

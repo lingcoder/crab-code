@@ -135,8 +135,14 @@ impl Renderable for NotificationBanner {
             let style = banner.level.style();
             let dismiss_hint = if banner.dismissible { " [x]" } else { "" };
             let text = format!(" {}{dismiss_hint}", banner.message);
-            let truncated = if text.len() > area.width as usize {
-                format!("{}…", &text[..area.width as usize - 1])
+            let truncated = if crab_utils::text::display_width(&text) > area.width as usize {
+                format!(
+                    "{}…",
+                    crab_utils::text::truncate_to_width(
+                        &text,
+                        (area.width as usize).saturating_sub(1)
+                    )
+                )
             } else {
                 text
             };

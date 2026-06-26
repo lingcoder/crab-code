@@ -214,16 +214,16 @@ impl Tool for WriteTool {
 /// Check if a file path matches any sensitive file patterns.
 /// Returns a warning message if sensitive, None otherwise.
 fn check_sensitive_file(path: &str) -> Option<String> {
-    let lower = path.to_lowercase();
     let file_name = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_lowercase();
 
+    // Match the file *name* only — matching the whole path mis-flagged
+    // innocuous files in directories like `token-bucket/` or `secret-santa/`.
     for pattern in SENSITIVE_PATTERNS {
-        if file_name.starts_with(pattern) || file_name.ends_with(pattern) || lower.contains(pattern)
-        {
+        if file_name.contains(pattern) {
             return Some(format!(
                 "Refusing to write potentially sensitive file matching pattern '{pattern}': {path}"
             ));
@@ -431,5 +431,9 @@ mod tests {
         assert!(check_sensitive_file("/home/user/main.rs").is_none());
         assert!(check_sensitive_file("/home/user/README.md").is_none());
         assert!(check_sensitive_file("/home/user/Cargo.toml").is_none());
+        // A sensitive word in a *directory* name must not block innocuous files.
+        assert!(check_sensitive_file("/proj/token-bucket/main.rs").is_none());
+        assert!(check_sensitive_file("/proj/secret-santa/list.txt").is_none());
+        assert!(check_sensitive_file("/proj/credentials-ui/app.tsx").is_none());
     }
 }

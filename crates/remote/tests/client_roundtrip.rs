@@ -190,6 +190,32 @@ async fn attach_errors_propagate() {
 }
 
 #[tokio::test]
+async fn scoped_token_cannot_attach_to_other_session() {
+    // A token whose subject names "session-a" must not attach to "session-b".
+    let (url, _handler, cancel, join) = spawn_server(true).await;
+    let scoped = crab_remote::auth::jwt::sign(SECRET.as_bytes(), "session-a", "dev", 300).unwrap();
+    let client = RemoteClient::connect(ClientConfig::new(&url, scoped))
+        .await
+        .unwrap();
+
+    let err = client
+        .attach_session(SessionAttachParams {
+            session_id: "session-b".into(),
+        })
+        .await
+        .unwrap_err();
+    match err {
+        // Unauthorized (-32001), surfaced before the handler runs.
+        ClientError::ServerError(e) => assert_eq!(e.code, -32001),
+        other => panic!("expected Unauthorized ServerError, got {other:?}"),
+    }
+
+    client.close().await.unwrap();
+    cancel.cancel();
+    let _ = join.await;
+}
+
+#[tokio::test]
 async fn close_is_idempotent() {
     let (url, _handler, cancel, join) = spawn_server(true).await;
     let client = RemoteClient::connect(ClientConfig::new(&url, client_token()))

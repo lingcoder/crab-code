@@ -162,8 +162,16 @@ impl Renderable for ToastQueue {
                 .add_modifier(Modifier::BOLD);
             let msg_style = Style::default().fg(Color::White);
 
-            let truncated = if toast.message.len() > (inner.width as usize).saturating_sub(4) {
-                format!("{}…", &toast.message[..inner.width as usize - 5])
+            let truncated = if crab_utils::text::display_width(&toast.message)
+                > (inner.width as usize).saturating_sub(4)
+            {
+                format!(
+                    "{}…",
+                    crab_utils::text::truncate_to_width(
+                        &toast.message,
+                        (inner.width as usize).saturating_sub(5)
+                    )
+                )
             } else {
                 toast.message.clone()
             };

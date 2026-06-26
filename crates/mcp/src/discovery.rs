@@ -18,6 +18,10 @@ pub struct McpServerConfig {
     /// Optional environment variables to pass to stdio processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
+    /// Per-server access-control rules (allow/deny tool/resource patterns).
+    /// Absent or empty means allow everything the server exposes.
+    #[serde(default)]
+    pub acl: crate::server_acl::AclRules,
 }
 
 /// Transport-specific configuration for an MCP server.
@@ -91,18 +95,21 @@ pub fn parse_mcp_servers(
 /// Spawns the appropriate transport based on the config and performs the
 /// MCP initialize handshake.
 pub async fn connect_server(config: &McpServerConfig) -> crab_core::Result<crate::McpClient> {
-    match &config.transport {
+    let mut client = match &config.transport {
         McpTransportConfig::Stdio { command, args } => {
-            crate::McpClient::connect_stdio(command, args, config.env.as_ref(), &config.name).await
+            crate::McpClient::connect_stdio(command, args, config.env.as_ref(), &config.name)
+                .await?
         }
         McpTransportConfig::Ws { ws_url } => {
             let transport = crate::transport::ws::WsTransport::connect(ws_url).await?;
-            crate::McpClient::connect(Box::new(transport), &config.name).await
+            crate::McpClient::connect(Box::new(transport), &config.name).await?
         }
         McpTransportConfig::Http { url } => {
-            crate::McpClient::connect_streamable_http(url, &config.name).await
+            crate::McpClient::connect_streamable_http(url, &config.name).await?
         }
-    }
+    };
+    client.apply_acl(config.acl.clone());
+    Ok(client)
 }
 
 #[cfg(test)]
@@ -213,6 +220,7 @@ mod tests {
                 args: vec!["-y".into(), "server".into()],
             },
             env: Some(HashMap::from([("KEY".into(), "val".into())])),
+            acl: crate::server_acl::AclRules::default(),
         };
 
         let json = serde_json::to_value(&config).unwrap();
@@ -229,6 +237,7 @@ mod tests {
                 url: "https://example.com/mcp".into(),
             },
             env: None,
+            acl: crate::server_acl::AclRules::default(),
         };
 
         let json = serde_json::to_value(&config).unwrap();
@@ -262,6 +271,7 @@ mod tests {
                 ws_url: "wss://mcp.example.com/ws".into(),
             },
             env: None,
+            acl: crate::server_acl::AclRules::default(),
         };
 
         let json = serde_json::to_value(&config).unwrap();

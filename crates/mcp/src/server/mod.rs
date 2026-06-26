@@ -1,8 +1,9 @@
 //! MCP server — exposes local tools to external MCP clients.
 //!
-//! The server reads JSON-RPC requests (Content-Length framed, like LSP) from an
-//! async reader (typically stdin) and writes responses to an async writer
-//! (typically stdout). It handles the MCP handshake (`initialize`) and serves
+//! The server reads newline-delimited JSON-RPC requests (one message per line,
+//! per the MCP stdio spec) from an async reader (typically stdin) and writes
+//! responses to an async writer (typically stdout). It handles the MCP
+//! handshake (`initialize`) and serves
 //! `tools/list` and `tools/call` by delegating to a [`ToolHandler`].
 //!
 //! Also supports HTTP SSE mode via [`McpServer::run_sse`], where the server

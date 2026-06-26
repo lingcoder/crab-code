@@ -28,6 +28,11 @@ pub const AUTH_HEADER: &str = "authorization";
 /// Bearer prefix stripped off [`AUTH_HEADER`] before verification.
 pub const BEARER_PREFIX: &str = "Bearer ";
 
+/// Upper bound on a single inbound WebSocket message. crab-proto frames are
+/// small JSON-RPC objects; capping at 4 MiB stops a client from exhausting
+/// server memory with one enormous frame.
+const MAX_WS_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+
 /// Shared state handed to each axum handler: the config (for `jwt_secret`)
 /// plus the `SessionHandler` and the cancel token.
 #[derive(Clone)]
@@ -114,16 +119,15 @@ async fn ws_upgrade(
 ) -> Response {
     let secret = state.config.jwt_secret.as_bytes();
     match extract_and_verify(&headers, secret) {
-        Ok(_claims) => {
-            // Claims are not handed into the dispatch task in this
-            // phase — they become relevant when session/attach needs to
-            // gate by `sub`. Stored in state on a follow-up phase.
+        Ok(claims) => {
             let handler = Arc::clone(&state.handler);
             let cancel = state.cancel.clone();
             let name = state.server_name.clone();
-            ws.on_upgrade(move |socket| async move {
-                run_connection(socket, handler, cancel, name).await;
-            })
+            ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+                .max_frame_size(MAX_WS_MESSAGE_BYTES)
+                .on_upgrade(move |socket| async move {
+                    run_connection(socket, handler, cancel, name, claims).await;
+                })
         }
         Err(e) => {
             tracing::debug!(error = %e, "rejecting ws upgrade: bad auth");

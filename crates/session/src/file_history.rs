@@ -87,7 +87,9 @@ impl FileHistory {
     fn save_index(&self) {
         match serde_json::to_string(&self.index) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(self.index_path(), json) {
+                // Atomic write so a crash mid-save can't truncate index.json and
+                // make every prior /rewind snapshot unreachable on resume.
+                if let Err(e) = crate::history::atomic_write(&self.index_path(), json.as_bytes()) {
                     tracing::error!(error = %e, "file-history index save failed");
                 }
             }

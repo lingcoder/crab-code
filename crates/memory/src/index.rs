@@ -139,8 +139,13 @@ pub fn truncate_index_content(content: &str) -> (String, Truncation) {
     // 2. Byte truncation
     let final_content = if after_lines.len() > MAX_INDEX_BYTES {
         was_byte_truncated = true;
-        // Find the last newline at or before the byte limit.
-        let slice = &after_lines[..MAX_INDEX_BYTES];
+        // Find the last newline at or before the byte limit. Snap the cut down
+        // to a UTF-8 char boundary so slicing never panics on multibyte content.
+        let mut cut = MAX_INDEX_BYTES;
+        while cut > 0 && !after_lines.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let slice = &after_lines[..cut];
         match slice.rfind('\n') {
             Some(pos) => after_lines[..=pos].to_owned(),
             // No newline found — take the whole slice.

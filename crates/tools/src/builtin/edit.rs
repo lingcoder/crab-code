@@ -385,20 +385,30 @@ fn find_fuzzy_match(content: &str, needle: &str) -> Option<String> {
         return None;
     }
 
-    // Split content into lines, try matching contiguous line groups
     let needle_line_count = needle.lines().count().max(1);
-    let content_lines: Vec<&str> = content.lines().collect();
 
-    for start in 0..content_lines.len() {
-        // Try windows of needle_line_count lines, plus one extra on each side
+    // Byte span (start, end-excluding-terminator) of each logical line. We
+    // return the real substring of `content` rather than re-joining lines with
+    // `\n`, so the result stays an actual substring even for CRLF files —
+    // otherwise the later `replacen` finds nothing and silently no-ops.
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut idx = 0;
+    for piece in content.split_inclusive('\n') {
+        let body_len = piece.trim_end_matches('\n').trim_end_matches('\r').len();
+        spans.push((idx, idx + body_len));
+        idx += piece.len();
+    }
+
+    for start in 0..spans.len() {
+        // Try windows of needle_line_count lines, plus one extra.
         for window_size in [needle_line_count, needle_line_count + 1] {
             let end = start + window_size;
-            if end > content_lines.len() {
+            if end > spans.len() {
                 continue;
             }
-            let candidate = content_lines[start..end].join("\n");
-            if normalize_whitespace(&candidate) == normalized_needle {
-                return Some(candidate);
+            let candidate = &content[spans[start].0..spans[end - 1].1];
+            if normalize_whitespace(candidate) == normalized_needle {
+                return Some(candidate.to_owned());
             }
         }
     }
@@ -438,6 +448,27 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn fuzzy_match_returns_real_substring_for_crlf() {
+        // Multi-line CRLF content: re-joining lines with "\n" (the old bug)
+        // produced a candidate that wasn't a substring of the CRLF content, so
+        // the later `replacen` silently no-opped. The candidate must keep its
+        // original \r\n separators.
+        let content = "fn main() {\r\n    let x = 1;\r\n    let y = 2;\r\n}\r\n";
+        let needle = "let x = 1; let y = 2;"; // two lines, whitespace-collapsed
+        let found = find_fuzzy_match(content, needle).expect("fuzzy match");
+        assert!(
+            content.contains(&found),
+            "fuzzy result must be a real substring of the CRLF content, got {found:?}"
+        );
+        assert!(
+            found.contains("\r\n"),
+            "interior separator must be preserved"
+        );
+        // And replacing it actually changes the content.
+        assert_ne!(content.replacen(&found, "// replaced", 1), content);
+    }
 
     fn test_ctx() -> ToolContext {
         ToolContext {
