@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crab_core::event::Event;
 use serde::{Deserialize, Serialize};
@@ -7,17 +8,18 @@ use tokio::sync::mpsc;
 /// Unique identifier for correlating request/response pairs.
 pub type CorrelationId = String;
 
+/// Process-wide monotonic counter backing [`new_correlation_id`].
+static CORRELATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Generate a new correlation ID.
+///
+/// Uses a monotonic counter rather than a timestamp: two ids requested within
+/// the same clock tick must not collide, or a response could be matched to the
+/// wrong waiter.
 #[must_use]
 pub fn new_correlation_id() -> CorrelationId {
-    format!(
-        "corr_{:016x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            % u128::from(u64::MAX)
-    )
+    let n = CORRELATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("corr_{n:016x}")
 }
 
 /// Envelope wrapping every inter-agent message with routing metadata.
@@ -181,6 +183,14 @@ pub fn event_channel(buffer: usize) -> (mpsc::Sender<Event>, mpsc::Receiver<Even
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn correlation_ids_are_unique_within_a_tick() {
+        // Rapid successive ids must differ even within one clock tick.
+        let ids: Vec<_> = (0..1000).map(|_| new_correlation_id()).collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+    }
 
     #[test]
     fn message_bus_creation() {

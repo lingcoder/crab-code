@@ -171,6 +171,36 @@ async fn initialize_handshake_succeeds() {
 }
 
 #[tokio::test]
+async fn session_create_before_initialize_errors() {
+    let (url, _handler, cancel, join) = setup_server().await;
+    let mut ws = connect(&url).await;
+
+    // Skip the initialize handshake and go straight to create.
+    send(
+        &mut ws,
+        &JsonRpcRequest::new(
+            method::SESSION_CREATE,
+            Some(
+                serde_json::to_value(SessionCreateParams {
+                    working_dir: "/tmp".into(),
+                    initial_prompt: None,
+                })
+                .unwrap(),
+            ),
+        ),
+    )
+    .await;
+    let resp = recv_response(&mut ws).await;
+    assert!(
+        resp.is_error(),
+        "create before initialize must be rejected: {resp:?}"
+    );
+
+    cancel.cancel();
+    let _ = join.await;
+}
+
+#[tokio::test]
 async fn create_session_delivers_event_and_receives_input() {
     let (url, handler, cancel, join) = setup_server().await;
     let mut ws = connect(&url).await;

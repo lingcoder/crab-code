@@ -420,6 +420,7 @@ fn worker_result_clone_summary_preserves_fields() {
         worker_id: "w1".into(),
         output: Some("done".into()),
         success: true,
+        error: None,
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,

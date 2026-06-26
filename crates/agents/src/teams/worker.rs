@@ -43,6 +43,9 @@ pub struct WorkerResult {
     pub output: Option<String>,
     /// Whether the worker completed without errors.
     pub success: bool,
+    /// Error detail when `success` is false, so the parent can distinguish a
+    /// worker that did nothing from one that crashed.
+    pub error: Option<String>,
     /// Cumulative token usage during the worker's run.
     pub usage: TokenUsage,
     /// The worker's conversation history (for inspection or merging).
@@ -60,6 +63,7 @@ impl WorkerResult {
             worker_id: self.worker_id.clone(),
             output: self.output.clone(),
             success: self.success,
+            error: self.error.clone(),
             usage: self.usage.clone(),
             conversation: Conversation::new(self.worker_id.clone(), String::new(), 0),
         }
@@ -195,7 +199,8 @@ impl AgentWorker {
             .await
         };
 
-        let success = result.is_ok();
+        let error = result.err().map(|e| e.to_string());
+        let success = error.is_none();
         let usage = conversation.total_usage.clone();
 
         // Extract final assistant text from conversation
@@ -216,6 +221,7 @@ impl AgentWorker {
             worker_id,
             output,
             success,
+            error,
             usage,
             conversation,
         }
@@ -362,6 +368,7 @@ mod tests {
             worker_id: "w1".into(),
             output: Some("done".into()),
             success: true,
+            error: None,
             usage: TokenUsage::default(),
             conversation: conv,
         };
@@ -376,11 +383,13 @@ mod tests {
             worker_id: "w1".into(),
             output: None,
             success: false,
+            error: Some("query aborted".into()),
             usage: TokenUsage::default(),
             conversation: conv,
         };
         assert!(!result.success);
         assert!(result.output.is_none());
+        assert_eq!(result.error.as_deref(), Some("query aborted"));
     }
 
     #[test]

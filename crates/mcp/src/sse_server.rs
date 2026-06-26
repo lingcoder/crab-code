@@ -24,6 +24,10 @@ use crate::server::{McpServer, ToolHandler};
 /// Default timeout for processing a single JSON-RPC request.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Upper bound on an inbound HTTP request body, to bound memory against a
+/// hostile `Content-Length`.
+const MAX_SSE_BODY_BYTES: usize = 16 * 1024 * 1024;
+
 /// Type alias for the SSE sender channel.
 type SseSender = tokio::sync::mpsc::UnboundedSender<String>;
 
@@ -121,8 +125,14 @@ async fn parse_http_request(
         }
     }
 
-    // Read body if present
+    // Read body if present. Cap the advertised length before allocating so a
+    // hostile client can't force a multi-GB allocation with one header.
     let body = if content_length > 0 {
+        if content_length > MAX_SSE_BODY_BYTES {
+            return Err(crab_core::Error::Other(format!(
+                "request body too large: {content_length} bytes (max {MAX_SSE_BODY_BYTES})"
+            )));
+        }
         let mut buf = vec![0u8; content_length];
         tokio::io::AsyncReadExt::read_exact(stream, &mut buf)
             .await

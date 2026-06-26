@@ -205,6 +205,13 @@ async fn dispatch(
         }
 
         method::SESSION_CREATE => {
+            require_initialized(client_info.as_ref())?;
+            if session.is_some() {
+                return Err(JsonRpcError::simple(
+                    ErrorCode::InvalidParams.into(),
+                    "a session is already active on this connection",
+                ));
+            }
             // Only "create" tokens (empty subject) may open new sessions; a
             // token scoped to a specific session must not create others.
             if !claims.sub.is_empty() {
@@ -225,6 +232,13 @@ async fn dispatch(
         }
 
         method::SESSION_ATTACH => {
+            require_initialized(client_info.as_ref())?;
+            if session.is_some() {
+                return Err(JsonRpcError::simple(
+                    ErrorCode::InvalidParams.into(),
+                    "a session is already active on this connection",
+                ));
+            }
             let p: SessionAttachParams = parse_params(params)?;
             // A session-scoped token (non-empty subject) may only attach to the
             // session named in its subject. An empty-subject token is an
@@ -293,6 +307,18 @@ async fn forward_event(
         ),
     );
     send_json(ws_tx, &notif).await
+}
+
+/// Reject session methods that arrive before the `initialize` handshake, so
+/// `version_compatible` can't be bypassed by skipping it.
+fn require_initialized(client_info: Option<&ClientInfo>) -> Result<(), JsonRpcError> {
+    if client_info.is_none() {
+        return Err(JsonRpcError::simple(
+            ErrorCode::InvalidParams.into(),
+            "call initialize before any session method",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_params<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, JsonRpcError> {

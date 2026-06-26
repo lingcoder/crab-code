@@ -479,6 +479,11 @@ mod tests {
             worker_id: worker_id.into(),
             output: if success { Some("done".into()) } else { None },
             success,
+            error: if success {
+                None
+            } else {
+                Some("mock failure".into())
+            },
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new(worker_id.into(), String::new(), 0),
         }

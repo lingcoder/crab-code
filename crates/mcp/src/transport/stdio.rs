@@ -44,7 +44,10 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // Don't orphan the server process if this transport is dropped
+            // (e.g. the connection is cancelled before an explicit close).
+            .kill_on_drop(true);
 
         if let Some(env_vars) = env {
             for (k, v) in env_vars {

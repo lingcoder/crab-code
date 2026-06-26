@@ -231,7 +231,13 @@ pub fn agent_result_message(result: &WorkerResult) -> Message {
     } else {
         "failed"
     };
-    let output = result.output.as_deref().unwrap_or("(no output)");
+    // Prefer real output; on failure with no output, surface the error so the
+    // parent can tell a crashed worker from one that produced nothing.
+    let output = result
+        .output
+        .as_deref()
+        .or(result.error.as_deref())
+        .unwrap_or("(no output)");
     Message::user(format!(
         "<agent-result worker-id=\"{}\" status=\"{status}\">\n{output}\n</agent-result>",
         result.worker_id
@@ -288,6 +294,7 @@ mod tests {
             worker_id: "worker_1".into(),
             output: Some("the answer".into()),
             success: true,
+            error: None,
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new("w".into(), String::new(), 0),
         };
@@ -301,11 +308,13 @@ mod tests {
             worker_id: "worker_2".into(),
             output: None,
             success: false,
+            error: Some("backend exploded".into()),
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new("w2".into(), String::new(), 0),
         };
         let text = agent_result_message(&failed).text();
         assert!(text.contains("status=\"failed\""));
-        assert!(text.contains("(no output)"));
+        // The error detail is surfaced instead of a bare "(no output)".
+        assert!(text.contains("backend exploded"));
     }
 }

@@ -137,20 +137,14 @@ impl Default for RetryPolicy {
     }
 }
 
-/// Check whether an API error is retryable.
+/// Check whether an API error is retryable under the default policy.
 ///
-/// Retryable conditions:
-/// - 429 Too Many Requests (rate limited)
-/// - 529 Overloaded (server overloaded)
-/// - Connection/timeout errors
+/// Delegates to [`RetryPolicy::should_retry`] so this standalone helper can
+/// never disagree with the policy on the same error (notably transient 5xx,
+/// which the policy retries but a hand-rolled 429/529-only check would not).
 #[must_use]
 pub fn is_retryable(err: &ApiError) -> bool {
-    match err {
-        ApiError::RateLimited { .. } | ApiError::Timeout => true,
-        ApiError::Api { status, .. } => *status == 429 || *status == 529,
-        ApiError::Http(e) => e.is_timeout() || e.is_connect(),
-        ApiError::Json(_) | ApiError::Sse(_) | ApiError::Common(_) => false,
-    }
+    RetryPolicy::default().should_retry(err, 0)
 }
 
 #[cfg(test)]
@@ -200,6 +194,23 @@ mod tests {
     }
 
     #[test]
+    fn transient_5xx_is_retryable_like_the_policy() {
+        // The standalone helper must agree with RetryPolicy::should_retry on
+        // 5xx, which the default policy retries.
+        for status in [500u16, 502, 503, 504] {
+            let err = ApiError::Api {
+                status,
+                message: "server error".into(),
+            };
+            assert!(is_retryable(&err), "status {status} should be retryable");
+            assert_eq!(
+                is_retryable(&err),
+                RetryPolicy::default().should_retry(&err, 0)
+            );
+        }
+    }
+
+    #[test]
     fn status_400_is_not_retryable() {
         let err = ApiError::Api {
             status: 400,
@@ -244,12 +255,14 @@ mod tests {
     }
 
     #[test]
-    fn status_500_is_not_retryable() {
+    fn status_500_is_retryable() {
+        // 5xx are transient; is_retryable must agree with the default policy
+        // (which retries server errors) rather than diverging from it.
         let err = ApiError::Api {
             status: 500,
             message: "internal".into(),
         };
-        assert!(!is_retryable(&err));
+        assert!(is_retryable(&err));
     }
 
     #[test]
