@@ -83,7 +83,7 @@ oauth2 = "5"
 
 # ─── WebSocket / MCP ───
 tokio-tungstenite = "0.29"
-rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
 wasmtime = "46"
