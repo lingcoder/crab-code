@@ -380,28 +380,40 @@ fn convert_resource_content(content: rmcp::model::ResourceContents) -> ResourceC
             mime_type,
             text: Some(blob),
         },
+        // ResourceContents is non_exhaustive; surface unknown variants as an
+        // empty resource rather than failing the whole result.
+        _ => ResourceContent {
+            uri: String::new(),
+            mime_type: None,
+            text: None,
+        },
     }
 }
 
-fn convert_tool_result_content(content: rmcp::model::Content) -> ToolResultContent {
-    match content.raw {
-        rmcp::model::RawContent::Text(text) => ToolResultContent::Text { text: text.text },
-        rmcp::model::RawContent::Image(image) => ToolResultContent::Image {
+fn convert_tool_result_content(content: rmcp::model::ContentBlock) -> ToolResultContent {
+    match content {
+        rmcp::model::ContentBlock::Text(text) => ToolResultContent::Text { text: text.text },
+        rmcp::model::ContentBlock::Image(image) => ToolResultContent::Image {
             data: image.data,
             mime_type: image.mime_type,
         },
-        rmcp::model::RawContent::Resource(resource) => ToolResultContent::Resource {
+        rmcp::model::ContentBlock::Resource(resource) => ToolResultContent::Resource {
             resource: convert_resource_content(resource.resource),
         },
-        rmcp::model::RawContent::Audio(audio) => ToolResultContent::Text {
+        rmcp::model::ContentBlock::Audio(audio) => ToolResultContent::Text {
             text: format!("[audio:{}]", audio.mime_type),
         },
-        rmcp::model::RawContent::ResourceLink(resource) => ToolResultContent::Resource {
+        rmcp::model::ContentBlock::ResourceLink(resource) => ToolResultContent::Resource {
             resource: ResourceContent {
                 uri: resource.uri,
                 mime_type: resource.mime_type,
                 text: resource.description.or(resource.title),
             },
+        },
+        // ContentBlock is non_exhaustive; represent unknown block kinds as
+        // empty text so one exotic block cannot sink the tool result.
+        _ => ToolResultContent::Text {
+            text: String::new(),
         },
     }
 }
@@ -654,8 +666,8 @@ fn convert_prompt_get_result(result: rmcp::model::GetPromptResult) -> PromptGetR
 
 fn convert_prompt_message(msg: rmcp::model::PromptMessage) -> PromptMessage {
     let role = match msg.role {
-        rmcp::model::PromptMessageRole::User => "user".to_string(),
-        rmcp::model::PromptMessageRole::Assistant => "assistant".to_string(),
+        rmcp::model::Role::User => "user".to_string(),
+        rmcp::model::Role::Assistant => "assistant".to_string(),
     };
     PromptMessage {
         role,
@@ -663,28 +675,30 @@ fn convert_prompt_message(msg: rmcp::model::PromptMessage) -> PromptMessage {
     }
 }
 
-fn convert_prompt_message_content(
-    content: rmcp::model::PromptMessageContent,
-) -> PromptMessageContent {
+fn convert_prompt_message_content(content: rmcp::model::ContentBlock) -> PromptMessageContent {
     match content {
-        rmcp::model::PromptMessageContent::Text { text } => PromptMessageContent::Text { text },
-        rmcp::model::PromptMessageContent::Resource { resource } => {
-            PromptMessageContent::Resource {
-                resource: convert_resource_content(resource.raw.resource),
-            }
-        }
-        rmcp::model::PromptMessageContent::Image { image } => PromptMessageContent::Text {
-            text: format!("[image:{}]", image.raw.mime_type),
+        rmcp::model::ContentBlock::Text(text) => PromptMessageContent::Text { text: text.text },
+        rmcp::model::ContentBlock::Resource(resource) => PromptMessageContent::Resource {
+            resource: convert_resource_content(resource.resource),
         },
-        rmcp::model::PromptMessageContent::ResourceLink { link } => {
-            PromptMessageContent::Resource {
-                resource: ResourceContent {
-                    uri: link.raw.uri,
-                    mime_type: link.raw.mime_type,
-                    text: link.raw.description.or(link.raw.title),
-                },
-            }
-        }
+        rmcp::model::ContentBlock::Image(image) => PromptMessageContent::Text {
+            text: format!("[image:{}]", image.mime_type),
+        },
+        rmcp::model::ContentBlock::Audio(audio) => PromptMessageContent::Text {
+            text: format!("[audio:{}]", audio.mime_type),
+        },
+        rmcp::model::ContentBlock::ResourceLink(link) => PromptMessageContent::Resource {
+            resource: ResourceContent {
+                uri: link.uri,
+                mime_type: link.mime_type,
+                text: link.description.or(link.title),
+            },
+        },
+        // ContentBlock is non_exhaustive; degrade unknown block kinds to
+        // empty text instead of failing the prompt fetch.
+        _ => PromptMessageContent::Text {
+            text: String::new(),
+        },
     }
 }
 
