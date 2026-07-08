@@ -33,6 +33,10 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Description of the task for the sub-agent to perform"
                 },
+                "name": {
+                    "type": "string",
+                    "description": "Optional name for the spawned agent. Named agents run as long-lived teammates in the session's implicit team, addressable via SendMessage({to: name}); omit for a one-shot sub-agent that returns its result"
+                },
                 "model": {
                     "type": "string",
                     "description": "Optional model ID override for the sub-agent (e.g. 'claude-sonnet-4-20250514')"
@@ -73,6 +77,17 @@ impl Tool for AgentTool {
                 return Ok(ToolOutput::error("task description must not be empty"));
             }
 
+            let name = input.get("name").and_then(|v| v.as_str()).map(str::trim);
+            if let Some(n) = name
+                && !is_valid_agent_name(n)
+            {
+                return Ok(ToolOutput::error(format!(
+                    "invalid agent name {n:?}: must start with an alphanumeric character, \
+                     contain only alphanumerics, hyphens, and underscores, and be at most \
+                     64 characters"
+                )));
+            }
+
             let model = input
                 .get("model")
                 .and_then(|v| v.as_str())
@@ -106,6 +121,7 @@ impl Tool for AgentTool {
             let spawn_request = serde_json::json!({
                 "action": "spawn_agent",
                 "task": task,
+                "name": name,
                 "model": model,
                 "working_dir": working_dir.unwrap_or(default_working_dir),
                 "max_turns": max_turns,
@@ -148,8 +164,22 @@ impl Tool for AgentTool {
         // LLM-generated descriptions can contain any Unicode — byte slicing is
         // unsafe. truncate_chars handles multi-byte input correctly.
         let truncated = truncate_chars(desc, 77, "…");
-        Some(format!("Agent ({truncated})"))
+        match input["name"].as_str() {
+            Some(name) => Some(format!("Agent [{name}] ({truncated})")),
+            None => Some(format!("Agent ({truncated})")),
+        }
     }
+}
+
+/// Validate a teammate name: 1-64 characters, first character alphanumeric,
+/// the rest alphanumeric, hyphen, or underscore.
+fn is_valid_agent_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    name.len() <= 64 && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]
@@ -197,6 +227,7 @@ mod tests {
         let schema = AgentTool.input_schema();
         let props = schema["properties"].as_object().unwrap();
         assert!(props.contains_key("task"));
+        assert!(props.contains_key("name"));
         assert!(props.contains_key("model"));
         assert!(props.contains_key("working_dir"));
         assert!(props.contains_key("max_turns"));
@@ -312,5 +343,68 @@ mod tests {
         let input = json!({});
         let result = AgentTool.execute(input, &ctx).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_with_name_includes_it_in_marker() {
+        let ctx = test_ctx();
+        let input = json!({"task": "research the API", "name": "researcher"});
+
+        let output = AgentTool.execute(input, &ctx).await.unwrap();
+        assert!(!output.is_error);
+
+        let ToolOutputContent::Json {
+            value: json_content,
+        } = &output.content[0]
+        else {
+            panic!("expected JSON output");
+        };
+        assert_eq!(json_content["name"], "researcher");
+    }
+
+    #[tokio::test]
+    async fn execute_without_name_emits_null_name() {
+        let ctx = test_ctx();
+        let output = AgentTool
+            .execute(json!({"task": "do it"}), &ctx)
+            .await
+            .unwrap();
+        let ToolOutputContent::Json {
+            value: json_content,
+        } = &output.content[0]
+        else {
+            panic!("expected JSON output");
+        };
+        assert!(json_content["name"].is_null());
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_invalid_name() {
+        let ctx = test_ctx();
+        for bad in ["-leading-hyphen", "has space", "a@b", "", &"x".repeat(65)] {
+            let input = json!({"task": "do it", "name": bad});
+            let output = AgentTool.execute(input, &ctx).await.unwrap();
+            assert!(output.is_error, "name {bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn valid_agent_names() {
+        assert!(is_valid_agent_name("alice"));
+        assert!(is_valid_agent_name("worker-2"));
+        assert!(is_valid_agent_name("A_b-3"));
+        assert!(is_valid_agent_name(&"x".repeat(64)));
+        assert!(!is_valid_agent_name("_underscore-first"));
+        assert!(!is_valid_agent_name("名字"));
+    }
+
+    #[test]
+    fn use_summary_shows_name_when_present() {
+        let named = AgentTool
+            .format_use_summary(&json!({"task": "t", "name": "researcher"}))
+            .unwrap();
+        assert!(named.contains("[researcher]"));
+        let anon = AgentTool.format_use_summary(&json!({"task": "t"})).unwrap();
+        assert!(!anon.contains('['));
     }
 }

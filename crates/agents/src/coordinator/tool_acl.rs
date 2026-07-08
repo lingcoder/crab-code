@@ -2,17 +2,15 @@
 //!
 //! The Coordinator role has no hands-on execution tools — it can only
 //! delegate via `Agent`, talk via `SendMessage`, and stop running tasks via
-//! `TaskStop`. Workers spawned by a Coordinator additionally cannot nest
-//! their own team creation or message other workers directly.
+//! `TaskStop`. Workers spawned by a Coordinator cannot message other workers
+//! directly; all cross-worker coordination flows through the Coordinator.
 //!
 //! These constants stay a static `&[&str]` slice for compile-time
 //! visibility.
 
 use crab_tools::builtin::agent::AGENT_TOOL_NAME;
+use crab_tools::builtin::send_message::SEND_MESSAGE_TOOL_NAME;
 use crab_tools::builtin::task::TASK_STOP_TOOL_NAME;
-use crab_tools::builtin::team::{
-    SEND_MESSAGE_TOOL_NAME, TEAM_CREATE_TOOL_NAME, TEAM_DELETE_TOOL_NAME,
-};
 
 /// Tools a Coordinator may invoke. The Coordinator's registry is reduced
 /// to exactly these names before the session starts.
@@ -20,13 +18,9 @@ pub const COORDINATOR_TOOLS: &[&str] =
     &[AGENT_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, TASK_STOP_TOOL_NAME];
 
 /// Tools a Worker (spawned via the Coordinator's `Agent` tool) is *not*
-/// allowed to use. This prevents nested Coordinator Mode setups and
-/// peer-to-peer messaging that would bypass Coordinator oversight.
-pub const WORKER_DENIED_TOOLS: &[&str] = &[
-    TEAM_CREATE_TOOL_NAME,
-    TEAM_DELETE_TOOL_NAME,
-    SEND_MESSAGE_TOOL_NAME,
-];
+/// allowed to use. Peer-to-peer messaging would bypass Coordinator
+/// oversight.
+pub const WORKER_DENIED_TOOLS: &[&str] = &[SEND_MESSAGE_TOOL_NAME];
 
 #[cfg(test)]
 mod tests {
@@ -41,10 +35,8 @@ mod tests {
     }
 
     #[test]
-    fn worker_denied_tools_blocks_team_mgmt_and_messaging() {
-        assert!(WORKER_DENIED_TOOLS.contains(&"TeamCreate"));
-        assert!(WORKER_DENIED_TOOLS.contains(&"TeamDelete"));
-        assert!(WORKER_DENIED_TOOLS.contains(&"SendMessage"));
+    fn worker_denied_tools_blocks_peer_messaging() {
+        assert_eq!(WORKER_DENIED_TOOLS, &["SendMessage"]);
     }
 
     #[test]

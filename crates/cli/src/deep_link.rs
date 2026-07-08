@@ -94,7 +94,7 @@ pub fn parse_deep_link(url: &str) -> Option<DeepLinkAction> {
 /// full URI spec (no `+` as space, no charset awareness), but sufficient
 /// for simple identifiers and commands.
 fn percent_decode(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
+    let mut bytes: Vec<u8> = Vec::with_capacity(input.len());
     let mut chars = input.chars();
     while let Some(ch) = chars.next() {
         if ch == '%' {
@@ -103,21 +103,24 @@ fn percent_decode(input: &str) -> String {
             if let (Some(h), Some(l)) = (hi, lo) {
                 let hex = format!("{h}{l}");
                 if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    output.push(byte as char);
+                    bytes.push(byte);
                     continue;
                 }
                 // Malformed — just pass through
-                output.push('%');
-                output.push(h);
-                output.push(l);
+                bytes.push(b'%');
+                let mut buf = [0u8; 4];
+                bytes.extend_from_slice(h.encode_utf8(&mut buf).as_bytes());
+                bytes.extend_from_slice(l.encode_utf8(&mut buf).as_bytes());
             } else {
-                output.push('%');
+                bytes.push(b'%');
             }
         } else {
-            output.push(ch);
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
     }
-    output
+    // Decoded `%XX` bytes plus literal chars together form UTF-8.
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Return platform-specific instructions for registering the `crab-cli://`
@@ -174,6 +177,14 @@ mod tests {
                 command: "cargo test".into(),
             })
         );
+    }
+
+    #[test]
+    fn percent_decode_multibyte_utf8() {
+        // %E4%B8%AD is the UTF-8 encoding of 中; bytes must be reassembled
+        // into one char, not pushed as three Latin-1 code points.
+        assert_eq!(percent_decode("%E4%B8%AD"), "中");
+        assert_eq!(percent_decode("a%20b%E4%B8%ADc"), "a b中c");
     }
 
     #[test]

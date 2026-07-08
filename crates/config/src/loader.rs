@@ -219,7 +219,11 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     // `/permissions/allow/1` down to index 0 and the subsequent prune would
     // delete the wrong (valid) element. Descending-order within a longer
     // path also keeps deeper paths from invalidating shallower ones.
-    errors.sort_by(|a, b| b.field.cmp(&a.field));
+    //
+    // Numeric path segments must compare numerically, not lexically: lexical
+    // order puts `/allow/10` before `/allow/2`, so pruning `/2` first would
+    // shift `/10` down and corrupt the prune — the exact bug this guards.
+    errors.sort_by(|a, b| field_path_cmp(&b.field, &a.field));
     for err in &errors {
         tracing::warn!(
             field = if err.field.is_empty() { "<root>" } else { &err.field },
@@ -232,6 +236,32 @@ pub fn resolve(ctx: &ResolveContext) -> crab_core::Result<Config> {
     value.try_into().map_err(|e: toml::de::Error| {
         crab_core::Error::Config(format!("config deserialization error: {e}"))
     })
+}
+
+/// Compare two JSON-pointer field paths segment by segment, comparing
+/// all-numeric segments numerically and others lexically. This makes
+/// `/allow/2` sort before `/allow/10` (ascending), so reverse-ordering the
+/// prune list removes higher array indices first.
+fn field_path_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut sa = a.split('/');
+    let mut sb = b.split('/');
+    loop {
+        match (sa.next(), sb.next()) {
+            (Some(x), Some(y)) => {
+                let ord = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(nx), Ok(ny)) => nx.cmp(&ny),
+                    _ => x.cmp(y),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => return Ordering::Equal,
+        }
+    }
 }
 
 /// Compute the file-layer paths that participate in `resolve`, honoring
@@ -362,6 +392,35 @@ mod tests {
 
     fn write(path: &Path, body: &str) {
         std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn field_path_cmp_orders_indices_numerically() {
+        use std::cmp::Ordering;
+        // Numeric segments compare as numbers, not lexically.
+        assert_eq!(
+            field_path_cmp("/permissions/allow/2", "/permissions/allow/10"),
+            Ordering::Less
+        );
+        assert_eq!(
+            field_path_cmp("/permissions/allow/10", "/permissions/allow/2"),
+            Ordering::Greater
+        );
+        // Reverse-sorting a prune list must remove index 10 before index 2.
+        let mut fields = vec![
+            "/permissions/allow/2".to_string(),
+            "/permissions/allow/10".to_string(),
+            "/permissions/allow/1".to_string(),
+        ];
+        fields.sort_by(|a, b| field_path_cmp(b, a));
+        assert_eq!(
+            fields,
+            vec![
+                "/permissions/allow/10",
+                "/permissions/allow/2",
+                "/permissions/allow/1"
+            ]
+        );
     }
 
     #[test]

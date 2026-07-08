@@ -25,12 +25,10 @@ use crab_tools::builtin::glob::GLOB_TOOL_NAME;
 use crab_tools::builtin::grep::GREP_TOOL_NAME;
 use crab_tools::builtin::notebook::NOTEBOOK_EDIT_TOOL_NAME;
 use crab_tools::builtin::read::READ_TOOL_NAME;
+use crab_tools::builtin::send_message::SEND_MESSAGE_TOOL_NAME;
 use crab_tools::builtin::task::{
     TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_OUTPUT_TOOL_NAME,
     TASK_STOP_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
-};
-use crab_tools::builtin::team::{
-    SEND_MESSAGE_TOOL_NAME, TEAM_CREATE_TOOL_NAME, TEAM_DELETE_TOOL_NAME,
 };
 use crab_tools::builtin::web_fetch::WEB_FETCH_TOOL_NAME;
 use crab_tools::builtin::web_search::WEB_SEARCH_TOOL_NAME;
@@ -420,6 +418,7 @@ fn worker_result_clone_summary_preserves_fields() {
         worker_id: "w1".into(),
         output: Some("done".into()),
         success: true,
+        error: None,
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
@@ -474,8 +473,6 @@ fn default_registry_includes_all_builtin_tools() {
         TASK_LIST_TOOL_NAME,
         TASK_UPDATE_TOOL_NAME,
         TASK_GET_TOOL_NAME,
-        TEAM_CREATE_TOOL_NAME,
-        TEAM_DELETE_TOOL_NAME,
         SEND_MESSAGE_TOOL_NAME,
         TASK_STOP_TOOL_NAME,
         TASK_OUTPUT_TOOL_NAME,

@@ -29,6 +29,9 @@ pub const SPAWN_AGENT_ACTION: &str = "spawn_agent";
 
 /// Scan `conversation[starting_len..]` tool-result text for `spawn_agent`
 /// markers emitted by the Agent tool.
+///
+/// Markers carrying a non-empty `name` are excluded: those spawn long-lived
+/// teammates via the team coordinator, not one-shot workers.
 #[must_use]
 pub fn scan_spawn_markers(
     conversation: &Conversation,
@@ -46,6 +49,11 @@ pub fn scan_spawn_markers(
             _ => None,
         })
         .filter(|v| v.get("action").and_then(serde_json::Value::as_str) == Some(SPAWN_AGENT_ACTION))
+        .filter(|v| {
+            v.get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|n| n.trim().is_empty())
+        })
         .collect()
 }
 
@@ -231,7 +239,13 @@ pub fn agent_result_message(result: &WorkerResult) -> Message {
     } else {
         "failed"
     };
-    let output = result.output.as_deref().unwrap_or("(no output)");
+    // Prefer real output; on failure with no output, surface the error so the
+    // parent can tell a crashed worker from one that produced nothing.
+    let output = result
+        .output
+        .as_deref()
+        .or(result.error.as_deref())
+        .unwrap_or("(no output)");
     Message::user(format!(
         "<agent-result worker-id=\"{}\" status=\"{status}\">\n{output}\n</agent-result>",
         result.worker_id
@@ -259,11 +273,23 @@ mod tests {
 
     #[test]
     fn scan_ignores_other_markers_and_respects_start() {
-        let c = convo_with_marker(r#"{"action":"team_created","team_name":"x"}"#);
+        let c = convo_with_marker(r#"{"action":"message_sent","to":"alice","message":"hi"}"#);
         assert!(scan_spawn_markers(&c, 0).is_empty());
         // starting_len past the message skips it.
         let c2 = convo_with_marker(r#"{"action":"spawn_agent","task":"y"}"#);
         assert!(scan_spawn_markers(&c2, 1).is_empty());
+    }
+
+    #[test]
+    fn scan_skips_named_teammate_spawns() {
+        // Named spawns belong to the team coordinator, not the worker pool.
+        let named = convo_with_marker(r#"{"action":"spawn_agent","task":"y","name":"alice"}"#);
+        assert!(scan_spawn_markers(&named, 0).is_empty());
+        // Null and empty names still count as one-shot workers.
+        let null_name = convo_with_marker(r#"{"action":"spawn_agent","task":"y","name":null}"#);
+        assert_eq!(scan_spawn_markers(&null_name, 0).len(), 1);
+        let empty_name = convo_with_marker(r#"{"action":"spawn_agent","task":"y","name":" "}"#);
+        assert_eq!(scan_spawn_markers(&empty_name, 0).len(), 1);
     }
 
     #[test]
@@ -288,6 +314,7 @@ mod tests {
             worker_id: "worker_1".into(),
             output: Some("the answer".into()),
             success: true,
+            error: None,
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new("w".into(), String::new(), 0),
         };
@@ -301,11 +328,13 @@ mod tests {
             worker_id: "worker_2".into(),
             output: None,
             success: false,
+            error: Some("backend exploded".into()),
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new("w2".into(), String::new(), 0),
         };
         let text = agent_result_message(&failed).text();
         assert!(text.contains("status=\"failed\""));
-        assert!(text.contains("(no output)"));
+        // The error detail is surfaced instead of a bare "(no output)".
+        assert!(text.contains("backend exploded"));
     }
 }

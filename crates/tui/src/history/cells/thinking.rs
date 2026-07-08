@@ -55,23 +55,26 @@ impl HistoryCell for ThinkingCell {
         let mut lines = vec![self.summary_line()];
         if !self.collapsed && !self.text.is_empty() {
             let w = width.saturating_sub(2) as usize;
+            let italic = Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC);
             for raw_line in self.text.lines() {
-                if raw_line.len() <= w || w == 0 {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {raw_line}"),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
+                if w == 0 || crab_utils::text::display_width(raw_line) <= w {
+                    lines.push(Line::from(Span::styled(format!("  {raw_line}"), italic)));
                 } else {
-                    for chunk in raw_line.as_bytes().chunks(w) {
-                        let s = String::from_utf8_lossy(chunk);
+                    let mut rest = raw_line;
+                    while !rest.is_empty() {
+                        let chunk = crab_utils::text::truncate_to_width(rest, w);
+                        // `truncate_to_width` keeps whole chars, so chunk is a
+                        // valid prefix; advance past it on a char boundary.
+                        let consumed = chunk
+                            .len()
+                            .max(rest.chars().next().map_or(0, char::len_utf8));
                         lines.push(Line::from(Span::styled(
-                            format!("  {s}"),
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
+                            format!("  {}", &rest[..consumed]),
+                            italic,
                         )));
+                        rest = &rest[consumed..];
                     }
                 }
             }

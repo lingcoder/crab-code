@@ -253,7 +253,7 @@ impl Tool for ReadTool {
             let lines: Vec<&str> = content.lines().collect();
             let total = lines.len();
 
-            let end = (start + limit).min(total);
+            let end = start.saturating_add(limit).min(total);
             let selected = if start >= total {
                 &[][..]
             } else {
@@ -294,7 +294,7 @@ impl Tool for ReadTool {
         let offset = input["offset"].as_u64();
         let limit = input["limit"].as_u64();
         let range = match (offset, limit) {
-            (Some(o), Some(l)) => format!(" · lines {o}-{}", o + l),
+            (Some(o), Some(l)) => format!(" · lines {o}-{}", o.saturating_add(l)),
             (Some(o), None) => format!(" · from line {o}"),
             _ => String::new(),
         };

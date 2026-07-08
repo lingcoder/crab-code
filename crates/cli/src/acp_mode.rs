@@ -74,7 +74,11 @@ impl AgentHandler for CrabAgentHandler {
         });
         session.cancel = turn.cancel;
 
-        session.handle_user_input(&turn.prompt).await?;
+        let result = session.handle_user_input(&turn.prompt).await;
+        // The session is per-turn here: kill any teammates it spawned so no
+        // orphan tokio tasks outlive the turn (run even when the turn errs).
+        session.shutdown().await;
+        result?;
         Ok(())
     }
 }

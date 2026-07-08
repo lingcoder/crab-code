@@ -72,11 +72,7 @@ pub async fn print_events(
                 if o.is_error {
                     eprintln!("{} {text}", "tool error:".red().bold());
                 } else {
-                    let display = if text.len() > 500 {
-                        format!("{}...", &text[..500])
-                    } else {
-                        text
-                    };
+                    let display = crab_utils::text::truncate_chars(&text, 500, "...");
                     eprintln!("{} {display}", "result:".dimmed());
                 }
             }

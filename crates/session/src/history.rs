@@ -634,7 +634,7 @@ impl SessionPersister for BoundSessionPersister {
 
 /// Atomically write `bytes` to `path` via a sibling temp file + rename, so a
 /// crash mid-write cannot truncate or corrupt an existing session file.
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> crab_core::Result<()> {
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> crab_core::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);

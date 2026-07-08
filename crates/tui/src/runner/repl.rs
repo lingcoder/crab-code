@@ -52,6 +52,9 @@ pub(super) async fn run_loop(
 
     let mut conv_return: Option<tokio::sync::oneshot::Receiver<crab_agents::QueryTaskResult>> =
         None;
+    // Conversation length captured right before each spawned query, so the
+    // post-query team-marker scan only sees messages that query appended.
+    let mut pre_query_len: usize = 0;
     let mut cancel = tokio_util::sync::CancellationToken::new();
     // Set by a Ctrl+C interrupt; consumed in the conv_return arm to rewind a
     // no-progress turn and restore the cancelled prompt into the input box.
@@ -212,12 +215,12 @@ pub(super) async fn run_loop(
                                     message: e.to_string(),
                                 }).await;
                             }
-                            // Intercept any TeamCreate markers the model
-                            // emitted during this turn. The coordinator
-                            // deduplicates by team name so scanning the
-                            // full conversation each turn is safe and
-                            // cheap (only new tool_result content matches).
-                            rt.process_team_markers(0).await;
+                            // Intercept team markers (named teammate spawns,
+                            // SendMessage routing) the model emitted during
+                            // this turn. Only messages appended by this query
+                            // are scanned — re-scanning older turns would
+                            // respawn teammates and re-deliver messages.
+                            rt.process_team_markers(pre_query_len).await;
                             // Refresh the TUI-side snapshot so /team
                             // shows the latest teammate roster without
                             // needing to reach back into the runtime
@@ -243,6 +246,7 @@ pub(super) async fn run_loop(
                                 let user_msg = rt.expand_input(&prompt);
                                 rt.conversation_mut().push(user_msg);
 
+                                pre_query_len = rt.conversation().len();
                                 query_epoch = query_epoch.wrapping_add(1);
                                 let engine_tx =
                                     spawn_query_event_forwarder(query_epoch, &tagged_tx);
@@ -357,6 +361,7 @@ pub(super) async fn run_loop(
                         rt.tool_ctx_mut().cancellation_token = cancel.clone();
                         let user_msg = rt.expand_input(&first);
                         rt.conversation_mut().push(user_msg);
+                        pre_query_len = rt.conversation().len();
                         query_epoch = query_epoch.wrapping_add(1);
                         let engine_tx = spawn_query_event_forwarder(query_epoch, &tagged_tx);
                         conv_return = Some(rt.spawn_query(&backend, engine_tx, cancel.clone()));
@@ -425,6 +430,7 @@ pub(super) async fn run_loop(
                         let user_msg = rt.expand_input(&prompt);
                         rt.conversation_mut().push(user_msg);
 
+                        pre_query_len = rt.conversation().len();
                         query_epoch = query_epoch.wrapping_add(1);
                         let engine_tx = spawn_query_event_forwarder(query_epoch, &tagged_tx);
                         conv_return = Some(rt.spawn_query(&backend, engine_tx, cancel.clone()));
@@ -535,6 +541,12 @@ pub(super) async fn run_loop(
             }
             AppAction::None => {}
         }
+    }
+
+    // The implicit team's lifetime is the session's: kill any teammates the
+    // model spawned before the loop returns.
+    if let Some(ref mut rt) = state {
+        rt.shutdown_teams().await;
     }
 
     Ok(())

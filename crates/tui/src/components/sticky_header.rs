@@ -68,8 +68,11 @@ impl Renderable for StickyHeader {
             .add_modifier(Modifier::BOLD);
 
         let max_text = (area.width as usize).saturating_sub(4);
-        let truncated = if text.len() > max_text {
-            format!("{}…", &text[..max_text - 1])
+        let truncated = if crab_utils::text::display_width(text) > max_text {
+            format!(
+                "{}…",
+                crab_utils::text::truncate_to_width(text, max_text.saturating_sub(1))
+            )
         } else {
             text.to_string()
         };

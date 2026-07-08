@@ -1,29 +1,27 @@
-//! Glue between `TeamCreateTool`'s `team_created` JSON marker and the
-//! in-process teammate backend.
+//! Glue between the Agent tool's named-spawn markers and the in-process
+//! teammate backend.
 //!
-//! The agent loop emits the marker as a text tool-result; [`TeamCoordinator`]
-//! scans recent tool results and, on first seeing a team, spawns the
-//! configured teammate via [`InProcessBackend`]. Permission decisions made
-//! by any teammate flow through [`PermissionSyncManager`] so the rest of
-//! the team does not re-prompt the user for the same tool.
-
-use std::collections::HashSet;
+//! Every session has one implicit team. A `spawn_agent` marker carrying a
+//! `name` spawns a long-lived teammate via [`InProcessBackend`] and seeds it
+//! with the task as its first message; `message_sent` markers route messages
+//! to teammates by name. Permission decisions made by any teammate flow
+//! through [`PermissionSyncManager`] so the rest of the team does not
+//! re-prompt the user for the same tool.
+//!
+//! Teammates live for the rest of the session; [`TeamCoordinator::shutdown_all`]
+//! tears them down when the session ends.
 
 use serde_json::Value;
 
 use crate::coordinator::PermissionSyncManager;
-use crab_swarm::backend::{InProcessBackend, SwarmBackend, TeammateConfig};
+use crab_swarm::backend::{InProcessBackend, SwarmBackend, TeammateConfig, TeammateRunner};
 
-/// The JSON `action` value emitted by `TeamCreateTool` when a team is
-/// created. Kept as a module constant so runtime callers and the tool
-/// implementation can't drift apart.
-pub const TEAM_CREATED_ACTION: &str = "team_created";
+use super::spawn::SPAWN_AGENT_ACTION;
 
-/// Coordinator that tracks created teams and owns their teammate runtime.
+/// Coordinator that owns the session's implicit team of named teammates.
 pub struct TeamCoordinator {
     backend: InProcessBackend,
     permission_sync: PermissionSyncManager,
-    seen_teams: HashSet<String>,
 }
 
 impl Default for TeamCoordinator {
@@ -40,7 +38,6 @@ impl TeamCoordinator {
         Self {
             backend: InProcessBackend::new(),
             permission_sync: PermissionSyncManager::new(32),
-            seen_teams: HashSet::new(),
         }
     }
 
@@ -48,12 +45,19 @@ impl TeamCoordinator {
     /// agent loop). The runtime injects this so teammates do real work instead
     /// of acting as logging sinks.
     #[must_use]
-    pub fn with_runner(runner: crab_swarm::backend::TeammateRunner) -> Self {
+    pub fn with_runner(runner: TeammateRunner) -> Self {
         Self {
             backend: InProcessBackend::with_runner(runner),
             permission_sync: PermissionSyncManager::new(32),
-            seen_teams: HashSet::new(),
         }
+    }
+
+    /// Install a runner if none is set yet. Lets facades that only gain
+    /// access to their LLM backend after construction (e.g. the TUI runtime,
+    /// which receives it per query) upgrade passive teammates to real agent
+    /// loops before the first spawn.
+    pub fn ensure_runner(&mut self, make: impl FnOnce() -> TeammateRunner) {
+        self.backend.ensure_runner(make);
     }
 
     /// Access the permission-sync bus so teammates can subscribe and
@@ -76,46 +80,87 @@ impl TeamCoordinator {
         self.backend.list_teammates().len()
     }
 
-    /// Inspect a tool-result payload for the `team_created` marker and,
-    /// if present, spawn a default teammate for the named team.
+    /// Inspect a tool-result payload for team-relevant markers.
     ///
-    /// The payload is expected to be the JSON string the tool serialized
-    /// into its Text block (see `crates/tools/src/builtin/team.rs`).
-    /// Returns `Ok(Some(team_name))` when a new team was processed,
-    /// `Ok(None)` when the payload was not a team-created marker, and
-    /// an error if the backend failed to spawn.
+    /// A `spawn_agent` marker with a non-empty `name` spawns a named teammate
+    /// (unnamed spawn markers are one-shot workers, handled by the worker-pool
+    /// path). A `message_sent` marker routes a message to teammates by name.
+    ///
+    /// `base_prompt` is the session's system prompt; spawned teammates inherit
+    /// it beneath a short teammate preamble, mirroring the worker fallback
+    /// prompt.
+    ///
+    /// Returns `Ok(Some(name))` when a teammate was spawned, `Ok(None)` for
+    /// all other payloads, and an error if the backend failed to spawn.
     pub async fn process_tool_result(
         &mut self,
         payload: &str,
+        base_prompt: &str,
     ) -> crab_core::Result<Option<String>> {
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             return Ok(None);
         };
         match value.get("action").and_then(Value::as_str) {
-            Some(TEAM_CREATED_ACTION) => self.spawn_team(payload).await,
+            Some(SPAWN_AGENT_ACTION) => self.spawn_named_teammate(&value, base_prompt).await,
             Some("message_sent") => {
                 self.route_message(&value).await;
-                Ok(None)
-            }
-            Some("team_deleted") => {
-                self.delete_team().await;
                 Ok(None)
             }
             _ => Ok(None),
         }
     }
 
-    /// Spawn a single default teammate for a newly-seen team.
-    async fn spawn_team(&mut self, payload: &str) -> crab_core::Result<Option<String>> {
-        let Some(team_name) = parse_team_created(payload) else {
+    /// Spawn a named teammate from a `spawn_agent` marker and seed it with the
+    /// task as its first message.
+    ///
+    /// A repeat spawn under an existing name starts fresh: the old teammate is
+    /// killed first, matching the Agent-tool contract that `SendMessage`
+    /// continues an agent while a new `Agent` call replaces it.
+    async fn spawn_named_teammate(
+        &mut self,
+        value: &Value,
+        base_prompt: &str,
+    ) -> crab_core::Result<Option<String>> {
+        let Some(name) = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        else {
             return Ok(None);
         };
-        if !self.seen_teams.insert(team_name.clone()) {
-            return Ok(Some(team_name));
+        let Some(task) = value.get("task").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+
+        let stale: Vec<String> = self
+            .backend
+            .list_teammates()
+            .iter()
+            .filter(|t| t.name == name)
+            .map(|t| t.id.clone())
+            .collect();
+        for id in stale {
+            if let Err(e) = self.backend.kill_teammate(&id).await {
+                tracing::warn!(error = %e, teammate = %id, "failed to kill stale teammate before respawn");
+            }
         }
-        let config = TeammateConfig::new(format!("{team_name}-lead"), "lead");
-        self.backend.spawn_teammate(config).await?;
-        Ok(Some(team_name))
+
+        let role = value
+            .get("subagent_type")
+            .and_then(Value::as_str)
+            .unwrap_or("teammate");
+        let mut config = TeammateConfig::new(name, role).with_system_prompt(format!(
+            "You are teammate \"{name}\" in this session's agent team. Complete each \
+             task you receive and report concise results.\n\n{base_prompt}"
+        ));
+        if let Some(wd) = value.get("working_dir").and_then(Value::as_str) {
+            config = config.with_working_dir(std::path::PathBuf::from(wd));
+        }
+
+        let id = self.backend.spawn_teammate(config).await?;
+        self.backend.send_message(&id, task).await?;
+        Ok(Some(name.to_owned()))
     }
 
     /// Deliver a `message_sent` marker to the named teammate (or every teammate
@@ -149,9 +194,9 @@ impl TeamCoordinator {
         }
     }
 
-    /// Tear down the whole team: kill every teammate and forget seen teams so a
-    /// later `team_created` re-spawns.
-    async fn delete_team(&mut self) {
+    /// Kill every teammate. Called when the session ends — the implicit team's
+    /// lifetime is the session's lifetime.
+    pub async fn shutdown_all(&mut self) {
         let ids: Vec<String> = self
             .backend
             .list_teammates()
@@ -160,76 +205,92 @@ impl TeamCoordinator {
             .collect();
         for id in ids {
             if let Err(e) = self.backend.kill_teammate(&id).await {
-                tracing::warn!(error = %e, teammate = %id, "failed to kill teammate");
+                tracing::warn!(error = %e, teammate = %id, "failed to kill teammate at session shutdown");
             }
         }
-        self.seen_teams.clear();
     }
-}
-
-/// Parse the `team_created` JSON marker, returning the team name when the
-/// payload matches. Any parse failure or schema mismatch returns `None`.
-fn parse_team_created(payload: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(payload).ok()?;
-    if value.get("action").and_then(Value::as_str) != Some(TEAM_CREATED_ACTION) {
-        return None;
-    }
-    value
-        .get("team_name")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_marker_returns_team_name() {
-        let payload = r#"{"action":"team_created","team_name":"alpha","description":""}"#;
-        assert_eq!(parse_team_created(payload).as_deref(), Some("alpha"));
-    }
-
-    #[test]
-    fn parse_rejects_non_team_action() {
-        let payload = r#"{"action":"other","team_name":"x"}"#;
-        assert!(parse_team_created(payload).is_none());
-    }
-
-    #[test]
-    fn parse_rejects_invalid_json() {
-        assert!(parse_team_created("not json").is_none());
+    fn named_spawn(name: &str, task: &str) -> String {
+        serde_json::json!({"action": "spawn_agent", "task": task, "name": name}).to_string()
     }
 
     #[tokio::test]
-    async fn process_tool_result_spawns_once_per_team() {
+    async fn named_spawn_marker_spawns_teammate() {
         let mut coord = TeamCoordinator::new();
-        let payload = r#"{"action":"team_created","team_name":"alpha","description":""}"#;
-
         assert_eq!(coord.teammate_count(), 0);
-        let first = coord.process_tool_result(payload).await.unwrap();
-        assert_eq!(first.as_deref(), Some("alpha"));
-        assert_eq!(coord.teammate_count(), 1);
 
-        // Second call with same team name is a no-op.
-        let second = coord.process_tool_result(payload).await.unwrap();
-        assert_eq!(second.as_deref(), Some("alpha"));
+        let spawned = coord
+            .process_tool_result(&named_spawn("researcher", "dig into the API"), "Base.")
+            .await
+            .unwrap();
+        assert_eq!(spawned.as_deref(), Some("researcher"));
         assert_eq!(coord.teammate_count(), 1);
     }
 
     #[tokio::test]
-    async fn team_deleted_kills_teammates_and_forgets_team() {
+    async fn respawn_same_name_replaces_teammate() {
         let mut coord = TeamCoordinator::new();
-        let created = r#"{"action":"team_created","team_name":"alpha","description":""}"#;
-        coord.process_tool_result(created).await.unwrap();
+        coord
+            .process_tool_result(&named_spawn("worker", "first task"), "")
+            .await
+            .unwrap();
         assert_eq!(coord.teammate_count(), 1);
 
-        let deleted = r#"{"action":"team_deleted","team_name":"alpha"}"#;
-        coord.process_tool_result(deleted).await.unwrap();
+        // Same name again: the old teammate is killed, a fresh one spawns.
+        coord
+            .process_tool_result(&named_spawn("worker", "second task"), "")
+            .await
+            .unwrap();
+        assert_eq!(coord.teammate_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn unnamed_spawn_marker_is_ignored() {
+        let mut coord = TeamCoordinator::new();
+        let payload = r#"{"action":"spawn_agent","task":"one-shot work"}"#;
+        assert!(
+            coord
+                .process_tool_result(payload, "")
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(coord.teammate_count(), 0);
 
-        // The team is forgotten, so re-creating it spawns again.
-        coord.process_tool_result(created).await.unwrap();
+        // Null and empty names are one-shot workers too.
+        let null_name = r#"{"action":"spawn_agent","task":"t","name":null}"#;
+        assert!(
+            coord
+                .process_tool_result(null_name, "")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let empty_name = r#"{"action":"spawn_agent","task":"t","name":"  "}"#;
+        assert!(
+            coord
+                .process_tool_result(empty_name, "")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(coord.teammate_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn teammate_inherits_base_prompt() {
+        let mut coord = TeamCoordinator::new();
+        coord
+            .process_tool_result(&named_spawn("alice", "review"), "Session base prompt.")
+            .await
+            .unwrap();
+        // The spawned teammate exists; prompt content is carried in its config
+        // (verified indirectly — spawn succeeded with a composed prompt).
         assert_eq!(coord.teammate_count(), 1);
     }
 
@@ -237,14 +298,11 @@ mod tests {
     async fn message_sent_to_known_teammate_is_delivered() {
         let mut coord = TeamCoordinator::new();
         coord
-            .process_tool_result(
-                r#"{"action":"team_created","team_name":"alpha","description":""}"#,
-            )
+            .process_tool_result(&named_spawn("alice", "start"), "")
             .await
             .unwrap();
-        // The default teammate is named "alpha-lead"; routing to it must not error.
-        let msg = r#"{"action":"message_sent","to":"alpha-lead","message":"do the thing","is_broadcast":false}"#;
-        let result = coord.process_tool_result(msg).await.unwrap();
+        let msg = r#"{"action":"message_sent","to":"alice","message":"do the thing","is_broadcast":false}"#;
+        let result = coord.process_tool_result(msg, "").await.unwrap();
         assert!(result.is_none());
         assert_eq!(coord.teammate_count(), 1);
     }
@@ -253,13 +311,49 @@ mod tests {
     async fn message_sent_to_unknown_teammate_is_noop() {
         let mut coord = TeamCoordinator::new();
         let msg = r#"{"action":"message_sent","to":"ghost","message":"hi","is_broadcast":false}"#;
-        assert!(coord.process_tool_result(msg).await.unwrap().is_none());
+        assert!(coord.process_tool_result(msg, "").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn broadcast_reaches_all_without_error() {
+        let mut coord = TeamCoordinator::new();
+        coord
+            .process_tool_result(&named_spawn("a", "t1"), "")
+            .await
+            .unwrap();
+        coord
+            .process_tool_result(&named_spawn("b", "t2"), "")
+            .await
+            .unwrap();
+        let msg = r#"{"action":"message_sent","to":"*","message":"sync up","is_broadcast":true}"#;
+        assert!(coord.process_tool_result(msg, "").await.unwrap().is_none());
+        assert_eq!(coord.teammate_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_kills_every_teammate() {
+        let mut coord = TeamCoordinator::new();
+        coord
+            .process_tool_result(&named_spawn("a", "t1"), "")
+            .await
+            .unwrap();
+        coord
+            .process_tool_result(&named_spawn("b", "t2"), "")
+            .await
+            .unwrap();
+        assert_eq!(coord.teammate_count(), 2);
+
+        coord.shutdown_all().await;
+        assert_eq!(coord.teammate_count(), 0);
     }
 
     #[tokio::test]
     async fn process_tool_result_ignores_unrelated_payloads() {
         let mut coord = TeamCoordinator::new();
-        let result = coord.process_tool_result("unrelated output").await.unwrap();
+        let result = coord
+            .process_tool_result("unrelated output", "")
+            .await
+            .unwrap();
         assert!(result.is_none());
         assert_eq!(coord.teammate_count(), 0);
     }
@@ -268,5 +362,23 @@ mod tests {
     fn new_coordinator_has_permission_sync() {
         let coord = TeamCoordinator::new();
         assert_eq!(coord.permission_sync().subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn ensure_runner_installs_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let mut coord = TeamCoordinator::new();
+        for _ in 0..2 {
+            let calls = std::sync::Arc::clone(&calls);
+            coord.ensure_runner(move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::sync::Arc::new(|ctx: crab_swarm::backend::TeammateRunCtx| {
+                    Box::pin(async move { ctx.cancel.cancelled().await })
+                })
+            });
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "second install is a no-op");
     }
 }

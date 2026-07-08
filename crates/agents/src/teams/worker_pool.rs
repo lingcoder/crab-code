@@ -268,9 +268,19 @@ impl WorkerPool {
 
         for (id, worker) in self.running.drain() {
             if worker.handle.is_finished() {
-                if let Ok(result) = worker.handle.await {
-                    Self::update_task_status_static(reg.as_ref(), &id, &result);
-                    results.push(result);
+                match worker.handle.await {
+                    Ok(result) => {
+                        Self::update_task_status_static(reg.as_ref(), &id, &result);
+                        results.push(result);
+                    }
+                    Err(e) => {
+                        tracing::warn!(worker = %id, error = %e, "worker task panicked or was aborted");
+                        Self::mark_worker_failed_static(
+                            reg.as_ref(),
+                            &id,
+                            "worker panicked or was aborted",
+                        );
+                    }
                 }
             } else {
                 still_running.insert(id, worker);
@@ -288,9 +298,19 @@ impl WorkerPool {
         let reg = self.task_registry.clone();
         let mut results = Vec::new();
         for (id, worker) in self.running.drain() {
-            if let Ok(result) = worker.handle.await {
-                Self::update_task_status_static(reg.as_ref(), &id, &result);
-                results.push(result);
+            match worker.handle.await {
+                Ok(result) => {
+                    Self::update_task_status_static(reg.as_ref(), &id, &result);
+                    results.push(result);
+                }
+                Err(e) => {
+                    tracing::warn!(worker = %id, error = %e, "worker task panicked or was aborted");
+                    Self::mark_worker_failed_static(
+                        reg.as_ref(),
+                        &id,
+                        "worker panicked or was aborted",
+                    );
+                }
             }
         }
         self.completed
@@ -350,6 +370,22 @@ impl WorkerPool {
             } else {
                 reg.set_error(worker_id, "worker failed".to_string());
             }
+        }
+    }
+
+    /// Mark a worker as failed in the registry when its task ended without a
+    /// result (panic or abort), so it does not linger as perpetually Running.
+    fn mark_worker_failed_static(
+        reg: Option<&Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>>,
+        worker_id: &str,
+        reason: &str,
+    ) {
+        if let Some(reg) = reg {
+            let mut reg = reg.lock().unwrap_or_else(|e| {
+                tracing::warn!("task registry mutex poisoned: {e}");
+                e.into_inner()
+            });
+            reg.set_error(worker_id, reason.to_string());
         }
     }
 }
@@ -443,6 +479,11 @@ mod tests {
             worker_id: worker_id.into(),
             output: if success { Some("done".into()) } else { None },
             success,
+            error: if success {
+                None
+            } else {
+                Some("mock failure".into())
+            },
             usage: crab_core::model::TokenUsage::default(),
             conversation: Conversation::new(worker_id.into(), String::new(), 0),
         }

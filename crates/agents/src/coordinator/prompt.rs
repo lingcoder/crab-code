@@ -46,9 +46,8 @@ passing the buck, not coordinating.\n\
 - ❌ Using `Agent` as a loop to do research — use it for bounded executable \
 sub-tasks, not open-ended exploration.\n\
 \n\
-Workers you spawn have a reduced toolset: no `TeamCreate` / `TeamDelete` \
-(so they cannot nest coordinators) and no `SendMessage` (they cannot talk \
-to peers directly). All cross-worker coordination flows through you.\n\
+Workers you spawn have a reduced toolset: no `SendMessage` (they cannot \
+talk to peers directly). All cross-worker coordination flows through you.\n\
 ";
 
 /// Append the coordinator overlay to an existing system prompt string.
@@ -89,8 +88,7 @@ mod tests {
 
     #[test]
     fn overlay_explains_worker_tool_restriction() {
-        // Workers lose TeamCreate/TeamDelete/SendMessage — prompt must say so.
-        assert!(OVERLAY_BODY.contains("TeamCreate"));
-        assert!(OVERLAY_BODY.contains("SendMessage"));
+        // Workers lose SendMessage — prompt must say so.
+        assert!(OVERLAY_BODY.contains("no `SendMessage`"));
     }
 }

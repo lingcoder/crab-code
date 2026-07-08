@@ -287,6 +287,19 @@ pub async fn compact_with_config(
     // Apply the strategy
     apply_strategy(conversation, &strategy, config, client).await?;
 
+    // A compaction cut can fall between an assistant tool_use and its paired
+    // tool_result (tool results are stored as Role::User, so they look like a
+    // fresh turn to the boundary logic). Repair any orphaned blocks so the
+    // rebuilt history is a valid request sequence.
+    repair_tool_pairing(conversation);
+
+    // The most recent input-token measurement was taken against the *old*
+    // (larger) history; after compaction it no longer corresponds to the
+    // current messages, so drop the anchor and let the char-based estimate
+    // take over until the next API response reports real usage.
+    conversation.last_input_tokens = 0;
+    conversation.messages_at_last_usage = 0;
+
     let tokens_after = conversation.estimated_tokens();
     let messages_after = conversation.len();
 
@@ -307,6 +320,41 @@ pub async fn compact(
 ) -> crab_core::Result<()> {
     let config = CompactionConfig::default();
     apply_strategy(conversation, &strategy, &config, client).await
+}
+
+/// Remove orphaned tool blocks left by a compaction cut: an assistant
+/// `ToolUse` whose `ToolResult` was dropped, or a `ToolResult` whose `ToolUse`
+/// was dropped. Either orphan makes the provider reject the next request.
+/// Messages left with no content are removed. Unlike `sanitize_for_resume`
+/// this adds no trailing nudge — compaction happens mid-conversation.
+fn repair_tool_pairing(conversation: &mut Conversation) {
+    use std::collections::HashSet;
+    let messages = conversation.messages_mut();
+
+    let mut use_ids: HashSet<String> = HashSet::new();
+    let mut result_ids: HashSet<String> = HashSet::new();
+    for m in messages.iter() {
+        for b in &m.content {
+            match b {
+                ContentBlock::ToolUse { id, .. } => {
+                    use_ids.insert(id.clone());
+                }
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    result_ids.insert(tool_use_id.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for m in messages.iter_mut() {
+        m.content.retain(|b| match b {
+            ContentBlock::ToolUse { id, .. } => result_ids.contains(id),
+            ContentBlock::ToolResult { tool_use_id, .. } => use_ids.contains(tool_use_id),
+            _ => true,
+        });
+    }
+    messages.retain(|m| !m.content.is_empty());
 }
 
 /// Apply a specific compaction strategy.
@@ -806,6 +854,71 @@ mod tests {
 
     fn make_conv(context_window: u64) -> Conversation {
         Conversation::new("s".into(), String::new(), context_window)
+    }
+
+    #[test]
+    fn repair_tool_pairing_drops_orphans() {
+        let mut c = make_conv(1000);
+        c.push_user("go");
+        c.push_assistant_tool_use(vec![
+            ContentBlock::tool_use("a", "Bash", serde_json::json!({"command": "ls"})),
+            ContentBlock::tool_use("b", "Bash", serde_json::json!({"command": "pwd"})),
+        ]);
+        // Only the result for "a" survives the cut; "b" is orphaned.
+        c.push_tool_result("a", "ok", false);
+        // A stray tool_result whose tool_use was cut away.
+        c.push_tool_result("zzz", "orphan", false);
+
+        repair_tool_pairing(&mut c);
+
+        let uses: Vec<String> = c
+            .messages()
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let results: Vec<String> = c
+            .messages()
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(uses, vec!["a"]);
+        assert_eq!(results, vec!["a"]);
+    }
+
+    #[tokio::test]
+    async fn compaction_resets_stale_token_anchor() {
+        let mut c = make_conv(1000);
+        for i in 0..20 {
+            c.push_user(format!("question {i}"));
+            c.push_assistant(format!("answer {i}"));
+        }
+        // Simulate a prior API response anchoring occupancy at 5000 tokens.
+        c.record_usage(crab_core::model::TokenUsage {
+            input_tokens: 5000,
+            ..Default::default()
+        });
+        assert_eq!(c.last_input_tokens, 5000);
+
+        let cfg = CompactionConfig {
+            mode: CompactionMode::SlidingWindow { window_size: 2 },
+            ..Default::default()
+        };
+        compact_with_config(&mut c, &cfg, &DummyClient)
+            .await
+            .unwrap();
+
+        // The stale 5000-token anchor must be cleared so occupancy reflects the
+        // now-smaller conversation rather than the pre-compaction size.
+        assert_eq!(c.last_input_tokens, 0);
+        assert!(c.effective_token_estimate() < 5000);
     }
 
     fn fill_turns(conv: &mut Conversation, n: usize) {

@@ -52,6 +52,11 @@ impl Conversation {
     /// so `/clear` does not reset the cost accumulator.
     pub fn clear(&mut self) {
         self.inner = CoreConversation::new();
+        // The prior input-token anchor referred to messages that no longer
+        // exist; without resetting it, `effective_token_estimate` would keep
+        // reporting the old (full) occupancy over an empty conversation.
+        self.last_input_tokens = 0;
+        self.messages_at_last_usage = 0;
     }
 
     /// Push a user text message.

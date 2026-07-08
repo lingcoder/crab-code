@@ -17,8 +17,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stdin/stdout transport for MCP servers launched as child processes.
 ///
-/// The MCP stdio protocol frames messages as `Content-Length: N\r\n\r\n{json}`
-/// (similar to LSP). Each message is a single JSON-RPC object.
+/// The MCP stdio protocol frames each message as a single line of JSON
+/// terminated by `\n`, with no embedded newlines (per the MCP spec).
 pub struct StdioTransport {
     /// Writer to the child process's stdin (shared for concurrent sends).
     writer: Arc<Mutex<tokio::process::ChildStdin>>,
@@ -44,7 +44,10 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // Don't orphan the server process if this transport is dropped
+            // (e.g. the connection is cancelled before an explicit close).
+            .kill_on_drop(true);
 
         if let Some(env_vars) = env {
             for (k, v) in env_vars {
@@ -117,9 +120,11 @@ impl StdioTransport {
         })
     }
 
-    /// Write a framed message (Content-Length header + body) to stdin.
+    /// Write a newline-delimited JSON message to the server's stdin.
     async fn write_message(&self, json: &str) -> crab_core::Result<()> {
-        let frame = format!("Content-Length: {}\r\n\r\n{}", json.len(), json);
+        let mut frame = String::with_capacity(json.len() + 1);
+        frame.push_str(json);
+        frame.push('\n');
         let mut writer = self.writer.lock().await;
         writer
             .write_all(frame.as_bytes())
@@ -207,51 +212,32 @@ impl Transport for StdioTransport {
     }
 }
 
-/// Read a single Content-Length framed message from an async reader.
+/// Read a single newline-delimited JSON message from an async reader.
 ///
-/// Returns `Ok(None)` on EOF, `Ok(Some(body))` on success.
+/// Returns `Ok(None)` on EOF, `Ok(Some(line))` on success. Blank lines are
+/// skipped. Per the MCP stdio spec each JSON-RPC message is one line with no
+/// embedded newlines.
 async fn read_message<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
 ) -> crab_core::Result<Option<String>> {
-    // Read headers until we find Content-Length.
-    let mut content_length: Option<usize> = None;
-    let mut header_line = String::new();
-
+    let mut line = String::new();
     loop {
-        header_line.clear();
+        line.clear();
         let bytes_read = reader
-            .read_line(&mut header_line)
+            .read_line(&mut line)
             .await
-            .map_err(|e| crab_core::Error::Other(format!("failed to read header: {e}")))?;
+            .map_err(|e| crab_core::Error::Other(format!("failed to read MCP message: {e}")))?;
 
         if bytes_read == 0 {
             return Ok(None); // EOF
         }
 
-        let trimmed = header_line.trim();
+        let trimmed = line.trim();
         if trimmed.is_empty() {
-            // Empty line = end of headers.
-            break;
+            continue; // Tolerate blank lines between messages.
         }
-
-        if let Some(value) = trimmed.strip_prefix("Content-Length:") {
-            content_length = value.trim().parse().ok();
-        }
+        return Ok(Some(trimmed.to_string()));
     }
-
-    let length = content_length.ok_or_else(|| {
-        crab_core::Error::Other("missing Content-Length header in MCP message".into())
-    })?;
-
-    // Read exactly `length` bytes of the body.
-    let mut body = vec![0u8; length];
-    tokio::io::AsyncReadExt::read_exact(reader, &mut body)
-        .await
-        .map_err(|e| crab_core::Error::Other(format!("failed to read message body: {e}")))?;
-
-    String::from_utf8(body)
-        .map(Some)
-        .map_err(|e| crab_core::Error::Other(format!("invalid UTF-8 in MCP message: {e}")))
 }
 
 #[cfg(test)]
@@ -260,8 +246,8 @@ mod tests {
     use tokio::io::BufReader;
 
     #[tokio::test]
-    async fn read_message_parses_content_length_frame() {
-        let data = b"Content-Length: 17\r\n\r\n{\"jsonrpc\":\"2.0\"}";
+    async fn read_message_parses_newline_delimited_json() {
+        let data = b"{\"jsonrpc\":\"2.0\"}\n";
         let mut reader = BufReader::new(&data[..]);
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         assert_eq!(msg, "{\"jsonrpc\":\"2.0\"}");
@@ -276,8 +262,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_message_multiple_headers() {
-        let data = b"Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+    async fn read_message_skips_blank_lines() {
+        let data = b"\n\n{}\n";
         let mut reader = BufReader::new(&data[..]);
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         assert_eq!(msg, "{}");

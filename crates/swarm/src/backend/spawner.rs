@@ -106,6 +106,14 @@ impl InProcessBackend {
             runner: Some(runner),
         }
     }
+
+    /// Install a runner if none is set yet. Idempotent: a second call is a
+    /// no-op, so already-spawned teammates keep their original loop.
+    pub fn ensure_runner(&mut self, make: impl FnOnce() -> TeammateRunner) {
+        if self.runner.is_none() {
+            self.runner = Some(make());
+        }
+    }
 }
 
 impl SwarmBackend for InProcessBackend {

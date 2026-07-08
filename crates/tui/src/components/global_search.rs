@@ -216,11 +216,8 @@ impl Renderable for GlobalSearchOverlay {
                 ) => "[sys] ",
                 None => "[???] ",
             };
-            let truncated = if result.preview.len() > area.width as usize - 12 {
-                &result.preview[..area.width as usize - 15]
-            } else {
-                &result.preview
-            };
+            let budget = (area.width as usize).saturating_sub(12);
+            let truncated = crab_utils::text::truncate_to_width(&result.preview, budget);
             Widget::render(
                 Line::from(vec![
                     Span::styled(prefix, style),

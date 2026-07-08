@@ -142,15 +142,18 @@ mod tests {
             theme_name: ThemeName::Dark,
         };
         assert!(w.submit(req));
+        // Poll generously: a cold syntect init on a loaded CI runner can take
+        // well over a second. The loop exits the instant the job lands, so the
+        // fast path is unaffected; the large budget only guards against flakes.
         let mut got = Vec::new();
-        for _ in 0..20 {
+        for _ in 0..500 {
             got = w.drain_completed();
             if !got.is_empty() {
                 break;
             }
             thread::sleep(Duration::from_millis(20));
         }
-        assert!(!got.is_empty());
+        assert!(!got.is_empty(), "worker produced no job within 10s");
         assert_eq!(got[0].job_id, 42);
         assert!(!got[0].lines.is_empty());
     }
