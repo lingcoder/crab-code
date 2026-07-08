@@ -449,7 +449,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         session
             .executor
             .set_permission_handler(Arc::new(CliPermissionHandler));
-        run_single_shot(&mut session, &resolved, cli.effective_output_format()).await
+        let result = run_single_shot(&mut session, &resolved, cli.effective_output_format()).await;
+        session.shutdown().await;
+        result
     } else {
         // Interactive mode: TUI if available, else line-based REPL
         #[cfg(feature = "tui")]
@@ -493,7 +495,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 .executor
                 .set_permission_handler(Arc::new(CliPermissionHandler));
             eprintln!("Type /exit or Ctrl+D to quit.\n");
-            crate::repl::run_repl(&mut session, &skill_registry).await
+            let result = crate::repl::run_repl(&mut session, &skill_registry).await;
+            session.shutdown().await;
+            result
         }
     }
 }

@@ -549,7 +549,7 @@ fn expected_builtin_count() -> usize {
     let ps_enabled = cfg!(windows)
         && std::env::var("CRAB_USE_POWERSHELL_TOOL")
             .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-    if ps_enabled { 41 } else { 40 }
+    if ps_enabled { 39 } else { 38 }
 }
 
 #[test]
@@ -576,8 +576,6 @@ fn all_expected_tools_registered() {
         "TaskGet",
         "EnterWorktree",
         "ExitWorktree",
-        "TeamCreate",
-        "TeamDelete",
         "SendMessage",
         "TaskStop",
         "TaskOutput",

@@ -484,11 +484,23 @@ impl App {
                     return AppAction::None;
                 }
                 Action::OpenTeamBrowser if self.state != AppState::Confirming => {
-                    // Empty snapshot for now — a future batch intercepts the
-                    // TeamCreateTool JSON marker from the agent loop and
-                    // populates this from the live TeamRegistry.
+                    // Same conversion as the /team command path: pull the
+                    // latest snapshot the runner stashed on App after the
+                    // last query (empty until the model spawns a named
+                    // teammate via the Agent tool).
+                    let members = self
+                        .team_snapshot
+                        .members
+                        .iter()
+                        .map(|m| crate::components::team_browser::MemberInfo {
+                            name: m.name.clone(),
+                            model: m.state.clone(),
+                            is_leader: m.role == "lead",
+                            capabilities: vec![m.role.clone()],
+                        })
+                        .collect();
                     let snapshot = crate::components::team_browser::TeamSnapshot {
-                        members: Vec::new(),
+                        members,
                         tasks: Vec::new(),
                     };
                     let overlay =

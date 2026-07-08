@@ -1663,11 +1663,10 @@ src/
 │   ├── web_formatter.rs  // Web content formatter
 │   │
 │   │  // ── Agent / task tools ──
-│   ├── agent.rs          // AgentTool -- sub-Agent launching
+│   ├── agent.rs          // AgentTool -- sub-agent / named-teammate launching
 │   ├── task.rs           // TaskCreate/Get/List/Update/Stop/Output
 │   ├── todo_write.rs     // TodoWrite tool
-│   ├── team.rs           // TeamCreate/Delete + SendMessage tools
-│   ├── send_message.rs   // Inter-agent messaging implementation
+│   ├── send_message.rs   // SendMessageTool -- inter-agent messaging
 │   ├── send_user_file.rs // Send file to user
 │   ├── sleep.rs          // Sleep tool
 │   ├── cron.rs           // CronCreate/Delete/List + CronStore + FiredPromptQueue
@@ -2292,7 +2291,8 @@ src/
 │
 ├── teams/                   // Layer 1 orchestration (re-exports crab_swarm::*)
 │   ├── mod.rs               //   pub use crab_swarm::*; + local re-exports
-│   ├── coordinator.rs       //   TeamCoordinator (Layer 2b glue)
+│   ├── coordinator.rs       //   TeamCoordinator (implicit session team: named spawns + routing)
+│   ├── spawn.rs             //   spawn-marker scan + worker/teammate runner builders
 │   ├── worker.rs            //   AgentWorker (sub-agent runner, depends on engine)
 │   └── worker_pool.rs       //   WorkerPool (spawn / collect / cancel / retry)
 │
@@ -3525,6 +3525,7 @@ crab models multi-agent collaboration in **three conceptually distinct layers**,
 ### Current state
 
 - `SessionConfig.coordinator_mode: bool` is propagated from env (`CRAB_COORDINATOR_MODE=1`).
+- Every session has one implicit team — there is no team lifecycle to manage. `Agent` tool calls carrying a `name` spawn long-lived teammates through `teams/coordinator.rs::TeamCoordinator` (the facades intercept `spawn_agent` markers post-turn); unnamed calls run one-shot `WorkerPool` workers. `SendMessage` routes to teammates by bare name within the single team (qualified `name@team` addresses are rejected); a repeat named spawn replaces the existing teammate. Teammates are torn down at session end (`shutdown_teams` / `AgentSession::shutdown`).
 - `crates/agents/src/teams/worker_pool.rs::WorkerPool` is the Layer 1 worker pool.
 - `crates/agents/src/coordinator/` holds the Layer 2b overlay: `Coordinator::from_flag(true).apply(&mut registry, &mut prompt)` retains the registry to `{Agent, SendMessage, TaskStop}` and appends the anti-pattern prompt overlay.
 - `session/runtime.rs::AgentSession::new` invokes the coordinator if `coordinator_mode` is set; otherwise no-op.

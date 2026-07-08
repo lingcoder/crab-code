@@ -79,7 +79,7 @@ impl Coordinator {
     /// [`tool_acl::WORKER_DENIED_TOOLS`]. Used by
     /// [`crate::session::AgentSession::handle_spawn_request`] to give each
     /// worker a clean toolset — workers inherit neither the coordinator's
-    /// stripped 3-tool registry nor its forbidden team-management tools.
+    /// stripped 3-tool registry nor its peer-messaging tool.
     #[must_use]
     pub fn build_worker_registry(&self) -> ToolRegistry {
         let mut registry = crab_tools::builtin::create_default_registry();
@@ -220,8 +220,8 @@ mod tests {
         assert!(worker_reg.get("Edit").is_some(), "worker needs Edit");
         assert!(worker_reg.get("Read").is_some(), "worker needs Read");
 
-        // Worker can still nest an Agent call (unlike TeamCreate —
-        // WORKER_DENIED_TOOLS blocks team management, not delegation).
+        // Worker can still nest an Agent call — WORKER_DENIED_TOOLS blocks
+        // peer messaging, not delegation.
         assert!(worker_reg.get("Agent").is_some());
     }
 

@@ -56,8 +56,8 @@ pub struct AgentSession {
     /// Coordinator Mode state, `Some` only when `SessionConfig::coordinator_mode`
     /// was set at construction.
     pub coordinator_ctx: Option<CoordinatorContext>,
-    /// Tracks teams the model creates via `TeamCreateTool` and spawns
-    /// teammates through the in-process backend.
+    /// Spawns named teammates from the Agent tool's spawn markers and routes
+    /// `SendMessage` traffic through the in-process backend.
     pub team_coordinator: crate::teams::coordinator::TeamCoordinator,
     /// Session-scoped file-edit snapshot store backing `/rewind`.
     pub file_history: Arc<std::sync::Mutex<FileHistory>>,
@@ -246,8 +246,8 @@ impl AgentSession {
 
         let (event_tx, event_rx) = mpsc::channel(256);
 
-        // Teammates spawned via TeamCreate run a real agent loop driven by this
-        // runner (built from the session's shared handles).
+        // Named teammates spawned via the Agent tool run a real agent loop
+        // driven by this runner (built from the session's shared handles).
         let team_runner = crate::teams::spawn::teammate_runner(
             Arc::clone(&backend),
             executor.registry_arc(),
@@ -339,12 +339,14 @@ impl AgentSession {
         )
         .await;
 
-        // Intercept `team_created` markers in freshly appended tool results
-        // so the teammate backend can spawn before the next turn needs them.
+        // Intercept team markers (named teammate spawns, message routing) in
+        // freshly appended tool results so the teammate backend is up to date
+        // before the next turn needs it.
         self.process_team_markers(starting_len).await;
 
-        // Intercept `spawn_agent` markers: run each requested sub-agent to
-        // completion and fold its result back into the conversation.
+        // Intercept unnamed `spawn_agent` markers: run each requested one-shot
+        // sub-agent to completion and fold its result back into the
+        // conversation.
         self.process_spawn_requests(starting_len).await;
 
         // Auto-save session after each interaction
@@ -393,11 +395,13 @@ impl AgentSession {
         }
     }
 
-    /// Walk conversation messages appended during the last turn, looking
-    /// for tool-result text that carries the `team_created` marker, and
-    /// hand each hit to [`TeamCoordinator::process_tool_result`].
+    /// Walk conversation messages appended during the last turn, looking for
+    /// tool-result text that carries team markers (named `spawn_agent`
+    /// requests, `message_sent` routing), and hand each hit to
+    /// [`crate::teams::coordinator::TeamCoordinator::process_tool_result`].
     async fn process_team_markers(&mut self, starting_len: usize) {
         use crab_core::message::ContentBlock;
+        let base_prompt = self.conversation.system_prompt.clone();
         let tail: Vec<String> = self
             .conversation
             .messages()
@@ -410,10 +414,21 @@ impl AgentSession {
             })
             .collect();
         for payload in tail {
-            if let Err(e) = self.team_coordinator.process_tool_result(&payload).await {
+            if let Err(e) = self
+                .team_coordinator
+                .process_tool_result(&payload, &base_prompt)
+                .await
+            {
                 tracing::warn!(error = %e, "team coordinator failed to spawn teammate");
             }
         }
+    }
+
+    /// Kill every teammate in the session's implicit team. Call once when the
+    /// session ends — teammates live for the session's lifetime and have no
+    /// other teardown path.
+    pub async fn shutdown(&mut self) {
+        self.team_coordinator.shutdown_all().await;
     }
 
     /// Run any `spawn_agent` requests emitted during the last turn to
@@ -700,7 +715,7 @@ mod tests {
     async fn handle_spawn_request_ignores_non_spawn_action() {
         let session = AgentSession::new(base_config("spawn2"), test_backend(), ToolRegistry::new());
         let mut pool = WorkerPool::new("main".into(), "main".into());
-        let req = serde_json::json!({"action": "team_created", "team_name": "x"});
+        let req = serde_json::json!({"action": "message_sent", "to": "x", "message": "hi"});
         assert!(session.handle_spawn_request(&mut pool, &req).is_none());
         assert_eq!(pool.running_count(), 0);
     }

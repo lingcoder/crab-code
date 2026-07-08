@@ -36,7 +36,6 @@ pub mod sleep;
 pub mod snip;
 pub mod structured_output;
 pub mod task;
-pub mod team;
 pub mod todo_write;
 pub mod tool_search;
 pub mod verify_plan;

@@ -18,7 +18,7 @@ pub enum TaskType {
     LocalBash,
     /// Background sub-agent (Agent tool with `run_in_background`).
     LocalAgent,
-    /// In-process teammate (`TeamCreate` → swarm backend).
+    /// In-process teammate (named `Agent` spawn → swarm backend).
     InProcessTeammate,
 }
 

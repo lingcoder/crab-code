@@ -15,6 +15,6 @@ pub mod worker_pool;
 // (e.g. `crate::teams::MessageBus`) keep compiling without path changes.
 pub use crab_swarm::*;
 
-pub use coordinator::{TEAM_CREATED_ACTION, TeamCoordinator};
+pub use coordinator::TeamCoordinator;
 pub use worker::{AgentWorker, WorkerConfig, WorkerResult};
 pub use worker_pool::{AgentHandle, WorkerPool};

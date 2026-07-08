@@ -3,9 +3,9 @@
 //! Two tabs: `Members` and `Tasks`, switchable with `Tab`.
 //!
 //! Triggered by `Action::OpenTeamBrowser` (default: Ctrl+K Ctrl+E). The
-//! snapshot is currently sourced lazily from the active runtime; when no
-//! team has been created yet (no runtime intercept of `TeamCreateTool`'s
-//! JSON marker has landed), the overlay renders an empty state.
+//! snapshot is currently sourced lazily from the active runtime; before the
+//! model spawns any named teammate via the `Agent` tool, the overlay renders
+//! an empty state.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;

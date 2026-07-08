@@ -591,6 +591,26 @@ impl AgentRuntime {
         event_tx: mpsc::Sender<Event>,
         cancel: CancellationToken,
     ) -> tokio::sync::oneshot::Receiver<QueryTaskResult> {
+        // Teammates need a real agent loop, but the runtime only sees the LLM
+        // backend here (it is passed per query), so install the teammate
+        // runner lazily before the first spawn can happen.
+        {
+            let runner_backend = Arc::clone(backend);
+            let runner_registry = self.executor.registry_arc();
+            let runner_ctx = self.tool_ctx.clone();
+            let runner_config = self.loop_config.clone();
+            let runner_tx = event_tx.clone();
+            self.team_coordinator.ensure_runner(move || {
+                crate::teams::spawn::teammate_runner(
+                    runner_backend,
+                    runner_registry,
+                    runner_ctx,
+                    runner_config,
+                    runner_tx,
+                )
+            });
+        }
+
         let mut task_conversation = self.take_conversation();
         let task_backend = Arc::clone(backend);
         let task_executor = Arc::clone(&self.executor);
@@ -685,15 +705,17 @@ impl AgentRuntime {
 
     // ── Team coordinator ────────────────────────────────────────────────
 
-    /// Scan conversation tool results for the `team_created` marker and
-    /// spawn any newly-seen teams. Call after every completed query so the
-    /// team browser reflects the latest model decisions.
+    /// Scan conversation tool results for team markers — named `spawn_agent`
+    /// requests (which spawn teammates) and `message_sent` routing. Call
+    /// after every completed query so the team browser reflects the latest
+    /// model decisions.
     ///
-    /// `starting_len` is the conversation length *before* the query ran —
-    /// only messages added during that query are inspected, so repeated
-    /// calls are idempotent.
+    /// `starting_len` must be the conversation length *before* the query ran —
+    /// only messages added during that query are inspected. Re-scanning older
+    /// messages would respawn teammates and re-deliver messages.
     pub async fn process_team_markers(&mut self, starting_len: usize) {
         use crab_core::message::ContentBlock;
+        let base_prompt = self.conversation.system_prompt.clone();
         let tail: Vec<String> = self
             .conversation
             .messages()
@@ -706,10 +728,21 @@ impl AgentRuntime {
             })
             .collect();
         for payload in tail {
-            if let Err(e) = self.team_coordinator.process_tool_result(&payload).await {
+            if let Err(e) = self
+                .team_coordinator
+                .process_tool_result(&payload, &base_prompt)
+                .await
+            {
                 tracing::warn!(error = %e, "team coordinator failed to spawn teammate");
             }
         }
+    }
+
+    /// Kill every teammate in the session's implicit team. Call once when
+    /// the session ends — teammates live for the session's lifetime and have
+    /// no other teardown path.
+    pub async fn shutdown_teams(&mut self) {
+        self.team_coordinator.shutdown_all().await;
     }
 
     /// Snapshot of the current team for the TUI team browser.

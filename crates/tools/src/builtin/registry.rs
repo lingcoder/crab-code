@@ -9,8 +9,8 @@ use crate::registry::ToolRegistry;
 
 use super::{
     agent, ask_user, bash, brief, config_tool, cron, edit, glob, grep, lsp, mcp_auth, mcp_resource,
-    notebook, plan_mode, read, send_user_file, sleep, snip, task, team, todo_write, tool_search,
-    verify_plan, web_fetch, web_search, worktree, write,
+    notebook, plan_mode, read, send_message, send_user_file, sleep, snip, task, todo_write,
+    tool_search, verify_plan, web_fetch, web_search, worktree, write,
 };
 
 #[cfg(target_os = "windows")]
@@ -62,9 +62,7 @@ pub fn register_all_builtins(
     registry.register(Arc::new(task::TaskGetTool::new(store)));
     registry.register(Arc::new(worktree::EnterWorktreeTool));
     registry.register(Arc::new(worktree::ExitWorktreeTool));
-    registry.register(Arc::new(team::TeamCreateTool));
-    registry.register(Arc::new(team::TeamDeleteTool));
-    registry.register(Arc::new(team::SendMessageTool));
+    registry.register(Arc::new(send_message::SendMessageTool));
     registry.register(Arc::new(task::TaskStopTool));
     registry.register(Arc::new(task::TaskOutputTool));
     registry.register_alias("TaskStop", "KillShell");
@@ -134,8 +132,6 @@ mod tests {
         assert!(registry.get("TaskGet").is_some());
         assert!(registry.get("EnterWorktree").is_some());
         assert!(registry.get("ExitWorktree").is_some());
-        assert!(registry.get("TeamCreate").is_some());
-        assert!(registry.get("TeamDelete").is_some());
         assert!(registry.get("SendMessage").is_some());
         assert!(registry.get("TaskStop").is_some());
         assert!(registry.get("TaskOutput").is_some());
@@ -164,7 +160,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 41 } else { 40 };
+        let expected = if ps_enabled { 39 } else { 38 };
         assert_eq!(registry.len(), expected);
     }
 
@@ -176,7 +172,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 41 } else { 40 };
+        let expected = if ps_enabled { 39 } else { 38 };
         assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());
