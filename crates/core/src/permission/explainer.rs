@@ -16,7 +16,7 @@ pub struct PermissionExplanation {
     pub decision: String,
     /// The specific rule that matched, if any (formatted as a string).
     pub matched_rule: Option<String>,
-    /// Optional suggestion for the user (e.g. "Add 'Bash(command:git*)'
+    /// Optional suggestion for the user (e.g. "Add 'Bash(git *)'
     /// to `allowed_tools` to auto-approve git commands").
     pub suggestion: Option<String>,
 }
@@ -96,7 +96,7 @@ pub fn suggest_allow_rule(tool_name: &str, tool_input: &serde_json::Value) -> Op
             // Extract the base command (first word) for a prefix suggestion
             let base_cmd = command.split_whitespace().next().unwrap_or(command);
             return Some(format!(
-                "Add 'Bash(command:{base_cmd}*)' to `allowed_tools` to auto-approve {base_cmd} commands"
+                "Add 'Bash({base_cmd} *)' to `allowed_tools` to auto-approve {base_cmd} commands"
             ));
         }
         return Some(

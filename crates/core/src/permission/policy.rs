@@ -237,7 +237,7 @@ mod tests {
     fn whitelist_param_pattern() {
         let policy = PermissionPolicy {
             mode: PermissionMode::Default,
-            allowed_tools: vec!["Bash(command:git*)".into()],
+            allowed_tools: vec!["Bash(git*)".into()],
             denied_tools: vec![],
         };
         let git_input = serde_json::json!({"command": "git status"});
@@ -275,7 +275,7 @@ mod tests {
         let policy = PermissionPolicy {
             mode: PermissionMode::Default,
             allowed_tools: vec![],
-            denied_tools: vec!["Bash(command:rm*)".into()],
+            denied_tools: vec!["Bash(rm*)".into()],
         };
         let rm_input = serde_json::json!({"command": "rm -rf /"});
         let ls_input = serde_json::json!({"command": "ls -la"});

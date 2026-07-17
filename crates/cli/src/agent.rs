@@ -511,10 +511,16 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
 }
 
 /// Build the list of skill directories to scan.
+///
+/// `.claude/` directories are read as a compatibility fallback so existing
+/// Claude Code skill packages work unmodified; `.crab/` entries come later
+/// in the list, so same-name Crab skills override them.
 fn build_skill_dirs(working_dir: &std::path::Path) -> Vec<PathBuf> {
-    // Global skills: ~/.crab/skills/
-    // Project skills: <project>/.crab/skills/
     vec![
+        crab_utils::path::home_dir_or_cwd()
+            .join(".claude")
+            .join("skills"),
+        working_dir.join(".claude").join("skills"),
         crab_config::config::global_config_dir().join("skills"),
         working_dir.join(".crab").join("skills"),
     ]

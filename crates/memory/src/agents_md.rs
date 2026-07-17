@@ -70,8 +70,15 @@ pub struct ParsedRule {
 pub fn collect_agents_md(project_dir: &Path, global_config_dir: &Path) -> Vec<AgentsMd> {
     let mut results = Vec::new();
 
-    // 1. Global: ~/.crab/AGENTS.md + ~/.crab/rules/*.md
+    // 1. Global: ~/.crab/AGENTS.md + ~/.crab/rules/*.md, falling back to
+    //    ~/.claude/CLAUDE.md so Claude Code setups work unmigrated.
     if let Some(md) = read_agents_md(&global_config_dir.join("AGENTS.md"), AgentsMdSource::Global) {
+        results.push(md);
+    } else if let Some(claude_global) = global_config_dir
+        .parent()
+        .map(|home| home.join(".claude").join("CLAUDE.md"))
+        && let Some(md) = read_agents_md(&claude_global, AgentsMdSource::Global)
+    {
         results.push(md);
     }
     results.extend(collect_rules_dir(
@@ -131,8 +138,15 @@ pub fn collect_agents_md(project_dir: &Path, global_config_dir: &Path) -> Vec<Ag
 pub fn collect_agents_md_from_cwd(cwd: &Path, global_config_dir: &Path) -> Vec<AgentsMd> {
     let mut results = Vec::new();
 
-    // 1. Global: ~/.crab/AGENTS.md + ~/.crab/rules/*.md
+    // 1. Global: ~/.crab/AGENTS.md + ~/.crab/rules/*.md, falling back to
+    //    ~/.claude/CLAUDE.md so Claude Code setups work unmigrated.
     if let Some(md) = read_agents_md(&global_config_dir.join("AGENTS.md"), AgentsMdSource::Global) {
+        results.push(md);
+    } else if let Some(claude_global) = global_config_dir
+        .parent()
+        .map(|home| home.join(".claude").join("CLAUDE.md"))
+        && let Some(md) = read_agents_md(&claude_global, AgentsMdSource::Global)
+    {
         results.push(md);
     }
     results.extend(collect_rules_dir(
@@ -505,10 +519,13 @@ fn read_dir_agents_md(dir: &Path) -> Vec<AgentsMd> {
 /// Collect AGENTS.md + .crab/AGENTS.md + .crab/rules/*.md from a single
 /// directory (unconditional rules only). Used by the upward walk.
 fn collect_dir_agents_md(dir: &Path, results: &mut Vec<AgentsMd>) {
+    let mut found_native = false;
+
     // AGENTS.md
     if let Some(md) = read_agents_md(&dir.join("AGENTS.md"), AgentsMdSource::Project)
         && results.last().is_none_or(|last| last.content != md.content)
     {
+        found_native = true;
         results.push(md);
     }
 
@@ -517,7 +534,21 @@ fn collect_dir_agents_md(dir: &Path, results: &mut Vec<AgentsMd>) {
     if let Some(md) = read_agents_md(&nested, AgentsMdSource::Project)
         && results.last().is_none_or(|last| last.content != md.content)
     {
+        found_native = true;
         results.push(md);
+    }
+
+    // CLAUDE.md fallback: only when the directory has no native
+    // instructions, so migrated projects are not double-loaded.
+    if !found_native {
+        for candidate in [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")] {
+            if let Some(md) = read_agents_md(&candidate, AgentsMdSource::Project)
+                && results.last().is_none_or(|last| last.content != md.content)
+            {
+                results.push(md);
+                break;
+            }
+        }
     }
 
     // .crab/rules/*.md (unconditional only)
@@ -870,6 +901,28 @@ mod tests {
     }
 
     // ── New tests: upward walk ────────────────────────────────────────
+
+    #[test]
+    fn claude_md_fallback_when_no_agents_md() {
+        let root = tempfile::tempdir().unwrap();
+        let (_gd, global) = fake_global_dir();
+        fs::write(root.path().join("CLAUDE.md"), "Claude rules").unwrap();
+
+        let results = collect_agents_md_from_cwd(root.path(), &global);
+        assert!(results.iter().any(|md| md.content == "Claude rules"));
+    }
+
+    #[test]
+    fn claude_md_ignored_when_agents_md_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let (_gd, global) = fake_global_dir();
+        fs::write(root.path().join("AGENTS.md"), "Native rules").unwrap();
+        fs::write(root.path().join("CLAUDE.md"), "Claude rules").unwrap();
+
+        let results = collect_agents_md_from_cwd(root.path(), &global);
+        assert!(results.iter().any(|md| md.content == "Native rules"));
+        assert!(!results.iter().any(|md| md.content == "Claude rules"));
+    }
 
     #[test]
     fn collect_agents_md_from_cwd_walks_upward() {

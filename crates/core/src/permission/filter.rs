@@ -1,57 +1,23 @@
 //! Tool-filter matching — `matches_tool_filter`, `tool_name_matches_pattern`,
 //! and the glob engine they share.
 //!
-//! Supports three filter formats:
-//! - `*` — matches any tool
-//! - `Bash` — plain tool name with glob metacharacters
-//! - `Bash(key:pattern)` — tool-name + input-parameter-level constraint
+//! Filters use the permission-rule grammar (see [`super::rule_parser`]):
+//! `*`, plain tool names with glob metacharacters, CC-style specifiers
+//! (`Bash(git *)`, `Read(src/**)`, `WebFetch(domain:x)`).
 
 /// Check whether a tool filter matches a tool invocation.
 ///
-/// The `tool_input` is the JSON input object passed to the tool (used for
-/// parameter-level matching like `Bash(command:git*)`).
+/// Delegates to the shared permission-rule parser so allow/deny lists and
+/// every other filter consumer agree on one grammar. Unparseable content
+/// falls back to tool-name-only matching, so a malformed deny rule still
+/// blocks its tool rather than silently vanishing.
 pub fn matches_tool_filter(filter: &str, tool_name: &str, tool_input: &serde_json::Value) -> bool {
-    let filter = filter.trim();
-
-    // Wildcard: match everything
-    if filter == "*" {
-        return true;
+    if let Ok(rule) = super::rule_parser::parse_rule(filter) {
+        super::rule_parser::matches_rule(&rule, tool_name, tool_input)
+    } else {
+        let name = filter.split('(').next().unwrap_or(filter).trim();
+        !name.is_empty() && glob_match(name, tool_name)
     }
-
-    // Check for Name(pattern) format
-    if let Some(paren_start) = filter.find('(')
-        && filter.ends_with(')')
-    {
-        let name_part = &filter[..paren_start];
-        let pattern_part = &filter[paren_start + 1..filter.len() - 1];
-
-        // Tool name must match
-        if !glob_match(name_part, tool_name) {
-            return false;
-        }
-
-        // Parse the parameter constraint: "key:pattern"
-        if let Some(colon_pos) = pattern_part.find(':') {
-            let key = &pattern_part[..colon_pos];
-            let value_pattern = &pattern_part[colon_pos + 1..];
-
-            // Look up the key in tool_input
-            if let Some(value) = tool_input.get(key) {
-                let value_str = match value {
-                    serde_json::Value::String(s) => s.as_str(),
-                    _ => return false,
-                };
-                return glob_match(value_pattern, value_str);
-            }
-            return false;
-        }
-
-        // No colon — just name match (weird format but handle gracefully)
-        return true;
-    }
-
-    // Plain name match (may contain globs)
-    glob_match(filter, tool_name)
 }
 
 pub(crate) fn tool_name_matches_pattern(pattern: &str, tool_name: &str) -> bool {
@@ -240,29 +206,30 @@ mod tests {
     #[test]
     fn tool_filter_name_with_param_pattern() {
         let input = serde_json::json!({"command": "git status"});
-        assert!(matches_tool_filter("Bash(command:git*)", "Bash", &input));
-        assert!(matches_tool_filter("Bash(command:git *)", "Bash", &input));
+        assert!(matches_tool_filter("Bash(git*)", "Bash", &input));
+        assert!(matches_tool_filter("Bash(git *)", "Bash", &input));
+        assert!(matches_tool_filter("Bash(git:*)", "Bash", &input));
 
         let other = serde_json::json!({"command": "rm -rf /"});
-        assert!(!matches_tool_filter("Bash(command:git*)", "Bash", &other));
+        assert!(!matches_tool_filter("Bash(git*)", "Bash", &other));
     }
 
     #[test]
     fn tool_filter_param_wrong_tool_name() {
         let input = serde_json::json!({"command": "git log"});
-        assert!(!matches_tool_filter("Bash(command:git*)", "read", &input));
+        assert!(!matches_tool_filter("Bash(git*)", "read", &input));
     }
 
     #[test]
     fn tool_filter_param_missing_key() {
         let input = serde_json::json!({"file_path": "/tmp/foo"});
-        assert!(!matches_tool_filter("Bash(command:git*)", "Bash", &input));
+        assert!(!matches_tool_filter("Bash(git*)", "Bash", &input));
     }
 
     #[test]
     fn tool_filter_param_non_string_value() {
         let input = serde_json::json!({"command": 42});
-        assert!(!matches_tool_filter("Bash(command:git*)", "Bash", &input));
+        assert!(!matches_tool_filter("Bash(git*)", "Bash", &input));
     }
 
     #[test]

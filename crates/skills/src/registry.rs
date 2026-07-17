@@ -24,8 +24,13 @@ impl SkillRegistry {
 
     /// Discover and load skills from one or more directories.
     ///
-    /// Each directory is scanned for `.md` files with YAML frontmatter
-    /// containing skill metadata. The markdown body becomes the skill content.
+    /// Two layouts are accepted per directory, matching the CC skills
+    /// ecosystem plus Crab's flat form:
+    ///
+    /// - `<dir>/<name>/SKILL.md` — CC standard skill packages (the
+    ///   directory name is the fallback skill name; attachments like
+    ///   `references/` travel with the skill)
+    /// - `<dir>/<name>.md` — flat single-file skills
     ///
     /// Directories are scanned in order; later skills with the same name
     /// override earlier ones (project skills override global ones).
@@ -39,23 +44,42 @@ impl SkillRegistry {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "md") {
-                        match load_skill_file(&path) {
-                            Ok(skill) => {
-                                tracing::debug!(
-                                    name = skill.name.as_str(),
-                                    path = %path.display(),
-                                    "loaded skill"
-                                );
-                                registry.register(skill);
+                    let skill_file = if path.is_dir() {
+                        let nested = path.join("SKILL.md");
+                        if nested.is_file() { Some(nested) } else { None }
+                    } else if path.extension().is_some_and(|e| e == "md") {
+                        Some(path)
+                    } else {
+                        None
+                    };
+                    let Some(skill_file) = skill_file else {
+                        continue;
+                    };
+                    match load_skill_file(&skill_file) {
+                        Ok(mut skill) => {
+                            // SKILL.md files take their fallback name from
+                            // the package directory, not the file stem.
+                            if (skill.name.is_empty() || skill.name == "SKILL")
+                                && let Some(dir_name) = skill_file
+                                    .parent()
+                                    .and_then(|p| p.file_name())
+                                    .map(|n| n.to_string_lossy().into_owned())
+                            {
+                                skill.name = dir_name;
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    path = %path.display(),
-                                    error = %e,
-                                    "failed to load skill file"
-                                );
-                            }
+                            tracing::debug!(
+                                name = skill.name.as_str(),
+                                path = %skill_file.display(),
+                                "loaded skill"
+                            );
+                            registry.register(skill);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %skill_file.display(),
+                                error = %e,
+                                "failed to load skill file"
+                            );
                         }
                     }
                 }
@@ -365,6 +389,55 @@ mod tests {
         let reg = SkillRegistry::discover(std::slice::from_ref(&tmp)).unwrap();
         assert!(reg.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discover_cc_skill_dir_layout() {
+        let tmp = std::env::temp_dir().join("crab_skill_test_cc_layout");
+        let pkg = tmp.join("code-review");
+        let _ = std::fs::create_dir_all(&pkg);
+        std::fs::write(
+            pkg.join("SKILL.md"),
+            "---\ndescription: Review code changes\n---\nReview the diff.",
+        )
+        .unwrap();
+        // Attachment files inside the package must not be loaded as skills.
+        let refs = pkg.join("references");
+        let _ = std::fs::create_dir_all(&refs);
+        std::fs::write(refs.join("guide.md"), "not frontmatter").unwrap();
+
+        let reg = SkillRegistry::discover(std::slice::from_ref(&tmp)).unwrap();
+        assert_eq!(reg.len(), 1);
+        // Skill name falls back to the package directory name.
+        assert!(reg.find("code-review").is_some());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discover_mixed_layouts_project_overrides() {
+        let global = std::env::temp_dir().join("crab_skill_test_mixed_g");
+        let project = std::env::temp_dir().join("crab_skill_test_mixed_p");
+        let pkg = global.join("deploy");
+        let _ = std::fs::create_dir_all(&pkg);
+        let _ = std::fs::create_dir_all(&project);
+        std::fs::write(
+            pkg.join("SKILL.md"),
+            "---\ndescription: global deploy\n---\nglobal",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("deploy.md"),
+            "---\nname: deploy\ndescription: project deploy\n---\nproject",
+        )
+        .unwrap();
+
+        let reg = SkillRegistry::discover(&[global.clone(), project.clone()]).unwrap();
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.find("deploy").unwrap().content, "project");
+
+        let _ = std::fs::remove_dir_all(&global);
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]

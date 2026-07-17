@@ -88,7 +88,7 @@ fn decide(
     }
 
     // 1b. Per-segment deny for compound Bash: a deny rule like
-    //     Bash(command:rm*) must catch a denied subcommand even when chained
+    //     Bash(rm*) must catch a denied subcommand even when chained
     //     behind a safe one (`echo ok && rm -rf x`), which the whole-command
     //     match above misses.
     if tool_name == BASH_TOOL_NAME
@@ -1113,7 +1113,7 @@ mod tests {
 
     #[test]
     fn compound_deny_catches_chained_subcommand() {
-        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(rm*)".into()]);
         let result = check_permission(
             &p,
             "Bash",
@@ -1130,7 +1130,7 @@ mod tests {
 
     #[test]
     fn compound_deny_catches_piped_and_env_prefixed_subcommand() {
-        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(rm*)".into()]);
         let result = check_permission(
             &p,
             "Bash",
@@ -1144,7 +1144,7 @@ mod tests {
 
     #[test]
     fn compound_split_does_not_over_deny_safe_chain() {
-        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(command:rm*)".into()]);
+        let p = policy_with_denied(PermissionMode::Default, vec!["Bash(rm*)".into()]);
         // No segment matches rm*, so the deny rule must not fire (falls through
         // to the normal Default prompt).
         let result = check_permission(

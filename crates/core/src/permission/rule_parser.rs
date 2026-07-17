@@ -1,8 +1,8 @@
 //! Permission rule AST parser.
 //!
-//! Parses permission rules like `"Bash(cmd:git*)"`, `"Edit(path:/src/*)"` into a
-//! structured AST, and matches tool invocations against those rules. Also supports
-//! bash-specific command pattern parsing for shell rule matching.
+//! Parses CC-grammar permission rules like `"Bash(git *)"`, `"Read(src/**)"`
+//! into a structured AST, and matches tool invocations against those rules.
+//! Also supports bash-specific command pattern parsing for shell rule matching.
 
 use std::fmt;
 
@@ -36,7 +36,7 @@ impl std::error::Error for ParseError {}
 /// | Input string            | Parsed                                     |
 /// |-------------------------|--------------------------------------------|
 /// | `"Bash"`                | tool_name=`Bash`, content=`None`           |
-/// | `"Bash(command:git*)"` | tool_name=`Bash`, content=`Glob("git*")`   |
+/// | `"Bash(git *)"`         | tool_name=`Bash`, content=command glob     |
 /// | `"mcp__*"`              | tool_name=`mcp__*`, content=`None`         |
 /// | `"*"`                   | tool_name=`*`, content=`None`              |
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ impl fmt::Display for PermissionRule {
 /// The content portion of a rule -- a matcher applied to a tool's arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleContent {
-    /// Match argument value using a glob pattern (e.g. `command:git*`).
+    /// Match a named argument's value using a glob pattern.
     Glob {
         /// The parameter key (e.g. `"command"`).
         key: String,
@@ -73,12 +73,17 @@ pub enum RuleContent {
         /// The exact value to match.
         value: String,
     },
-    /// Match argument value against a regex (e.g. `command~/^git\s/`).
-    Regex {
-        /// The parameter key.
-        key: String,
-        /// The regex pattern string.
+    /// Match a path-carrying argument (`file_path` / `path` /
+    /// `notebook_path` / `pattern`) against a glob. Produced by CC-style
+    /// file-tool rules like `Read(src/**)`.
+    Path {
+        /// The glob pattern applied to the path argument.
         pattern: String,
+    },
+    /// Match the host of a `url` argument (CC `WebFetch(domain:...)`).
+    Domain {
+        /// Domain pattern; glob syntax (`*.example.com`) is accepted.
+        domain: String,
     },
     /// Match any invocation of the tool regardless of arguments.
     Any,
@@ -89,7 +94,8 @@ impl fmt::Display for RuleContent {
         match self {
             Self::Glob { key, pattern } => write!(f, "{key}:{pattern}"),
             Self::Exact { key, value } => write!(f, "{key}={value}"),
-            Self::Regex { key, pattern } => write!(f, "{key}~{pattern}"),
+            Self::Path { pattern } => write!(f, "{pattern}"),
+            Self::Domain { domain } => write!(f, "domain:{domain}"),
             Self::Any => write!(f, "*"),
         }
     }
@@ -110,13 +116,13 @@ pub struct BashPattern {
 
 /// Parse a permission rule string into a structured [`PermissionRule`].
 ///
-/// # Supported formats
+/// # Supported formats (CC permission-rule grammar)
 ///
 /// - `"*"` -- matches any tool
-/// - `"ToolName"` -- exact tool name (or glob)
-/// - `"ToolName(key:pattern)"` -- tool name + glob parameter match
-/// - `"ToolName(key=value)"` -- tool name + exact parameter match
-/// - `"ToolName(key~/regex/)"` -- tool name + regex parameter match
+/// - `"ToolName"` -- exact tool name (or glob, e.g. `mcp__*`)
+/// - `"Bash(git *)"` / `"Bash(npm run test:*)"` -- command patterns
+/// - `"Read(src/**)"` -- path glob for file tools
+/// - `"WebFetch(domain:example.com)"` -- URL host match
 /// - `"ToolName(*)"` -- tool name + match-any arguments
 ///
 /// # Errors
@@ -150,7 +156,7 @@ pub fn parse_rule(input: &str) -> Result<PermissionRule, ParseError> {
             });
         }
 
-        let content = parse_rule_content(content_str)?;
+        let content = parse_rule_content(&tool_name, content_str)?;
 
         Ok(PermissionRule {
             tool_name,
@@ -165,59 +171,92 @@ pub fn parse_rule(input: &str) -> Result<PermissionRule, ParseError> {
     }
 }
 
+/// Tools whose CC rule specifier is a command pattern.
+const COMMAND_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
+
+/// Tools whose CC rule specifier is a file-path glob.
+const PATH_TOOLS: [&str; 7] = [
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+];
+
+/// Argument keys that may carry the target path for [`RuleContent::Path`].
+pub(crate) const PATH_ARG_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "pattern"];
+
 /// Parse the content inside parentheses of a permission rule.
-fn parse_rule_content(content: &str) -> Result<RuleContent, ParseError> {
+///
+/// The grammar is the CC permission-rule grammar, tool-aware:
+///
+/// - `Bash(git status)` / `Bash(git *)` / `Bash(npm run test:*)` — command
+///   patterns (exact, glob, or `:*` prefix form)
+/// - `Read(src/**)` — path glob applied to the tool's path argument
+/// - `WebFetch(domain:example.com)` — URL host match
+/// - `Skill(name)` — exact skill name
+/// - `Tool(*)` — any invocation of the tool
+fn parse_rule_content(tool_name: &str, content: &str) -> Result<RuleContent, ParseError> {
     let content = content.trim();
 
-    // Wildcard any
     if content == "*" {
         return Ok(RuleContent::Any);
     }
 
-    // Try exact match: key=value
-    if let Some(eq_pos) = content.find('=') {
-        let key = content[..eq_pos].trim().to_string();
-        let value = content[eq_pos + 1..].trim().to_string();
-        if key.is_empty() {
-            return Err(ParseError {
-                input: content.to_string(),
-                reason: "empty key in exact match".to_string(),
-            });
-        }
-        return Ok(RuleContent::Exact { key, value });
+    if COMMAND_TOOLS.contains(&tool_name) {
+        return Ok(parse_command_specifier(content));
     }
 
-    // Try regex match: key~/pattern/
-    if let Some(tilde_pos) = content.find('~') {
-        let key = content[..tilde_pos].trim().to_string();
-        let pattern = content[tilde_pos + 1..].trim().to_string();
-        if key.is_empty() {
-            return Err(ParseError {
-                input: content.to_string(),
-                reason: "empty key in regex match".to_string(),
-            });
-        }
-        return Ok(RuleContent::Regex { key, pattern });
+    if PATH_TOOLS.contains(&tool_name) {
+        return Ok(RuleContent::Path {
+            pattern: content.to_string(),
+        });
     }
 
-    // Try glob match: key:pattern
-    if let Some(colon_pos) = content.find(':') {
-        let key = content[..colon_pos].trim().to_string();
-        let pattern = content[colon_pos + 1..].trim().to_string();
-        if key.is_empty() {
-            return Err(ParseError {
-                input: content.to_string(),
-                reason: "empty key in glob match".to_string(),
-            });
-        }
-        return Ok(RuleContent::Glob { key, pattern });
+    if (tool_name == "WebFetch" || tool_name == "WebSearch")
+        && let Some(domain) = content.strip_prefix("domain:")
+    {
+        return Ok(RuleContent::Domain {
+            domain: domain.trim().to_string(),
+        });
     }
 
-    // Fallback: treat as Any with a note
+    if tool_name == "Skill" {
+        return Ok(RuleContent::Exact {
+            key: "skill".to_string(),
+            value: content.to_string(),
+        });
+    }
+
     Err(ParseError {
         input: content.to_string(),
-        reason: "unrecognized content format; expected 'key:pattern', 'key=value', 'key~/regex/', or '*'".to_string(),
+        reason: format!("tool '{tool_name}' does not take a rule specifier"),
     })
+}
+
+/// Parse a CC command specifier for Bash-like tools.
+///
+/// `:*` suffix means prefix matching (`git commit:*` → any command starting
+/// with `git commit`); glob characters make it a glob; otherwise exact.
+fn parse_command_specifier(content: &str) -> RuleContent {
+    if let Some(prefix) = content.strip_suffix(":*") {
+        return RuleContent::Glob {
+            key: "command".to_string(),
+            pattern: format!("{}*", prefix.trim_end()),
+        };
+    }
+    if content.contains(['*', '?']) {
+        return RuleContent::Glob {
+            key: "command".to_string(),
+            pattern: content.to_string(),
+        };
+    }
+    RuleContent::Exact {
+        key: "command".to_string(),
+        value: content.to_string(),
+    }
 }
 
 /// Match a tool invocation against a parsed [`PermissionRule`].
@@ -240,19 +279,42 @@ pub fn matches_rule(rule: &PermissionRule, tool_name: &str, args: &serde_json::V
             .get(key)
             .and_then(|v| v.as_str())
             .is_some_and(|s| s == value),
-        Some(RuleContent::Regex { key, pattern }) => {
-            // Strip optional surrounding slashes for convenience
-            let pat = pattern
-                .strip_prefix('/')
-                .and_then(|p| p.strip_suffix('/'))
-                .unwrap_or(pattern);
-            let Ok(re) = regex::Regex::new(pat) else {
-                return false;
-            };
-            args.get(key)
+        Some(RuleContent::Path { pattern }) => PATH_ARG_KEYS.iter().any(|key| {
+            args.get(*key)
                 .and_then(|v| v.as_str())
-                .is_some_and(|s| re.is_match(s))
+                .is_some_and(|s| super::filter::glob_match(pattern, s))
+        }),
+        Some(RuleContent::Domain { domain }) => args
+            .get("url")
+            .and_then(|v| v.as_str())
+            .and_then(url_host)
+            .is_some_and(|host| {
+                super::filter::glob_match(domain, &host)
+                    || host
+                        .strip_suffix(domain.as_str())
+                        .is_some_and(|rest| rest.ends_with('.') || rest.is_empty())
+            }),
+    }
+}
+
+/// Extract the host from a URL string (`scheme://host[:port]/...`).
+fn url_host(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host_port = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let host = host_port.rsplit_once(':').map_or(host_port, |(h, port)| {
+        if port.chars().all(|c| c.is_ascii_digit()) {
+            h
+        } else {
+            host_port
         }
+    });
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
     }
 }
 
@@ -318,8 +380,157 @@ mod tests {
     }
 
     #[test]
+    fn parse_cc_bash_exact() {
+        let rule = parse_rule("Bash(git status)").unwrap();
+        assert_eq!(
+            rule.content,
+            Some(RuleContent::Exact {
+                key: "command".into(),
+                value: "git status".into(),
+            })
+        );
+        assert!(matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "git status"})
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "git push"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_bash_space_glob() {
+        let rule = parse_rule("Bash(git *)").unwrap();
+        assert!(matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "git status"})
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "npm install"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_bash_colon_star_prefix() {
+        // CC prefix form: `npm run test:*` matches commands starting with
+        // "npm run test".
+        let rule = parse_rule("Bash(npm run test:*)").unwrap();
+        assert!(matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "npm run test:unit"})
+        ));
+        assert!(matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "npm run test"})
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "npm run build"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_bash_bare_prefix_colon_star() {
+        let rule = parse_rule("Bash(git:*)").unwrap();
+        assert!(matches_rule(
+            &rule,
+            "Bash",
+            &serde_json::json!({"command": "git push origin"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_file_path_glob() {
+        let rule = parse_rule("Read(src/**)").unwrap();
+        assert_eq!(
+            rule.content,
+            Some(RuleContent::Path {
+                pattern: "src/**".into()
+            })
+        );
+        assert!(matches_rule(
+            &rule,
+            "Read",
+            &serde_json::json!({"file_path": "src/main.rs"})
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "Read",
+            &serde_json::json!({"file_path": "docs/readme.md"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_file_windows_path_not_keyed() {
+        // A drive letter must not be mistaken for an explicit key.
+        let rule = parse_rule("Read(C:/Users/**)").unwrap();
+        assert!(matches!(rule.content, Some(RuleContent::Path { .. })));
+    }
+
+    #[test]
+    fn parse_cc_webfetch_domain() {
+        let rule = parse_rule("WebFetch(domain:example.com)").unwrap();
+        assert_eq!(
+            rule.content,
+            Some(RuleContent::Domain {
+                domain: "example.com".into()
+            })
+        );
+        assert!(matches_rule(
+            &rule,
+            "WebFetch",
+            &serde_json::json!({"url": "https://example.com/page"})
+        ));
+        assert!(matches_rule(
+            &rule,
+            "WebFetch",
+            &serde_json::json!({"url": "https://api.example.com/v1"})
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "WebFetch",
+            &serde_json::json!({"url": "https://evil.com/example.com"})
+        ));
+    }
+
+    #[test]
+    fn parse_cc_skill_name_with_colon() {
+        let rule = parse_rule("Skill(commit-commands:commit)").unwrap();
+        assert_eq!(
+            rule.content,
+            Some(RuleContent::Exact {
+                key: "skill".into(),
+                value: "commit-commands:commit".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn url_host_extraction() {
+        assert_eq!(
+            url_host("https://example.com/x"),
+            Some("example.com".into())
+        );
+        assert_eq!(
+            url_host("https://Example.COM:8443/x?q=1"),
+            Some("example.com".into())
+        );
+        assert_eq!(url_host("example.com/path"), Some("example.com".into()));
+        assert_eq!(url_host(""), None);
+    }
+
+    #[test]
     fn parse_glob_content() {
-        let rule = parse_rule("Bash(command:git*)").unwrap();
+        let rule = parse_rule("Bash(git*)").unwrap();
         assert_eq!(rule.tool_name, "Bash");
         assert_eq!(
             rule.content,
@@ -331,14 +542,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_exact_content() {
-        let rule = parse_rule("Edit(path=/src/main.rs)").unwrap();
+    fn parse_exact_path_content() {
+        let rule = parse_rule("Edit(/src/main.rs)").unwrap();
         assert_eq!(rule.tool_name, "Edit");
         assert_eq!(
             rule.content,
-            Some(RuleContent::Exact {
-                key: "path".to_string(),
-                value: "/src/main.rs".to_string(),
+            Some(RuleContent::Path {
+                pattern: "/src/main.rs".to_string(),
             })
         );
     }
@@ -358,7 +568,7 @@ mod tests {
 
     #[test]
     fn parse_mismatched_parens() {
-        assert!(parse_rule("Bash(command:git*").is_err());
+        assert!(parse_rule("Bash(git *").is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! Detects permission rules that are "shadowed" (unreachable) because an
 //! earlier, broader rule already covers them. For example, if `allowed_tools`
-//! contains `["*", "Bash(command:git*)"]`, the second rule is shadowed because
+//! contains `["*", "Bash(git*)"]`, the second rule is shadowed because
 //! the wildcard `"*"` already matches everything.
 //!
 //! This is used to warn users about redundant or misconfigured rules.
@@ -156,10 +156,7 @@ mod tests {
 
     #[test]
     fn wildcard_shadows_everything() {
-        let rules = vec![
-            parse_rule("*").unwrap(),
-            parse_rule("Bash(command:git*)").unwrap(),
-        ];
+        let rules = vec![parse_rule("*").unwrap(), parse_rule("Bash(git*)").unwrap()];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
         assert_eq!(shadowed[0].rule.tool_name, "Bash");
@@ -170,7 +167,7 @@ mod tests {
     fn tool_wide_shadows_specific_content() {
         let rules = vec![
             parse_rule("Bash").unwrap(),
-            parse_rule("Bash(command:git*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
@@ -181,7 +178,7 @@ mod tests {
     fn tool_wide_any_shadows_specific() {
         let rules = vec![
             parse_rule("Bash(*)").unwrap(),
-            parse_rule("Bash(command:git*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
@@ -190,8 +187,8 @@ mod tests {
     #[test]
     fn non_overlapping_rules_not_shadowed() {
         let rules = vec![
-            parse_rule("Bash(command:git*)").unwrap(),
-            parse_rule("Bash(command:npm*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
+            parse_rule("Bash(npm*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert!(shadowed.is_empty());
@@ -207,8 +204,8 @@ mod tests {
     #[test]
     fn identical_rules_shadow() {
         let rules = vec![
-            parse_rule("Bash(command:git*)").unwrap(),
-            parse_rule("Bash(command:git*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
@@ -217,8 +214,8 @@ mod tests {
     #[test]
     fn broader_glob_shadows_narrower() {
         let rules = vec![
-            parse_rule("Bash(command:git*)").unwrap(),
-            parse_rule("Bash(command:git status*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
+            parse_rule("Bash(git status*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
@@ -227,8 +224,8 @@ mod tests {
     #[test]
     fn narrower_glob_does_not_shadow_broader() {
         let rules = vec![
-            parse_rule("Bash(command:git status*)").unwrap(),
-            parse_rule("Bash(command:git*)").unwrap(),
+            parse_rule("Bash(git status*)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert!(shadowed.is_empty());
@@ -247,8 +244,8 @@ mod tests {
     #[test]
     fn exact_content_shadowed_by_glob() {
         let rules = vec![
-            parse_rule("Bash(command:git*)").unwrap(),
-            parse_rule("Bash(command=git status)").unwrap(),
+            parse_rule("Bash(git*)").unwrap(),
+            parse_rule("Bash(git status)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert_eq!(shadowed.len(), 1);
@@ -257,8 +254,8 @@ mod tests {
     #[test]
     fn exact_content_not_shadowed_by_non_matching_glob() {
         let rules = vec![
-            parse_rule("Bash(command:npm*)").unwrap(),
-            parse_rule("Bash(command=git status)").unwrap(),
+            parse_rule("Bash(npm*)").unwrap(),
+            parse_rule("Bash(git status)").unwrap(),
         ];
         let shadowed = detect_shadowed_rules(&rules);
         assert!(shadowed.is_empty());
