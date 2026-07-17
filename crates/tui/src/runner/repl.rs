@@ -313,6 +313,7 @@ pub(super) async fn run_loop(
                                     Some(session_id),
                                     wd.as_deref(),
                                 );
+                                rt.fire_config_change_hook(Some(session_id), wd.as_deref());
                             }
                         }
                         crate::watcher::WatchEvent::SkillsChanged => {

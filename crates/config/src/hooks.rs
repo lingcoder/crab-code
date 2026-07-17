@@ -99,6 +99,34 @@ pub fn parse_hooks(value: &serde_json::Value) -> crab_core::Result<Vec<Hook>> {
     Ok(hooks)
 }
 
+/// Merge an overlay hooks value (CC map shape) into a base hooks value.
+///
+/// Matcher-group arrays append per event; events only in the overlay are
+/// inserted. Used to combine settings hooks with plugin-provided hooks.
+pub fn merge_hooks_values(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    let serde_json::Value::Object(overlay_map) = overlay else {
+        return;
+    };
+    if !base.is_object() {
+        *base = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let Some(base_map) = base.as_object_mut() else {
+        return;
+    };
+    for (event, groups) in overlay_map {
+        match base_map.get_mut(&event) {
+            Some(serde_json::Value::Array(existing)) => {
+                if let serde_json::Value::Array(new_groups) = groups {
+                    existing.extend(new_groups);
+                }
+            }
+            _ => {
+                base_map.insert(event, groups);
+            }
+        }
+    }
+}
+
 /// Load hooks from a `Config` struct.
 pub fn load_hooks(config: &crate::Config) -> crab_core::Result<Vec<Hook>> {
     config
@@ -110,6 +138,21 @@ pub fn load_hooks(config: &crate::Config) -> crab_core::Result<Vec<Hook>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_hooks_appends_groups() {
+        let mut base = serde_json::json!({
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "a.sh"}]}]
+        });
+        let overlay = serde_json::json!({
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "b.sh"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "c.sh"}]}]
+        });
+        merge_hooks_values(&mut base, overlay);
+        assert_eq!(base["PreToolUse"].as_array().unwrap().len(), 2);
+        assert_eq!(base["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(parse_hooks(&base).unwrap().len(), 3);
+    }
 
     #[test]
     fn parse_cc_shaped_hooks() {

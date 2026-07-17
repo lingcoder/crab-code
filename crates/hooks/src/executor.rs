@@ -83,6 +83,11 @@ pub enum HookAction {
 pub struct HookResult {
     /// Structured action resolved from hook output.
     pub action: HookAction,
+    /// Whether some hook explicitly allowed the operation
+    /// (`permissionDecision: "allow"` / `decision: "approve"`), as opposed
+    /// to simply expressing no opinion. `PermissionRequest` consumers use
+    /// this to skip the interactive prompt.
+    pub explicit_allow: bool,
     /// Optional message from the hook (deny reason, stop reason, ...).
     pub message: Option<String>,
     /// Modified tool input (if action is Modify).
@@ -245,6 +250,7 @@ impl Default for HookExecutor {
 /// Outcome of one hook process, before aggregation.
 struct HookOutcome {
     action: HookAction,
+    explicit_allow: bool,
     message: Option<String>,
     modified_input: Option<serde_json::Value>,
     additional_context: Option<String>,
@@ -299,6 +305,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
                 } else {
                     HookAction::Allow
                 },
+                explicit_allow: false,
                 message: None,
                 modified_input: None,
                 additional_context: None,
@@ -327,6 +334,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         );
         return HookOutcome {
             action: HookAction::Allow,
+            explicit_allow: false,
             message: None,
             modified_input: None,
             additional_context: None,
@@ -348,6 +356,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         };
         return HookOutcome {
             action: deny_action_for(hook.trigger),
+            explicit_allow: false,
             message: Some(message),
             modified_input: None,
             additional_context: None,
@@ -369,6 +378,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         );
         return HookOutcome {
             action: HookAction::Allow,
+            explicit_allow: false,
             message: None,
             modified_input: None,
             additional_context: None,
@@ -385,6 +395,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         Some(cc) => cc_output_to_outcome(cc, hook.trigger, output.stdout, output.stderr),
         None => HookOutcome {
             action: HookAction::Allow,
+            explicit_allow: false,
             message: None,
             modified_input: None,
             additional_context: None,
@@ -414,6 +425,7 @@ fn cc_output_to_outcome(
     stderr: String,
 ) -> HookOutcome {
     let mut action = HookAction::Allow;
+    let mut explicit_allow = false;
     let mut message = None;
     let mut modified_input = None;
     let mut additional_context = None;
@@ -424,6 +436,10 @@ fn cc_output_to_outcome(
 
     if let Some(specific) = cc.hook_specific_output {
         match specific.permission_decision.as_deref() {
+            Some("allow") => {
+                explicit_allow = true;
+                message.clone_from(&specific.permission_decision_reason);
+            }
             Some("deny") => {
                 action = HookAction::Deny;
                 message.clone_from(&specific.permission_decision_reason);
@@ -439,6 +455,10 @@ fn cc_output_to_outcome(
             modified_input = specific.updated_input;
         }
         additional_context = specific.additional_context;
+    }
+
+    if cc.decision.as_deref() == Some("approve") {
+        explicit_allow = true;
     }
 
     // Top-level decision: "block" denies (Stop hooks: retry the loop).
@@ -460,6 +480,7 @@ fn cc_output_to_outcome(
 
     HookOutcome {
         action,
+        explicit_allow,
         message,
         modified_input,
         additional_context,
@@ -488,6 +509,8 @@ fn merge_outcome(result: &mut HookResult, outcome: HookOutcome, _trigger: HookTr
         result.exit_code = outcome.exit_code;
     }
     result.timed_out |= outcome.timed_out;
+
+    result.explicit_allow |= outcome.explicit_allow;
 
     let stronger = action_rank(outcome.action) > action_rank(result.action);
     if stronger {
@@ -864,6 +887,7 @@ mod tests {
         let mut result = HookResult::default();
         let allow = HookOutcome {
             action: HookAction::Allow,
+            explicit_allow: false,
             message: None,
             modified_input: None,
             additional_context: None,
@@ -875,6 +899,7 @@ mod tests {
         };
         let deny = HookOutcome {
             action: HookAction::Deny,
+            explicit_allow: false,
             message: Some("no".into()),
             modified_input: None,
             additional_context: None,
@@ -899,6 +924,7 @@ mod tests {
                 &mut result,
                 HookOutcome {
                     action: HookAction::Allow,
+                    explicit_allow: false,
                     message: None,
                     modified_input: None,
                     additional_context: Some(text.into()),

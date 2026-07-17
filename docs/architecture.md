@@ -40,8 +40,8 @@
 │                         Layer 2: Service Layer                        │
 │  ┌──────────┐ ┌───────────┐ ┌────────┐ ┌──────────┐ ┌─────────────┐  │
 │  │  tools   │ │   mcp     │ │  api   │ │ telemetry│ │   plugin    │  │
-│  │ aggreg   │ │ JSON-RPC  │ │ Llm-   │ │  local   │ │ WASM +      │  │
-│  │ 40 built │ │ +streams  │ │ Backend│ │  only    │ │ skill↔mcp   │  │
+│  │ aggreg   │ │ JSON-RPC  │ │ Llm-   │ │  local   │ │ CC package  │  │
+│  │ 40 built │ │ +streams  │ │ Backend│ │  only    │ │ loader      │  │
 │  └──┬──┬──┬─┘ └───────────┘ └────────┘ └──────────┘ └─────────────┘  │
 │     │  │  │                                                           │
 │  ┌──▼┐┌▼─┐┌▼──────┐ ┌──────────┐ ┌────────┐ ┌───────┐ ┌──────┐ ┌───┐ │
@@ -339,11 +339,12 @@ edge list is the manifest in §5.2.
 Rule 1: Upper layer -> lower layer. Reverse dependencies are prohibited.
 
 Rule 2: Layer 2 is sub-layered into aggregators and leaves.
-  - Aggregators (tools, plugin, hooks, session) may depend on leaf services
-    in the same layer (tools -> fs/process/sandbox/mcp/cron; plugin ->
-    mcp/skills; hooks -> process; session -> memory).
+  - Aggregators (tools, hooks, session) may depend on leaf services
+    in the same layer (tools -> fs/process/sandbox/mcp/cron/hooks;
+    hooks -> process; session -> memory).
   - Leaf services (fs, process, mcp, acp, api, sandbox, cron, skills,
-    memory, team, telemetry, commands, ide) must NOT depend on each other.
+    memory, team, telemetry, commands, ide, plugin) must NOT depend on
+    each other.
   - Example: tools -> sandbox (OK); fs -> process (NOT OK).
   - Exception 1: ide -> mcp — the IDE client *speaks* MCP; the protocol
     crate is its substrate, not a peer service.

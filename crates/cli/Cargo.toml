@@ -48,7 +48,6 @@ default = ["tui"]
 tui = ["crab-tui"]
 full = [
     "tui",
-    "crab-plugin/wasm",
     "crab-api/bedrock",
     "crab-api/vertex",
     "crab-agents/mem-ranker",

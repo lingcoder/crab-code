@@ -179,6 +179,9 @@ pub trait PermissionHandler: Send + Sync {
 pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
     permission_handler: Option<Arc<dyn PermissionHandler>>,
+    /// `PermissionRequest` hooks consulted before the interactive handler;
+    /// a hook may resolve the request programmatically (allow/deny).
+    permission_hooks: Option<Arc<crab_hooks::HookExecutor>>,
     /// When no handler is installed, `AskUser` decisions fail closed (reject)
     /// unless this is set — see [`Self::set_allow_unattended`].
     allow_unattended: bool,
@@ -190,6 +193,7 @@ impl ToolExecutor {
         Self {
             registry,
             permission_handler: None,
+            permission_hooks: None,
             allow_unattended: false,
         }
     }
@@ -197,6 +201,12 @@ impl ToolExecutor {
     /// Set a permission handler for `AskUser` decisions.
     pub fn set_permission_handler(&mut self, handler: Arc<dyn PermissionHandler>) {
         self.permission_handler = Some(handler);
+    }
+
+    /// Install `PermissionRequest` hooks, consulted before the interactive
+    /// handler on `AskUser` decisions.
+    pub fn set_permission_hooks(&mut self, hooks: Arc<crab_hooks::HookExecutor>) {
+        self.permission_hooks = Some(hooks);
     }
 
     /// Opt into auto-approving `AskUser` decisions when no handler is installed.
@@ -227,6 +237,7 @@ impl ToolExecutor {
     ) -> PermissionGate {
         resolve_permission_gate(
             self.permission_handler.as_deref(),
+            self.permission_hooks.as_deref(),
             self.allow_unattended,
             tool_name,
             source,
@@ -324,6 +335,7 @@ impl ToolExecutor {
         let tool_name = tool_name.to_string();
         let ctx = ctx.clone();
         let permission_handler = self.permission_handler.clone();
+        let permission_hooks = self.permission_hooks.clone();
         let allow_unattended = self.allow_unattended;
 
         let handle = tokio::spawn(async move {
@@ -333,6 +345,7 @@ impl ToolExecutor {
 
             if let PermissionGate::Reject(output) = resolve_permission_gate(
                 permission_handler.as_deref(),
+                permission_hooks.as_deref(),
                 allow_unattended,
                 &tool_name,
                 &tool.source(),
@@ -369,6 +382,7 @@ impl ToolExecutor {
 /// uses on the inline path.
 async fn resolve_permission_gate(
     handler: Option<&dyn PermissionHandler>,
+    permission_hooks: Option<&crab_hooks::HookExecutor>,
     allow_unattended: bool,
     tool_name: &str,
     source: &ToolSource,
@@ -389,6 +403,35 @@ async fn resolve_permission_gate(
         PermissionDecision::Allow => PermissionGate::Proceed,
         PermissionDecision::Deny(reason) => PermissionGate::Reject(ToolOutput::error(reason)),
         PermissionDecision::AskUser(prompt) => {
+            // PermissionRequest hooks may resolve the request without
+            // prompting: explicit allow proceeds, deny rejects, anything
+            // else falls through to the interactive handler.
+            if let Some(hooks) = permission_hooks {
+                let hook_ctx = crab_hooks::HookContext {
+                    tool_name: tool_name.to_string(),
+                    tool_input: serde_json::to_string(input).unwrap_or_default(),
+                    working_dir: Some(ctx.working_dir.clone()),
+                    ..crab_hooks::HookContext::default()
+                };
+                match hooks
+                    .run(crab_hooks::HookTrigger::PermissionRequest, &hook_ctx)
+                    .await
+                {
+                    Ok(hr) if hr.action == crab_hooks::HookAction::Deny => {
+                        let reason = hr
+                            .message
+                            .unwrap_or_else(|| "denied by PermissionRequest hook".into());
+                        return PermissionGate::Reject(ToolOutput::error(format!(
+                            "<hook-blocked> {reason}"
+                        )));
+                    }
+                    Ok(hr) if hr.explicit_allow => return PermissionGate::Proceed,
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "PermissionRequest hook error");
+                    }
+                }
+            }
             if let Some(handler) = handler {
                 let result = handler.ask_permission(tool_name, &prompt, input).await;
                 if result.allowed {

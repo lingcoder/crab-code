@@ -145,6 +145,52 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         tracing::warn!("settings validation: {w}");
     }
 
+    // CC-format plugins: skills feed the skill registry via extra
+    // directories; hooks and MCP servers merge under settings-level values.
+    let plugin_roots: Vec<PathBuf> = [
+        crab_config::config::global_config_dir().join("plugins"),
+        working_dir.join(".crab").join("plugins"),
+    ]
+    .into_iter()
+    .chain(cli.plugin_dir.iter().cloned())
+    .collect();
+    let plugins = crab_plugin::discover_plugins(&plugin_roots);
+    let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
+    for plugin in &plugins {
+        tracing::debug!(plugin = plugin.name.as_str(), "loaded plugin");
+        plugin_skill_dirs.extend(plugin.skill_dirs.iter().cloned());
+        if let Some(servers) = &plugin.mcp_servers {
+            let existing = settings.mcp_servers.take().unwrap_or(json!({}));
+            if let (Value::Object(mut base), Value::Object(overlay)) = (servers.clone(), existing) {
+                for (k, v) in overlay {
+                    base.insert(k, v);
+                }
+                settings.mcp_servers = Some(Value::Object(base));
+            }
+        }
+        if let Some(hooks) = &plugin.hooks {
+            let mut base = settings.hooks.take().unwrap_or(json!({}));
+            crab_config::hooks::merge_hooks_values(&mut base, hooks.clone());
+            settings.hooks = Some(base);
+        }
+    }
+
+    // Project-shared .mcp.json (CC ecosystem file): lowest precedence —
+    // settings-level mcpServers with the same name win.
+    match crab_mcp::config::load_project_mcp_json(&working_dir) {
+        Ok(Some(project_servers)) => {
+            let existing = settings.mcp_servers.take().unwrap_or(json!({}));
+            if let (Value::Object(mut base), Value::Object(overlay)) = (project_servers, existing) {
+                for (k, v) in overlay {
+                    base.insert(k, v);
+                }
+                settings.mcp_servers = Some(Value::Object(base));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("ignoring invalid .mcp.json: {e}"),
+    }
+
     // Apply --mcp-config: load MCP server configs from file(s)
     if !cli.mcp_config.is_empty() {
         let mcp = crab_mcp::config::load_mcp_configs(&cli.mcp_config)?;
@@ -242,10 +288,8 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     } else {
         build_skill_dirs(&working_dir)
     };
-    // --plugin-dir adds extra directories
-    for dir in &cli.plugin_dir {
-        skill_dirs.push(dir.clone());
-    }
+    // Plugin-provided skills/ and commands/ directories
+    skill_dirs.extend(plugin_skill_dirs);
     let mut skill_registry = crab_skills::SkillRegistry::new();
     if !cli.bare && !cli.disable_slash_commands {
         skill_registry.register_all(crab_skills::builtin::builtin_skills());
@@ -453,6 +497,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         session
             .executor
             .set_permission_handler(Arc::new(CliPermissionHandler));
+        if let Some(hooks) = &session.config.hook_executor {
+            session.executor.set_permission_hooks(Arc::clone(hooks));
+        }
         let result = run_single_shot(&mut session, &resolved, cli.effective_output_format()).await;
         session.shutdown().await;
         result
@@ -502,6 +549,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
             session
                 .executor
                 .set_permission_handler(Arc::new(CliPermissionHandler));
+            if let Some(hooks) = &session.config.hook_executor {
+                session.executor.set_permission_hooks(Arc::clone(hooks));
+            }
             eprintln!("Type /exit or Ctrl+D to quit.\n");
             let result = crate::repl::run_repl(&mut session, &skill_registry).await;
             session.shutdown().await;

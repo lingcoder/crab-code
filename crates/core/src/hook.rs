@@ -113,18 +113,13 @@ impl HookTrigger {
     /// adding dispatch sites.
     #[must_use]
     pub fn is_dispatched(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Self::PreToolUse
-                | Self::PostToolUse
-                | Self::UserPromptSubmit
-                | Self::Stop
-                | Self::Notification
-                | Self::SessionStart
-                | Self::SessionEnd
-                | Self::Setup
-                | Self::FileChanged
-                | Self::PostCompact
+            Self::PermissionDenied
+                | Self::TeammateIdle
+                | Self::Elicitation
+                | Self::ElicitationResult
+                | Self::CwdChanged
         )
     }
 
@@ -219,6 +214,6 @@ mod tests {
             .iter()
             .filter(|t| t.is_dispatched())
             .count();
-        assert_eq!(dispatched, 10);
+        assert_eq!(dispatched, 22);
     }
 }

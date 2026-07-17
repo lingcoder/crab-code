@@ -267,12 +267,16 @@ impl AgentRuntime {
 
         let registry = Arc::new(registry);
         let tool_schemas = registry.tool_schemas();
+        let hook_executor = build_hook_executor(config.hooks.as_ref(), config.disable_hooks);
         let mut executor = ToolExecutor::new(Arc::clone(&registry));
 
         executor.set_permission_handler(Arc::new(ChannelPermissionHandler::new(
             config.perm_event_tx,
             config.perm_resp_rx,
         )));
+        if let Some(hooks) = &hook_executor {
+            executor.set_permission_hooks(Arc::clone(hooks));
+        }
         let executor = Arc::new(executor);
 
         let memory_store = config
@@ -407,7 +411,24 @@ impl AgentRuntime {
         // Build the hook executor from user settings. The on-disk format is
         // `crab_config::hooks::Hook`; map it to `crab_hooks::HookDef` so the
         // engine's hook branches fire on real user-configured commands.
-        let hook_executor = build_hook_executor(config.hooks.as_ref(), config.disable_hooks);
+        // System prompt (with AGENTS.md/CLAUDE.md instructions) is fully
+        // assembled by this point.
+        if let Some(hooks) = &hook_executor {
+            let hooks = Arc::clone(hooks);
+            let session_id = config.session_config.session_id.clone();
+            tokio::spawn(async move {
+                let ctx = crab_hooks::HookContext {
+                    session_id: Some(session_id),
+                    ..crab_hooks::HookContext::default()
+                };
+                if let Err(e) = hooks
+                    .run(crab_hooks::HookTrigger::InstructionsLoaded, &ctx)
+                    .await
+                {
+                    tracing::warn!(error = %e, "InstructionsLoaded hook failed");
+                }
+            });
+        }
 
         let compaction_config = CompactionConfig::default();
         let compaction_client: Option<Arc<dyn CompactionClient>> =
@@ -948,6 +969,23 @@ impl AgentRuntime {
         tokio::spawn(async move {
             if let Err(e) = hooks.run(crab_hooks::HookTrigger::FileChanged, &ctx).await {
                 tracing::warn!(error = %e, "file_changed hook failed");
+            }
+        });
+    }
+
+    /// Fire the `ConfigChange` hook after a settings reload (fire-and-forget).
+    pub fn fire_config_change_hook(&self, session_id: Option<&str>, working_dir: Option<&Path>) {
+        let Some(hooks) = self.loop_config.hook_executor.clone() else {
+            return;
+        };
+        let ctx = crab_hooks::HookContext {
+            working_dir: working_dir.map(PathBuf::from),
+            session_id: session_id.map(String::from),
+            ..crab_hooks::HookContext::default()
+        };
+        tokio::spawn(async move {
+            if let Err(e) = hooks.run(crab_hooks::HookTrigger::ConfigChange, &ctx).await {
+                tracing::warn!(error = %e, "config_change hook failed");
             }
         });
     }

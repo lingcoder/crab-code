@@ -351,7 +351,14 @@ pub async fn query_loop(
                 )
                 .await?
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                fire_lifecycle_hook(
+                    config.hook_executor.as_ref(),
+                    config.session_id.as_deref(),
+                    HookTrigger::StopFailure,
+                );
+                return Err(e);
+            }
         };
 
         // Reset PTL retry counter on success
@@ -1053,6 +1060,7 @@ async fn try_upgrade_or_compact(
                     })
                     .await;
 
+                fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PreCompact);
                 let report =
                     run_compaction(conversation, client, compaction_config, strategy).await;
 
@@ -1065,7 +1073,7 @@ async fn try_upgrade_or_compact(
                                 removed_messages: r.messages_removed(),
                             })
                             .await;
-                        fire_compact_hook(hook_executor, session_id);
+                        fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PostCompact);
                     }
                     Err(e) => {
                         compact_state.record_failure();
@@ -1078,7 +1086,7 @@ async fn try_upgrade_or_compact(
                                 removed_messages: removed,
                             })
                             .await;
-                        fire_compact_hook(hook_executor, session_id);
+                        fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PostCompact);
                     }
                 }
             } else {
@@ -1125,6 +1133,7 @@ async fn force_compact(
             before_tokens,
         })
         .await;
+    fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PreCompact);
 
     // Summarize-first: when a client is available, try semantic summarization
     // before falling back to truncation. Preserves more context per token.
@@ -1148,7 +1157,7 @@ async fn force_compact(
                     removed_messages: r.messages_removed(),
                 })
                 .await;
-            fire_compact_hook(hook_executor, session_id);
+            fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PostCompact);
             return;
         }
     }
@@ -1174,7 +1183,7 @@ async fn force_compact(
                     removed_messages: r.messages_removed(),
                 })
                 .await;
-            fire_compact_hook(hook_executor, session_id);
+            fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PostCompact);
         }
         Err(e) => {
             tracing::warn!(error = %e, "PTL compaction failed, using raw truncation");
@@ -1186,7 +1195,7 @@ async fn force_compact(
                     removed_messages: removed,
                 })
                 .await;
-            fire_compact_hook(hook_executor, session_id);
+            fire_lifecycle_hook(hook_executor, session_id, HookTrigger::PostCompact);
         }
     }
 }
@@ -1208,26 +1217,22 @@ fn strip_images(conversation: &mut Conversation) -> usize {
     stripped
 }
 
-/// Fire Compact lifecycle hook in the background (fire-and-forget).
-fn fire_compact_hook(
+/// Fire a session-scoped lifecycle hook in the background (fire-and-forget).
+fn fire_lifecycle_hook(
     hook_executor: Option<&std::sync::Arc<HookExecutor>>,
     session_id: Option<&str>,
+    trigger: HookTrigger,
 ) {
     let Some(hooks) = hook_executor.cloned() else {
         return;
     };
     let ctx = HookContext {
-        tool_name: String::new(),
-        tool_input: String::new(),
-        working_dir: None,
-        tool_output: None,
-        tool_exit_code: None,
         session_id: session_id.map(String::from),
-        transcript_path: None,
+        ..HookContext::default()
     };
     tokio::spawn(async move {
-        if let Err(e) = hooks.run(HookTrigger::PostCompact, &ctx).await {
-            tracing::warn!(error = %e, "compact hook failed");
+        if let Err(e) = hooks.run(trigger, &ctx).await {
+            tracing::warn!(event = trigger.event_name(), error = %e, "lifecycle hook failed");
         }
     });
 }

@@ -21,6 +21,26 @@ use tokio_util::sync::CancellationToken;
 use crab_engine::{QueryConfig, query_loop};
 
 /// Configuration for spawning a sub-agent worker.
+/// Fire a subagent lifecycle hook in the background (fire-and-forget).
+fn fire_subagent_hook(
+    hook_executor: Option<&std::sync::Arc<crab_hooks::HookExecutor>>,
+    worker_id: &str,
+    trigger: crab_hooks::HookTrigger,
+) {
+    let Some(hooks) = hook_executor.cloned() else {
+        return;
+    };
+    let ctx = crab_hooks::HookContext {
+        session_id: Some(worker_id.to_string()),
+        ..crab_hooks::HookContext::default()
+    };
+    tokio::spawn(async move {
+        if let Err(e) = hooks.run(trigger, &ctx).await {
+            tracing::warn!(event = trigger.event_name(), error = %e, "subagent hook failed");
+        }
+    });
+}
+
 #[derive(Clone)]
 pub struct WorkerConfig {
     /// Unique worker identifier.
@@ -136,6 +156,11 @@ impl AgentWorker {
                 task_prompt: task_prompt.clone(),
             })
             .await;
+        fire_subagent_hook(
+            self.loop_config.hook_executor.as_ref(),
+            &worker_id,
+            crab_hooks::HookTrigger::SubagentStart,
+        );
 
         // Create fresh conversation
         let mut conversation = Conversation::new(
@@ -216,6 +241,16 @@ impl AgentWorker {
                 usage: usage.clone(),
             })
             .await;
+        fire_subagent_hook(
+            self.loop_config.hook_executor.as_ref(),
+            &worker_id,
+            crab_hooks::HookTrigger::SubagentStop,
+        );
+        crate::teams::worker_pool::fire_task_hook(
+            self.loop_config.hook_executor.as_ref(),
+            &worker_id,
+            crab_hooks::HookTrigger::TaskCompleted,
+        );
 
         WorkerResult {
             worker_id,

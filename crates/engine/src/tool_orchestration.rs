@@ -342,8 +342,32 @@ async fn invoke_tool(
             session_id: session_id.map(String::from),
             transcript_path: None,
         };
-        if let Err(e) = hooks.run(HookTrigger::PostToolUse, &hook_ctx).await {
-            tracing::warn!(error = %e, "PostToolUse hook error");
+        let trigger = if exit_code == 0 {
+            HookTrigger::PostToolUse
+        } else {
+            HookTrigger::PostToolUseFailure
+        };
+        if let Err(e) = hooks.run(trigger, &hook_ctx).await {
+            tracing::warn!(event = trigger.event_name(), error = %e, "post-tool hook error");
+        }
+
+        // Worktree lifecycle events piggyback on the tool boundary: the
+        // worktree tools are the only mutation path.
+        if exit_code == 0 {
+            let worktree_trigger = match name.as_str() {
+                n if n == crab_tools::builtin::worktree::ENTER_WORKTREE_TOOL_NAME => {
+                    Some(HookTrigger::WorktreeCreate)
+                }
+                n if n == crab_tools::builtin::worktree::EXIT_WORKTREE_TOOL_NAME => {
+                    Some(HookTrigger::WorktreeRemove)
+                }
+                _ => None,
+            };
+            if let Some(trigger) = worktree_trigger
+                && let Err(e) = hooks.run(trigger, &hook_ctx).await
+            {
+                tracing::warn!(event = trigger.event_name(), error = %e, "worktree hook error");
+            }
         }
     }
 

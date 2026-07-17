@@ -1,151 +1,69 @@
-//! Plugin manifest parsing and validation.
+//! CC-format `plugin.json` manifest.
 //!
-//! A plugin manifest (`plugin.json`) describes a plugin's metadata,
-//! capabilities, and entry points. This module handles loading and
-//! validating these manifests.
+//! The manifest is optional metadata; a directory is a plugin as soon as it
+//! carries any component directory (`commands/`, `agents/`, `skills/`,
+//! `hooks/`, `.mcp.json`).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Supported plugin types.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginKind {
-    /// A skill-based plugin (markdown prompt templates).
-    Skill,
-    /// A WASM-based plugin (sandboxed binary).
-    Wasm,
-}
-
-/// Plugin manifest loaded from `plugin.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginManifest {
-    /// Unique plugin identifier (e.g. "my-plugin").
+/// Plugin author information.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginAuthor {
+    #[serde(default)]
     pub name: String,
-    /// Human-readable description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// CC `plugin.json` manifest. Unknown keys are ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginManifest {
+    /// Plugin identifier (kebab-case by convention).
     #[serde(default)]
-    pub description: String,
-    /// Semantic version string.
-    #[serde(default = "default_version")]
-    pub version: String,
-    /// Plugin type.
-    #[serde(default = "default_kind")]
-    pub kind: PluginKind,
-    /// Author name or identifier.
-    #[serde(default)]
-    pub author: String,
-    /// Entry point relative to the plugin directory.
-    /// For skill plugins: a `.md` file or directory of `.md` files.
-    /// For WASM plugins: a `.wasm` file.
-    #[serde(default)]
-    pub entry: String,
-    /// Required permissions for this plugin.
-    #[serde(default)]
-    pub permissions: Vec<String>,
-    /// Source directory this manifest was loaded from.
-    #[serde(skip)]
-    pub source_dir: Option<PathBuf>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<PluginAuthor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
-fn default_version() -> String {
-    "0.1.0".to_string()
-}
-
-fn default_kind() -> PluginKind {
-    PluginKind::Skill
-}
-
-impl PluginManifest {
-    /// Validate the manifest for required fields and consistency.
-    pub fn validate(&self) -> crab_core::Result<()> {
-        if self.name.is_empty() {
-            return Err(crab_core::Error::Other(
-                "plugin manifest: 'name' is required".into(),
-            ));
-        }
-        if self.name.contains(char::is_whitespace) {
-            return Err(crab_core::Error::Other(
-                "plugin manifest: 'name' must not contain whitespace".into(),
-            ));
-        }
-        // The name is used as a directory component on install, so it must not
-        // contain path separators, parent references, or null bytes.
-        if self.name.contains('/')
-            || self.name.contains('\\')
-            || self.name.contains('\0')
-            || self.name == ".."
-            || self.name == "."
-        {
-            return Err(crab_core::Error::Other(
-                "plugin manifest: 'name' must not contain path separators or '..'".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Resolve the entry point to an absolute path relative to `source_dir`.
-    #[must_use]
-    pub fn resolved_entry(&self) -> Option<PathBuf> {
-        self.source_dir.as_ref().map(|dir| dir.join(&self.entry))
-    }
-}
-
-/// Load a plugin manifest from a `plugin.json` file.
-pub fn load_manifest(path: &Path) -> crab_core::Result<PluginManifest> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| crab_core::Error::Other(format!("failed to read plugin manifest: {e}")))?;
-
-    let mut manifest: PluginManifest = serde_json::from_str(&content)
-        .map_err(|e| crab_core::Error::Other(format!("invalid plugin manifest JSON: {e}")))?;
-
-    manifest.source_dir = path.parent().map(Path::to_path_buf);
-    manifest.validate()?;
-
-    Ok(manifest)
-}
-
-/// Discover plugin manifests in a directory.
+/// Load `plugin.json` from a plugin root.
 ///
-/// Scans for subdirectories containing `plugin.json` files.
-pub fn discover_plugins(dir: &Path) -> Vec<PluginManifest> {
-    let mut manifests = Vec::new();
-
-    if !dir.exists() {
-        return manifests;
-    }
-
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return manifests;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let manifest_path = path.join("plugin.json");
-            if manifest_path.exists() {
-                match load_manifest(&manifest_path) {
-                    Ok(manifest) => {
-                        tracing::debug!(
-                            name = manifest.name.as_str(),
-                            path = %manifest_path.display(),
-                            "loaded plugin manifest"
-                        );
-                        manifests.push(manifest);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %manifest_path.display(),
-                            error = %e,
-                            "failed to load plugin manifest"
-                        );
-                    }
-                }
-            }
+/// Returns `None` when the file is absent (a manifest is optional).
+///
+/// # Errors
+///
+/// Returns an error when the file exists but is not valid JSON.
+pub fn load_manifest(plugin_root: &Path) -> crab_core::Result<Option<PluginManifest>> {
+    let path = plugin_root.join("plugin.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(crab_core::Error::Other(format!(
+                "failed to read '{}': {e}",
+                path.display()
+            )));
         }
-    }
-
-    manifests
+    };
+    let manifest: PluginManifest = serde_json::from_str(&content).map_err(|e| {
+        crab_core::Error::Other(format!("invalid plugin.json '{}': {e}", path.display()))
+    })?;
+    Ok(Some(manifest))
 }
 
 #[cfg(test)]
@@ -153,250 +71,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_kind_serde() {
-        let skill = serde_json::to_string(&PluginKind::Skill).unwrap();
-        assert_eq!(skill, "\"skill\"");
-        let wasm = serde_json::to_string(&PluginKind::Wasm).unwrap();
-        assert_eq!(wasm, "\"wasm\"");
-        let parsed: PluginKind = serde_json::from_str(&skill).unwrap();
-        assert_eq!(parsed, PluginKind::Skill);
-    }
-
-    #[test]
-    fn manifest_deserialize_minimal() {
-        let json = r#"{"name": "test-plugin"}"#;
-        let m: PluginManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(m.name, "test-plugin");
-        assert_eq!(m.version, "0.1.0");
-        assert_eq!(m.kind, PluginKind::Skill);
-        assert!(m.permissions.is_empty());
-    }
-
-    #[test]
-    fn manifest_deserialize_full() {
+    fn manifest_parses_cc_fields() {
         let json = r#"{
             "name": "my-plugin",
-            "description": "A test plugin",
-            "version": "1.2.3",
-            "kind": "wasm",
-            "author": "dev",
-            "entry": "plugin.wasm",
-            "permissions": ["fs:read", "net:http"]
+            "version": "1.2.0",
+            "description": "does things",
+            "author": {"name": "Dev", "email": "d@example.com"},
+            "keywords": ["ci", "review"],
+            "unknownField": {"ignored": true}
         }"#;
         let m: PluginManifest = serde_json::from_str(json).unwrap();
         assert_eq!(m.name, "my-plugin");
-        assert_eq!(m.description, "A test plugin");
-        assert_eq!(m.version, "1.2.3");
-        assert_eq!(m.kind, PluginKind::Wasm);
-        assert_eq!(m.author, "dev");
-        assert_eq!(m.entry, "plugin.wasm");
-        assert_eq!(m.permissions.len(), 2);
+        assert_eq!(m.version.as_deref(), Some("1.2.0"));
+        assert_eq!(m.author.unwrap().name, "Dev");
+        assert_eq!(m.keywords, vec!["ci", "review"]);
     }
 
     #[test]
-    fn validate_empty_name_fails() {
-        let m = PluginManifest {
-            name: String::new(),
-            description: String::new(),
-            version: "0.1.0".into(),
-            kind: PluginKind::Skill,
-            author: String::new(),
-            entry: String::new(),
-            permissions: vec![],
-            source_dir: None,
-        };
-        assert!(m.validate().is_err());
+    fn load_manifest_absent_is_none() {
+        let dir = std::env::temp_dir().join("crab_plugin_manifest_none");
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(load_manifest(&dir).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn validate_whitespace_name_fails() {
-        let m = PluginManifest {
-            name: "bad name".into(),
-            description: String::new(),
-            version: "0.1.0".into(),
-            kind: PluginKind::Skill,
-            author: String::new(),
-            entry: String::new(),
-            permissions: vec![],
-            source_dir: None,
-        };
-        assert!(m.validate().is_err());
-    }
-
-    #[test]
-    fn validate_good_name_ok() {
-        let m = PluginManifest {
-            name: "good-plugin".into(),
-            description: String::new(),
-            version: "0.1.0".into(),
-            kind: PluginKind::Skill,
-            author: String::new(),
-            entry: String::new(),
-            permissions: vec![],
-            source_dir: None,
-        };
-        assert!(m.validate().is_ok());
-    }
-
-    #[test]
-    fn resolved_entry_with_source_dir() {
-        let m = PluginManifest {
-            name: "test".into(),
-            description: String::new(),
-            version: "0.1.0".into(),
-            kind: PluginKind::Wasm,
-            author: String::new(),
-            entry: "plugin.wasm".into(),
-            permissions: vec![],
-            source_dir: Some(PathBuf::from("/plugins/test")),
-        };
-        let resolved = m.resolved_entry().unwrap();
-        assert_eq!(resolved, PathBuf::from("/plugins/test/plugin.wasm"));
-    }
-
-    #[test]
-    fn resolved_entry_without_source_dir() {
-        let m = PluginManifest {
-            name: "test".into(),
-            description: String::new(),
-            version: "0.1.0".into(),
-            kind: PluginKind::Skill,
-            author: String::new(),
-            entry: String::new(),
-            permissions: vec![],
-            source_dir: None,
-        };
-        assert!(m.resolved_entry().is_none());
-    }
-
-    #[test]
-    fn discover_empty_dir() {
-        let tmp = std::env::temp_dir().join("crab_plugin_test_empty");
-        let _ = std::fs::create_dir_all(&tmp);
-        let manifests = discover_plugins(&tmp);
-        assert!(manifests.is_empty());
-        let _ = std::fs::remove_dir(&tmp);
-    }
-
-    #[test]
-    fn discover_nonexistent_dir() {
-        let manifests = discover_plugins(Path::new("/nonexistent/path/plugins"));
-        assert!(manifests.is_empty());
-    }
-
-    #[test]
-    fn load_and_discover_roundtrip() {
-        let tmp = std::env::temp_dir().join("crab_plugin_test_discover");
-        let plugin_dir = tmp.join("my-plugin");
-        let _ = std::fs::create_dir_all(&plugin_dir);
-
-        let manifest_json = r#"{"name": "my-plugin", "description": "test"}"#;
-        std::fs::write(plugin_dir.join("plugin.json"), manifest_json).unwrap();
-
-        let manifests = discover_plugins(&tmp);
-        assert_eq!(manifests.len(), 1);
-        assert_eq!(manifests[0].name, "my-plugin");
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn manifest_serde_roundtrip() {
-        let m = PluginManifest {
-            name: "test-plugin".into(),
-            description: "A test".into(),
-            version: "1.0.0".into(),
-            kind: PluginKind::Wasm,
-            author: "dev".into(),
-            entry: "plugin.wasm".into(),
-            permissions: vec!["fs:read".into()],
-            source_dir: None,
-        };
-        let json = serde_json::to_string(&m).unwrap();
-        let parsed: PluginManifest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.name, "test-plugin");
-        assert_eq!(parsed.kind, PluginKind::Wasm);
-        assert_eq!(parsed.permissions, vec!["fs:read"]);
-    }
-
-    #[test]
-    fn load_manifest_from_temp_file() {
-        let tmp = std::env::temp_dir().join("crab_manifest_test_load");
-        let _ = std::fs::create_dir_all(&tmp);
-        let manifest_path = tmp.join("plugin.json");
-        std::fs::write(
-            &manifest_path,
-            r#"{"name": "loaded-plugin", "version": "2.0.0", "kind": "wasm"}"#,
-        )
-        .unwrap();
-
-        let manifest = load_manifest(&manifest_path).unwrap();
-        assert_eq!(manifest.name, "loaded-plugin");
-        assert_eq!(manifest.version, "2.0.0");
-        assert_eq!(manifest.kind, PluginKind::Wasm);
-        assert!(manifest.source_dir.is_some());
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn load_manifest_invalid_json() {
-        let tmp = std::env::temp_dir().join("crab_manifest_test_invalid");
-        let _ = std::fs::create_dir_all(&tmp);
-        std::fs::write(tmp.join("plugin.json"), "not json").unwrap();
-        assert!(load_manifest(&tmp.join("plugin.json")).is_err());
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn load_manifest_empty_name_fails() {
-        let tmp = std::env::temp_dir().join("crab_manifest_test_empty_name");
-        let _ = std::fs::create_dir_all(&tmp);
-        std::fs::write(tmp.join("plugin.json"), r#"{"name": ""}"#).unwrap();
-        assert!(load_manifest(&tmp.join("plugin.json")).is_err());
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn load_manifest_nonexistent_file() {
-        assert!(load_manifest(Path::new("/no/such/plugin.json")).is_err());
-    }
-
-    #[test]
-    fn discover_multiple_plugins() {
-        let tmp = std::env::temp_dir().join("crab_plugin_test_multi");
-        for name in ["plugin-a", "plugin-b"] {
-            let dir = tmp.join(name);
-            let _ = std::fs::create_dir_all(&dir);
-            std::fs::write(dir.join("plugin.json"), format!(r#"{{"name": "{name}"}}"#)).unwrap();
-        }
-
-        let manifests = discover_plugins(&tmp);
-        assert_eq!(manifests.len(), 2);
-        let names: Vec<_> = manifests.iter().map(|m| m.name.as_str()).collect();
-        assert!(names.contains(&"plugin-a"));
-        assert!(names.contains(&"plugin-b"));
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn discover_skips_files_at_root() {
-        let tmp = std::env::temp_dir().join("crab_plugin_test_root_file");
-        let _ = std::fs::create_dir_all(&tmp);
-        // plugin.json at root level (not in subdir) should be skipped
-        std::fs::write(tmp.join("plugin.json"), r#"{"name": "root-plugin"}"#).unwrap();
-
-        let manifests = discover_plugins(&tmp);
-        assert!(manifests.is_empty());
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn plugin_kind_equality() {
-        assert_eq!(PluginKind::Skill, PluginKind::Skill);
-        assert_ne!(PluginKind::Skill, PluginKind::Wasm);
+    fn load_manifest_invalid_errors() {
+        let dir = std::env::temp_dir().join("crab_plugin_manifest_bad");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("plugin.json"), "not json").unwrap();
+        assert!(load_manifest(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

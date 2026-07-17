@@ -30,6 +30,26 @@ use super::worker::{AgentWorker, WorkerConfig, WorkerResult};
 ///
 /// The coordinator tracks running workers via `JoinHandle`s and provides
 /// methods to spawn, cancel, and collect worker results.
+/// Fire a task lifecycle hook in the background (fire-and-forget).
+pub(crate) fn fire_task_hook(
+    hook_executor: Option<&Arc<crab_hooks::HookExecutor>>,
+    task_id: &str,
+    trigger: crab_hooks::HookTrigger,
+) {
+    let Some(hooks) = hook_executor.cloned() else {
+        return;
+    };
+    let ctx = crab_hooks::HookContext {
+        tool_input: task_id.to_string(),
+        ..crab_hooks::HookContext::default()
+    };
+    tokio::spawn(async move {
+        if let Err(e) = hooks.run(trigger, &ctx).await {
+            tracing::warn!(event = trigger.event_name(), error = %e, "task hook failed");
+        }
+    });
+}
+
 pub struct WorkerPool {
     pub main_agent: AgentHandle,
     pub workers: Vec<AgentHandle>,
@@ -177,6 +197,7 @@ impl WorkerPool {
         self.next_worker_id += 1;
 
         let cancel = CancellationToken::new();
+        let task_hooks = loop_config.hook_executor.clone();
 
         let config = WorkerConfig {
             worker_id: worker_id.clone(),
@@ -208,12 +229,19 @@ impl WorkerPool {
                 crab_core::task::TaskType::LocalAgent,
                 preview,
             );
-            let mut r = reg.lock().unwrap_or_else(|e| {
-                tracing::warn!("task registry mutex poisoned: {e}");
-                e.into_inner()
-            });
-            r.register(entry);
-            r.set_status(&worker_id, crab_core::task::TaskStatus::Running);
+            {
+                let mut r = reg.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task registry mutex poisoned: {e}");
+                    e.into_inner()
+                });
+                r.register(entry);
+                r.set_status(&worker_id, crab_core::task::TaskStatus::Running);
+            }
+            fire_task_hook(
+                task_hooks.as_ref(),
+                &worker_id,
+                crab_hooks::HookTrigger::TaskCreated,
+            );
         }
 
         self.running
