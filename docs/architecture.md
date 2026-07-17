@@ -14,7 +14,7 @@
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `cli` | CLI entry point (clap) + composition root |
 | **Layer 3** Engine Layer | `agents` `engine` `session` `tui` `remote` | Query loop, multi-agent orchestration, session state, terminal UI, remote-control WebSocket server + client |
-| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `process` `sandbox` `ide` `skills` `plugin` `memory` `swarm` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
+| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `process` `sandbox` `ide` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
 | **Layer 1** Foundation Layer | `core` `utils` `config` `auth` | Domain model, utilities, layered config, authentication |
 
 > Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agents`. See §5.3 for inner-layer rules (aggregator vs leaf service; Layer 3 Event-only control flow).
@@ -33,7 +33,7 @@
 │  ┌──────▼──────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────────┐ │
 │  │   agents   │ │  engine  │ │ session  │ │  tui   │ │   remote    │ │
 │  │ orchestra + │ │ raw loop │ │ state +  │ │ ratatui│ │ WS server + │ │
-│  │ swarm +     │ │ stream + │ │ compact  │ │ views  │ │ client +    │ │
+│  │ team +      │ │ stream + │ │ compact  │ │ views  │ │ client +    │ │
 │  │ proactive   │ │ tooluse  │ │ memory   │ │        │ │ crab-proto  │ │
 │  └────┬────────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └──────┬──────┘ │
 ├───────┼────────────────┼─────────────┼───────────┼────────────┼────────┤
@@ -66,7 +66,7 @@
 | Claude Code (TS) | Path | Crab Code (Rust) | Notes |
 |-------------------|------|-------------------|-------|
 | **Entry Layer** entrypoints/ | `cli.tsx` `main.tsx` | `cli` | TS reference uses React/Ink for rendering; Crab uses ratatui |
-| **Command Layer** commands/ | `query.ts` `QueryEngine.ts` `coordinator/` | `engine` + `agent` | `query.ts` maps to crab `engine`; `QueryEngine.ts` maps to `agent`; domain-pure swarm infra in `crates/swarm/` |
+| **Command Layer** commands/ | `query.ts` `QueryEngine.ts` `coordinator/` | `engine` + `agent` | `query.ts` maps to crab `engine`; `QueryEngine.ts` maps to `agent`; domain-pure team infra in `crates/team/` |
 | **Tool Layer** tools/ | 52 Tool directories | `tools` + `mcp` | TS reference mixes tools and MCP in `services/`; Crab separates them |
 | **Service Layer** services/ | `api/` `mcp/` `oauth/` `compact/` `memdir/` | `api` `mcp` `acp` `auth` `skills` `plugin` `memory` `telemetry` `sandbox` `ide` `cron` | TS reference's service layer is flat; Crab splits by responsibility. `memdir/` → `memory`; `utils/sandbox/` → `sandbox`; IDE MCP client surface → `ide`; ACP server → `acp`; unified scheduling → `cron` |
 | **Bridge Layer** bridge/ | `bridgeMain.ts` `replBridge.ts` | `remote` (server + client) | `src/bridge/` (inbound server) + `src/remote/` (outbound client) both land in crates/remote, which owns the full crab-proto stack (server + client + wire types, mirroring crab-mcp) |
@@ -217,7 +217,7 @@ crab-code/
 │   ├── ide/                           # IDE MCP client + quirks/ (vscode/jetbrains/wsl)
 │   ├── skills/                        # skill registry + builtin/ skills
 │   ├── memory/                        # persistent memory store + ranking + AGENTS.md
-│   ├── swarm/                         # multi-agent infra (bus/mailbox/roster/task/backend/)
+│   ├── team/                          # multi-agent infra (bus/mailbox/roster/task/backend/)
 │   ├── telemetry/                     # local tracing + metrics + cost
 │   ├── cron/                          # unified scheduling (one-shot/interval/cron)
 │   ├── hooks/                         # lifecycle hook executor + registry + watcher
@@ -246,7 +246,7 @@ crab-code/
 
 | Type | Count | Notes |
 |------|-------|-------|
-| Library crate | 25 | `crates/*` — includes `commands`, `hooks`, `swarm`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `cron` |
+| Library crate | 25 | `crates/*` — includes `commands`, `hooks`, `team`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `cron` |
 | Binary crate | 1 | `crates/cli` |
 | Helper crate | 1 | `xtask` (build tooling, not shipped) |
 | **Total** | **26 + 1** | 26 product crates + xtask |
@@ -269,7 +269,7 @@ crab-code/
           ┌─────▼────┐  ┌─────▼────┐  ┌───────▼──┐  ┌───────▼───┐
           │   tui    │─►│  agents  │  │  remote  │  │    acp    │
           └─────┬────┘  └─┬──┬──┬──┘  └──────────┘  └───────────┘
-                │         │  │  └──────► swarm / skills / mcp
+                │         │  │  └──────► team / skills / mcp
                 │    ┌────▼──▼──┐
                 │    │  engine  │──────► hooks / plugin / telemetry
                 │    └─┬──┬──┬──┘
@@ -326,10 +326,10 @@ edge list is the manifest in §5.2.
 | 18 | **plugin** | core, config, mcp, skills | WASM sandbox + skill↔mcp bridge |
 | 19 | **tools** | utils, core, config, cron, fs, process, sandbox, mcp | Layer 2 aggregator; built-in tools |
 | 20 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
-| 21 | **swarm** | utils, core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
+| 21 | **team** | utils, core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
 | 22 | **session** | utils, core, memory | Session + context compaction |
 | 23 | **engine** | core, config, api, memory, session, telemetry, tools, hooks, plugin | Raw query loop |
-| 24 | **agents** | utils, core, config, engine, memory, session, tools, api, mcp, hooks, plugin, swarm, skills | Orchestrator + coordinator + builtin agents + proactive |
+| 24 | **agents** | utils, core, config, engine, memory, session, tools, api, mcp, hooks, plugin, team, skills | Orchestrator + coordinator + builtin agents + proactive |
 | 25 | **tui** | utils, core, config, agents, commands, memory, tools | Terminal UI; receives tool state via `core::Event` |
 | 26 | **cli** (bin) | utils, core, config, auth, api, mcp, process, tools, session, agents, commands, plugin, skills, telemetry, acp, tui | Thin composition root (interactive + `--acp` + `-p` print mode) |
 
@@ -343,7 +343,7 @@ Rule 2: Layer 2 is sub-layered into aggregators and leaves.
     in the same layer (tools -> fs/process/sandbox/mcp/cron; plugin ->
     mcp/skills; hooks -> process).
   - Leaf services (fs, process, mcp, acp, api, sandbox, cron, skills,
-    memory, swarm, telemetry) must NOT depend on each other.
+    memory, team, telemetry) must NOT depend on each other.
   - Example: tools -> sandbox (OK); fs -> process (NOT OK).
   - Exception 1: ide -> mcp — the IDE client *speaks* MCP; the protocol
     crate is its substrate, not a peer service.
@@ -2240,9 +2240,9 @@ impl MemoryStore {
 
 ---
 
-### 6.11 `crates/swarm/` -- Multi-Agent Infrastructure
+### 6.11 `crates/team/` -- Multi-Agent Infrastructure
 
-**Responsibility**: domain-pure building blocks for all multi-agent execution modes. Extracted from `agent/src/teams/` so that swarm primitives have zero engine/api/session coupling. Only depends on `core`.
+**Responsibility**: domain-pure building blocks for all multi-agent execution modes. Extracted from `agent/src/teams/` so that team primitives have zero engine/api/session coupling. Only depends on `core`.
 
 **Directory Structure**
 
@@ -2256,12 +2256,12 @@ src/
 ├── task_lock.rs      // fd-lock file-locked claim_task / with_locked
 ├── retry.rs          // RetryPolicy / RetryTracker / BackoffStrategy
 └── backend/          // Spawner backends
-    ├── mod.rs        //   SwarmBackend trait + InProcessBackend
+    ├── mod.rs        //   TeammateBackend trait + InProcessBackend
     ├── spawner.rs    //   SpawnerBackend trait
     └── teammate.rs   //   Teammate / TeammateConfig / TeammateState
 ```
 
-`agent/src/teams/mod.rs` does `pub use crab_swarm::*;` to preserve the existing facade for higher layers.
+`agent/src/teams/mod.rs` does `pub use crab_team::*;` to preserve the existing facade for higher layers.
 
 **Feature Flags**: None
 
@@ -2289,8 +2289,8 @@ src/
 │   ├── plan.rs              //   Read-only architecture planning agent
 │   └── general_purpose.rs   //   General-purpose full-tool agent
 │
-├── teams/                   // Layer 1 orchestration (re-exports crab_swarm::*)
-│   ├── mod.rs               //   pub use crab_swarm::*; + local re-exports
+├── teams/                   // Layer 1 orchestration (re-exports crab_team::*)
+│   ├── mod.rs               //   pub use crab_team::*; + local re-exports
 │   ├── coordinator.rs       //   TeamCoordinator (implicit session team: named spawns + routing)
 │   ├── spawn.rs             //   spawn-marker scan + worker/teammate runner builders
 │   ├── worker.rs            //   AgentWorker (sub-agent runner, depends on engine)
@@ -2659,7 +2659,7 @@ impl StreamingToolExecutor {
 }
 ```
 
-**External Dependencies**: `crab-utils`, `crab-core`, `crab-config`, `crab-engine`, `crab-memory`, `crab-session`, `crab-tools`, `crab-api`, `crab-mcp`, `crab-plugin`, `crab-swarm`, `crab-skill`, `tokio`, `tokio-util`, `futures`
+**External Dependencies**: `crab-utils`, `crab-core`, `crab-config`, `crab-engine`, `crab-memory`, `crab-session`, `crab-tools`, `crab-api`, `crab-mcp`, `crab-plugin`, `crab-team`, `crab-skill`, `tokio`, `tokio-util`, `futures`
 
 **Feature Flags**
 
@@ -3197,7 +3197,7 @@ pub struct AppRuntime {
 
 ### 6.21 `crates/engine/` -- Raw Query Loop
 
-**Responsibility**: the pure "conversation + backend + tool executor → streaming events" loop. Contains no session persistence, no REPL state, no swarm, no system-prompt assembly.
+**Responsibility**: the pure "conversation + backend + tool executor → streaming events" loop. Contains no session persistence, no REPL state, no team orchestration, no system-prompt assembly.
 
 **Directory Structure**
 
@@ -3531,7 +3531,7 @@ crab models multi-agent collaboration in **three conceptually distinct layers**,
 - `session/runtime.rs::AgentSession::new` invokes the coordinator if `coordinator_mode` is set; otherwise no-op.
 - `crates/agents/src/coordinator/tool_acl.rs` hosts the `COORDINATOR_TOOLS` / `WORKER_DENIED_TOOLS` constants; `ToolRegistry::retain_names` / `remove_names` in `crates/tools/src/registry.rs` implement the filter.
 - Workers spawned via `Agent` from a Coordinator session now get a fresh registry built by `Coordinator::build_worker_registry` (default registry minus `WORKER_DENIED_TOOLS`) and an overlay-free prompt snapshotted into `CoordinatorContext::worker_base_prompt`. Non-coordinator sessions inherit as before.
-- File-locked `TaskList` (`crates/swarm/src/task_lock.rs`) provides `with_locked` and `claim_task` over `fd-lock`, serialising cross-process task claims through an OS exclusive lock on `<path>.lock`. Used when teammates live in separate processes (tmux panes, remote agents); single-process use keeps the existing `Arc<Mutex<TaskList>>`.
+- File-locked `TaskList` (`crates/team/src/task_lock.rs`) provides `with_locked` and `claim_task` over `fd-lock`, serialising cross-process task claims through an OS exclusive lock on `<path>.lock`. Used when teammates live in separate processes (tmux panes, remote agents); single-process use keeps the existing `Arc<Mutex<TaskList>>`.
 
 ---
 

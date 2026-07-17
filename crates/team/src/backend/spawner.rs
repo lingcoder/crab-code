@@ -1,6 +1,6 @@
-//! Backend-agnostic swarm execution.
+//! Backend-agnostic teammate execution.
 //!
-//! [`SwarmBackend`] defines the trait for spawning and managing teammate
+//! [`TeammateBackend`] defines the trait for spawning and managing teammate
 //! sub-agents. A single in-process implementation aligns with Claude
 //! Code's teammate lifetime model: each teammate is a tokio task with
 //! mpsc IPC, so permissions, tool registries, and state live in the
@@ -31,15 +31,15 @@ pub struct TeammateRunCtx {
 /// A teammate runner: builds and drives a teammate's work loop.
 ///
 /// Injected by an upper layer (the agents crate) so this crate stays free of
-/// any LLM/engine dependency — `crab-swarm` only knows how to call the closure.
+/// any LLM/engine dependency — `crab-team` only knows how to call the closure.
 pub type TeammateRunner =
     Arc<dyn Fn(TeammateRunCtx) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-/// Trait for swarm execution backends.
+/// Trait for teammate execution backends.
 ///
 /// Implementations manage the lifecycle of teammate sub-agents: spawning,
 /// messaging, listing, and killing.
-pub trait SwarmBackend: Send {
+pub trait TeammateBackend: Send {
     /// Spawn a new teammate and return its unique ID.
     fn spawn_teammate(
         &mut self,
@@ -73,7 +73,7 @@ struct InProcessEntry {
     handle: tokio::task::JoinHandle<()>,
 }
 
-/// In-process swarm backend using tokio tasks and mpsc channels.
+/// In-process teammate backend using tokio tasks and mpsc channels.
 ///
 /// Each teammate runs as a spawned tokio task that reads from its own
 /// mpsc channel. The task loops until cancelled or the channel closes.
@@ -116,7 +116,7 @@ impl InProcessBackend {
     }
 }
 
-impl SwarmBackend for InProcessBackend {
+impl TeammateBackend for InProcessBackend {
     async fn spawn_teammate(&mut self, config: TeammateConfig) -> crab_core::Result<String> {
         let id = format!("ip-{}", self.next_id);
         self.next_id += 1;

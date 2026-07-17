@@ -151,12 +151,13 @@ mod tests {
         let mut r = defaults();
         // Sanity-check the default exists first.
         let seq = Sequence::single(KeyChord::ctrl(KeyCode::Char('l')));
-        assert!(
+        assert_eq!(
             r.feed(
                 ev(KeyCode::Char('l'), KeyModifiers::CONTROL),
                 &[KeyContext::Global],
                 Instant::now(),
-            ) == ResolveOutcome::Action(Action::Redraw)
+            ),
+            ResolveOutcome::Action(Action::Redraw)
         );
 
         let mut bindings = UserBindings::default();

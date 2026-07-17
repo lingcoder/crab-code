@@ -188,13 +188,11 @@ fn parse_entry_line(line: &str) -> Option<IndexEntry> {
     let remainder = remainder.trim();
 
     // Accept either em-dash (—) or double-dash (--)
-    let description = if let Some(desc) = remainder.strip_prefix('\u{2014}') {
-        desc.trim().to_owned()
-    } else if let Some(desc) = remainder.strip_prefix("--") {
-        desc.trim().to_owned()
-    } else {
-        return None;
-    };
+    let description = remainder
+        .strip_prefix('\u{2014}')
+        .or_else(|| remainder.strip_prefix("--"))?
+        .trim()
+        .to_owned();
 
     Some(IndexEntry {
         title,

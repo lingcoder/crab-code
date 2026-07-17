@@ -216,10 +216,8 @@ fn json_value_to_toml(value: &Value) -> Option<toml::Value> {
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 toml::Value::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                toml::Value::Float(f)
             } else {
-                return None;
+                toml::Value::Float(n.as_f64()?)
             }
         }
         Value::String(s) => toml::Value::String(s.clone()),

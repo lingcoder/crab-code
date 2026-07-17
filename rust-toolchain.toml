@@ -1,5 +1,5 @@
 [toolchain]
 # Pin the toolchain so local dev + CI + cargo-deny docker all build with
 # the same rustc. Bump intentionally when adopting newer language features.
-channel = "1.96"
+channel = "1.97"
 components = ["rustfmt", "clippy", "rust-analyzer","rust-src"]

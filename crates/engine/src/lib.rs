@@ -2,7 +2,7 @@
 //!
 //! This crate holds the low-level "messages + backend + tool executor →
 //! streaming events" loop. It is intentionally thin: no system-prompt
-//! assembly, no REPL state, no swarm — those live in `crab-agents` which
+//! assembly, no REPL state, no team orchestration — those live in `crab-agents` which
 //! wraps the engine.
 //!
 //! Headless hosts and any SDK consumer should depend on `crab-engine` directly

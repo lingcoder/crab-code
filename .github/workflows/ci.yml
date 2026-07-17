@@ -28,7 +28,7 @@ jobs:
           # Pin a floor toolchain to keep CI reproducible across Rust
           # releases — new clippy lints in stable don't break builds until
           # this is bumped intentionally.
-          toolchain: "1.96"
+          toolchain: "1.97"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

@@ -39,7 +39,7 @@ impl PermissionDecisionEvent {
     }
 }
 
-/// Broadcasts permission decisions across all teammates in a swarm.
+/// Broadcasts permission decisions across all teammates in a team.
 ///
 /// Backed by a [`tokio::sync::broadcast`] channel so that every subscriber
 /// receives every event. Subscribers that fall behind will skip older events

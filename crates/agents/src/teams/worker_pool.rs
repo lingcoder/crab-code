@@ -19,10 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 use crab_engine::QueryConfig;
 
-use crab_swarm::bus::{AgentMessage, Envelope, MessageBus};
-use crab_swarm::mailbox::MessageRouter;
-use crab_swarm::retry::{RetryDecision, RetryPolicy, RetryTracker};
-use crab_swarm::roster::{Team, TeamMode};
+use crab_team::bus::{AgentMessage, Envelope, MessageBus};
+use crab_team::mailbox::MessageRouter;
+use crab_team::retry::{RetryDecision, RetryPolicy, RetryTracker};
+use crab_team::roster::{Team, TeamMode};
 
 use super::worker::{AgentWorker, WorkerConfig, WorkerResult};
 

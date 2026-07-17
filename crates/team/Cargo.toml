@@ -1,5 +1,5 @@
 [package]
-name = "crab-swarm"
+name = "crab-team"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 
 
 repository.workspace = true
-description = "Multi-agent swarm primitives for Crab Code"
+description = "Multi-agent team primitives for Crab Code"
 
 [dependencies]
 crab-core.workspace = true

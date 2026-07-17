@@ -14,7 +14,7 @@ use crab_core::model::ModelId;
 use crab_core::tool::ToolContext;
 use crab_engine::QueryConfig;
 use crab_session::{Conversation, CostAccumulator};
-use crab_swarm::backend::{TeammateRunCtx, TeammateRunner};
+use crab_team::backend::{TeammateRunCtx, TeammateRunner};
 use crab_tools::executor::ToolExecutor;
 use crab_tools::registry::ToolRegistry;
 use tokio::sync::mpsc;
@@ -168,7 +168,7 @@ fn build_def_registry(parent: &ToolRegistry, def: &AgentDefinition) -> ToolRegis
     reg
 }
 
-/// Build a teammate runner for the in-process swarm backend.
+/// Build a teammate runner for the in-process teammate backend.
 ///
 /// Each spawned teammate waits for its first inbound message, then runs an
 /// agent loop seeded with its configured system prompt against that message

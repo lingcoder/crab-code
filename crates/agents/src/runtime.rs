@@ -752,7 +752,7 @@ impl AgentRuntime {
     /// overlay.
     #[must_use]
     pub fn team_snapshot(&self) -> TeamSnapshot {
-        use crab_swarm::SwarmBackend as _;
+        use crab_team::TeammateBackend as _;
         let members = self
             .team_coordinator
             .backend()

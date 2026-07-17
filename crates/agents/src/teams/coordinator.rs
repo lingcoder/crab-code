@@ -14,7 +14,7 @@
 use serde_json::Value;
 
 use crate::coordinator::PermissionSyncManager;
-use crab_swarm::backend::{InProcessBackend, SwarmBackend, TeammateConfig, TeammateRunner};
+use crab_team::backend::{InProcessBackend, TeammateBackend, TeammateConfig, TeammateRunner};
 
 use super::spawn::SPAWN_AGENT_ACTION;
 
@@ -374,7 +374,7 @@ mod tests {
             let calls = std::sync::Arc::clone(&calls);
             coord.ensure_runner(move || {
                 calls.fetch_add(1, Ordering::SeqCst);
-                std::sync::Arc::new(|ctx: crab_swarm::backend::TeammateRunCtx| {
+                std::sync::Arc::new(|ctx: crab_team::backend::TeammateRunCtx| {
                     Box::pin(async move { ctx.cancel.cancelled().await })
                 })
             });

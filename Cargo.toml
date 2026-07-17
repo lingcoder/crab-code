@@ -82,7 +82,7 @@ keyring = "4"
 oauth2 = "5"
 
 # ─── WebSocket / MCP ───
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 rmcp = { version = "2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
@@ -132,7 +132,7 @@ agent-client-protocol = "1"
 async-trait = "0.1"
 webbrowser = "1"
 urlencoding = "2"
-infer = "0.19"
+infer = "0.22"
 shellexpand = "3"
 axum = { version = "0.8", features = ["ws"] }
 croner = "3"
@@ -179,7 +179,7 @@ crab-engine = { path = "crates/engine" }
 crab-remote = { path = "crates/remote" }
 crab-sandbox = { path = "crates/sandbox" }
 crab-cron = { path = "crates/cron" }
-crab-swarm = { path = "crates/swarm" }
+crab-team = { path = "crates/team" }
 crab-commands = { path = "crates/commands" }
 
 [workspace.lints.rust]
