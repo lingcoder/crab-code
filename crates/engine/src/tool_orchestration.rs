@@ -236,6 +236,7 @@ async fn invoke_tool(
             tool_output: None,
             tool_exit_code: None,
             session_id: session_id.map(String::from),
+            transcript_path: None,
         };
         match hooks.run(HookTrigger::PreToolUse, &hook_ctx).await {
             Ok(hr) if hr.action == HookAction::Deny => {
@@ -339,6 +340,7 @@ async fn invoke_tool(
             tool_output: Some(output_text),
             tool_exit_code: Some(exit_code),
             session_id: session_id.map(String::from),
+            transcript_path: None,
         };
         if let Err(e) = hooks.run(HookTrigger::PostToolUse, &hook_ctx).await {
             tracing::warn!(error = %e, "PostToolUse hook error");

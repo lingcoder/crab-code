@@ -509,8 +509,7 @@ mod tests {
             trigger: HookTrigger::PreToolUse,
             command: "guard".into(),
             timeout_secs: 10,
-            tool_filter: vec!["reader".into()],
-            match_pattern: None,
+            matcher: Some("reader".into()),
         }]);
 
         let spawned = ste.spawn_if_eligible(
@@ -531,8 +530,7 @@ mod tests {
             trigger: HookTrigger::PreToolUse,
             command: "guard".into(),
             timeout_secs: 10,
-            tool_filter: vec!["other_tool".into()],
-            match_pattern: None,
+            matcher: Some("other_tool".into()),
         }]);
         let spawned = ste.spawn_if_eligible(
             &block("tu_2", "reader"),

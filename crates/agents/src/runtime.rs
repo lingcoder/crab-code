@@ -42,7 +42,7 @@ pub struct RuntimeInitConfig {
     /// Raw `hooks` JSON from user settings (the `hooks` field of
     /// `crab_config::Config`). When present and not disabled, the runtime
     /// builds a [`crab_hooks::HookExecutor`] from it and wires it into the
-    /// engine so `PreToolUse` / `PostToolUse` / `Stop` / `Compact` /
+    /// engine so `PreToolUse` / `PostToolUse` / `Stop` / `PostCompact` /
     /// `Notification` hooks actually run.
     pub hooks: Option<serde_json::Value>,
     /// When `true`, all hooks are skipped even if `hooks` is populated
@@ -916,6 +916,7 @@ impl AgentRuntime {
             tool_output: None,
             tool_exit_code: None,
             session_id: session_id.map(String::from),
+            transcript_path: None,
         };
         tokio::spawn(async move {
             if let Err(e) = hooks.run(trigger, &ctx).await {
@@ -942,6 +943,7 @@ impl AgentRuntime {
             tool_output: None,
             tool_exit_code: None,
             session_id: session_id.map(String::from),
+            transcript_path: None,
         };
         tokio::spawn(async move {
             if let Err(e) = hooks.run(crab_hooks::HookTrigger::FileChanged, &ctx).await {
@@ -978,6 +980,7 @@ impl AgentRuntime {
                     tool_output: None,
                     tool_exit_code: None,
                     session_id,
+                    transcript_path: None,
                 };
                 if let Err(e) = hooks.run(crab_hooks::HookTrigger::Notification, &ctx).await {
                     tracing::warn!(error = %e, "notification hook failed");
@@ -1185,11 +1188,10 @@ impl AgentRuntime {
 /// Build a [`crab_hooks::HookExecutor`] from the raw settings `hooks` JSON.
 ///
 /// Returns `None` when hooks are disabled, the value is absent, or it
-/// contains no usable hook definitions. The on-disk schema is
-/// `crab_config::hooks::Hook` (`toolName` / `timeoutMs`); this maps each one
-/// to the engine-facing `crab_hooks::HookDef` (`match_pattern` /
-/// `timeout_secs`), so the two schemas stay decoupled.
-fn build_hook_executor(
+/// contains no usable hook definitions. The on-disk schema is the CC hooks
+/// shape parsed by `crab_config::hooks::parse_hooks`; each flattened
+/// `Hook` maps 1:1 onto the engine-facing `crab_hooks::HookDef`.
+pub fn build_hook_executor(
     hooks: Option<&serde_json::Value>,
     disable_hooks: bool,
 ) -> Option<Arc<crab_hooks::HookExecutor>> {
@@ -1212,9 +1214,8 @@ fn build_hook_executor(
         .map(|h| crab_hooks::HookDef {
             trigger: h.trigger,
             command: h.command,
-            timeout_secs: h.timeout_ms.div_ceil(1000).max(1),
-            tool_filter: Vec::new(),
-            match_pattern: h.tool_name,
+            timeout_secs: h.timeout_secs,
+            matcher: h.matcher,
         })
         .collect();
     Some(Arc::new(crab_hooks::HookExecutor::with_hooks(defs)))
@@ -1408,17 +1409,23 @@ mod tests {
 
     #[test]
     fn build_hook_executor_maps_config_hooks() {
-        let hooks = serde_json::json!([
-            {"trigger": "pre_tool_use", "toolName": "bash", "command": "check", "timeoutMs": 2500},
-            {"trigger": "stop", "command": "echo done"}
-        ]);
+        let hooks = serde_json::json!({
+            "PreToolUse": [
+                {"matcher": "bash", "hooks": [{"type": "command", "command": "check", "timeout": 3}]}
+            ],
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "echo done"}]}
+            ]
+        });
         let exec = build_hook_executor(Some(&hooks), false).expect("executor built");
         assert_eq!(exec.len(), 2);
     }
 
     #[tokio::test]
     async fn assembly_wires_hooks_cache_and_retry() {
-        let hooks = serde_json::json!([{"trigger": "pre_tool_use", "command": "echo hi"}]);
+        let hooks = serde_json::json!({
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "echo hi"}]}]
+        });
         let (runtime, _meta) = AgentRuntime::init(init_config(Some(hooks), false)).await;
         let cfg = runtime.loop_config();
         assert!(cfg.hook_executor.is_some(), "hooks should be wired");
@@ -1428,7 +1435,9 @@ mod tests {
 
     #[tokio::test]
     async fn assembly_omits_hooks_when_disabled() {
-        let hooks = serde_json::json!([{"trigger": "pre_tool_use", "command": "echo hi"}]);
+        let hooks = serde_json::json!({
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "echo hi"}]}]
+        });
         let (runtime, _meta) = AgentRuntime::init(init_config(Some(hooks), true)).await;
         assert!(runtime.loop_config().hook_executor.is_none());
     }

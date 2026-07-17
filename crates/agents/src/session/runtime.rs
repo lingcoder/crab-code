@@ -377,6 +377,7 @@ impl AgentSession {
             tool_output: None,
             tool_exit_code: None,
             session_id: self.config.session_id.clone(),
+            transcript_path: None,
         };
         match hooks
             .run(crab_hooks::HookTrigger::UserPromptSubmit, &hook_ctx)
@@ -1050,8 +1051,7 @@ mod tests {
             trigger: HookTrigger::UserPromptSubmit,
             command: "echo ok".into(),
             timeout_secs: 10,
-            tool_filter: vec![],
-            match_pattern: None,
+            matcher: None,
         };
         session.config.hook_executor = Some(Arc::new(HookExecutor::with_hooks(vec![hook])));
         let out = session.fire_user_prompt_submit_hook("hello").await;

@@ -1,31 +1,101 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 pub use crab_core::hook::HookTrigger;
 
-/// A single hook definition.
+/// Default per-hook timeout in seconds, matching the CC hooks protocol.
+pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 600;
+
+/// A single hook definition, flattened from the CC-shaped config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Hook {
     /// When this hook fires.
     pub trigger: HookTrigger,
-    /// Optional tool name matcher (glob pattern). Only for Pre/PostToolUse.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
+    /// Matcher pattern from the enclosing group. `None` / empty / `"*"`
+    /// matches everything; otherwise exact name, `|`-separated names, or a
+    /// regex. Only meaningful for tool events.
+    pub matcher: Option<String>,
     /// Shell command to execute.
     pub command: String,
-    /// Timeout in milliseconds. Defaults to 60000 (60s).
-    #[serde(default = "default_timeout")]
-    pub timeout_ms: u64,
+    /// Timeout in seconds.
+    pub timeout_secs: u64,
 }
 
-fn default_timeout() -> u64 {
-    60_000
+/// One matcher group in the CC hooks config: a matcher pattern plus the
+/// hooks that run when it matches.
+#[derive(Debug, Clone, Deserialize)]
+struct MatcherGroup {
+    #[serde(default)]
+    matcher: Option<String>,
+    #[serde(default)]
+    hooks: Vec<HookEntry>,
 }
 
-/// Parse hooks from the `hooks` field of settings (a JSON value).
+/// One hook entry inside a matcher group.
+#[derive(Debug, Clone, Deserialize)]
+struct HookEntry {
+    /// Hook execution type. Only `"command"` is supported; other values
+    /// are skipped with a warning.
+    #[serde(default = "default_hook_type", rename = "type")]
+    hook_type: String,
+    #[serde(default)]
+    command: String,
+    /// Timeout in seconds (CC protocol semantics).
+    #[serde(default)]
+    timeout: Option<u64>,
+}
+
+fn default_hook_type() -> String {
+    "command".to_string()
+}
+
+/// Parse hooks from the `hooks` field of settings.
+///
+/// Expects the CC hooks shape — a map keyed by event name:
+///
+/// ```json
+/// {
+///   "PreToolUse": [
+///     {
+///       "matcher": "Edit|Write",
+///       "hooks": [{ "type": "command", "command": "...", "timeout": 600 }]
+///     }
+///   ]
+/// }
+/// ```
 pub fn parse_hooks(value: &serde_json::Value) -> crab_core::Result<Vec<Hook>> {
-    let hooks: Vec<Hook> = serde_json::from_value(value.clone())
+    let groups: BTreeMap<HookTrigger, Vec<MatcherGroup>> = serde_json::from_value(value.clone())
         .map_err(|e| crab_core::Error::Config(format!("hooks parse error: {e}")))?;
+
+    let mut hooks = Vec::new();
+    for (trigger, matcher_groups) in groups {
+        for group in matcher_groups {
+            for entry in group.hooks {
+                if entry.hook_type != "command" {
+                    tracing::warn!(
+                        hook_type = entry.hook_type.as_str(),
+                        event = trigger.event_name(),
+                        "skipping unsupported hook type (only \"command\" is supported)"
+                    );
+                    continue;
+                }
+                if entry.command.is_empty() {
+                    tracing::warn!(
+                        event = trigger.event_name(),
+                        "skipping hook with empty command"
+                    );
+                    continue;
+                }
+                hooks.push(Hook {
+                    trigger,
+                    matcher: group.matcher.clone(),
+                    command: entry.command,
+                    timeout_secs: entry.timeout.unwrap_or(DEFAULT_HOOK_TIMEOUT_SECS),
+                });
+            }
+        }
+    }
     Ok(hooks)
 }
 
@@ -42,74 +112,114 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hook_trigger_serde_roundtrip() {
-        let trigger = HookTrigger::PreToolUse;
-        let json = serde_json::to_string(&trigger).unwrap();
-        assert_eq!(json, r#""pre_tool_use""#);
-        let back: HookTrigger = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, trigger);
+    fn parse_cc_shaped_hooks() {
+        let json = serde_json::json!({
+            "PreToolUse": [
+                {
+                    "matcher": "Edit|Write",
+                    "hooks": [
+                        { "type": "command", "command": "check.sh", "timeout": 30 }
+                    ]
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        { "type": "command", "command": "log.sh" }
+                    ]
+                }
+            ]
+        });
+        let mut hooks = parse_hooks(&json).unwrap();
+        hooks.sort_by_key(|h| h.command.clone());
+        assert_eq!(hooks.len(), 2);
+
+        assert_eq!(hooks[0].trigger, HookTrigger::PreToolUse);
+        assert_eq!(hooks[0].matcher.as_deref(), Some("Edit|Write"));
+        assert_eq!(hooks[0].command, "check.sh");
+        assert_eq!(hooks[0].timeout_secs, 30);
+
+        assert_eq!(hooks[1].trigger, HookTrigger::PostToolUse);
+        assert_eq!(hooks[1].timeout_secs, DEFAULT_HOOK_TIMEOUT_SECS);
     }
 
     #[test]
-    fn hook_trigger_all_variants() {
-        let triggers = [
-            (HookTrigger::PreToolUse, "pre_tool_use"),
-            (HookTrigger::PostToolUse, "post_tool_use"),
-            (HookTrigger::UserPromptSubmit, "user_prompt_submit"),
-            (HookTrigger::PostSampling, "post_sampling"),
-            (HookTrigger::Stop, "stop"),
-            (HookTrigger::Notification, "notification"),
-            (HookTrigger::SessionStart, "session_start"),
-            (HookTrigger::SessionEnd, "session_end"),
-            (HookTrigger::Setup, "setup"),
-            (HookTrigger::FileChanged, "file_changed"),
-            (HookTrigger::Compact, "compact"),
-        ];
-        for (trigger, expected) in triggers {
-            let json = serde_json::to_string(&trigger).unwrap();
-            assert_eq!(json, format!("\"{expected}\""));
-        }
-    }
-
-    #[test]
-    fn hook_trigger_prompt_submit_alias() {
-        let parsed: HookTrigger = serde_json::from_str("\"prompt_submit\"").unwrap();
-        assert_eq!(parsed, HookTrigger::UserPromptSubmit);
-        let parsed2: HookTrigger = serde_json::from_str("\"user_prompt_submit\"").unwrap();
-        assert_eq!(parsed2, HookTrigger::UserPromptSubmit);
-    }
-
-    #[test]
-    fn parse_hook_definition() {
-        let json = serde_json::json!([{
-            "trigger": "pre_tool_use",
-            "toolName": "bash",
-            "command": "echo checking",
-            "timeoutMs": 5000
-        }]);
+    fn parse_hooks_without_matcher() {
+        let json = serde_json::json!({
+            "SessionStart": [
+                { "hooks": [{ "type": "command", "command": "init.sh" }] }
+            ]
+        });
         let hooks = parse_hooks(&json).unwrap();
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0].trigger, HookTrigger::PreToolUse);
-        assert_eq!(hooks[0].tool_name.as_deref(), Some("bash"));
-        assert_eq!(hooks[0].command, "echo checking");
-        assert_eq!(hooks[0].timeout_ms, 5000);
+        assert_eq!(hooks[0].trigger, HookTrigger::SessionStart);
+        assert!(hooks[0].matcher.is_none());
     }
 
     #[test]
-    fn parse_hook_default_timeout() {
-        let json = serde_json::json!([{
-            "trigger": "post_tool_use",
-            "command": "echo done"
-        }]);
+    fn parse_hooks_multiple_hooks_per_group() {
+        let json = serde_json::json!({
+            "Stop": [
+                {
+                    "hooks": [
+                        { "type": "command", "command": "a.sh" },
+                        { "type": "command", "command": "b.sh" }
+                    ]
+                }
+            ]
+        });
         let hooks = parse_hooks(&json).unwrap();
-        assert_eq!(hooks[0].timeout_ms, 60_000);
+        assert_eq!(hooks.len(), 2);
+    }
+
+    #[test]
+    fn parse_hooks_skips_unsupported_type() {
+        let json = serde_json::json!({
+            "PreToolUse": [
+                {
+                    "hooks": [
+                        { "type": "prompt", "command": "ignored" },
+                        { "type": "command", "command": "kept.sh" }
+                    ]
+                }
+            ]
+        });
+        let hooks = parse_hooks(&json).unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].command, "kept.sh");
+    }
+
+    #[test]
+    fn parse_hooks_default_type_is_command() {
+        let json = serde_json::json!({
+            "Notification": [
+                { "hooks": [{ "command": "notify.sh" }] }
+            ]
+        });
+        let hooks = parse_hooks(&json).unwrap();
+        assert_eq!(hooks.len(), 1);
     }
 
     #[test]
     fn parse_empty_hooks() {
-        let json = serde_json::json!([]);
+        let json = serde_json::json!({});
         let hooks = parse_hooks(&json).unwrap();
         assert!(hooks.is_empty());
+    }
+
+    #[test]
+    fn parse_invalid_hooks_returns_error() {
+        let json = serde_json::json!(["not", "a", "map"]);
+        assert!(parse_hooks(&json).is_err());
+    }
+
+    #[test]
+    fn parse_unknown_event_name_returns_error() {
+        let json = serde_json::json!({
+            "NoSuchEvent": [{ "hooks": [{ "command": "x" }] }]
+        });
+        assert!(parse_hooks(&json).is_err());
     }
 
     #[test]
@@ -122,34 +232,15 @@ mod tests {
     #[test]
     fn load_hooks_from_settings_with_hooks() {
         let settings = crate::Config {
-            hooks: Some(serde_json::json!([{
-                "trigger": "user_prompt_submit",
-                "command": "echo hi"
-            }])),
+            hooks: Some(serde_json::json!({
+                "UserPromptSubmit": [
+                    { "hooks": [{ "type": "command", "command": "echo hi" }] }
+                ]
+            })),
             ..Default::default()
         };
         let hooks = load_hooks(&settings).unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].trigger, HookTrigger::UserPromptSubmit);
-    }
-
-    #[test]
-    fn load_hooks_prompt_submit_alias_compat() {
-        let settings = crate::Config {
-            hooks: Some(serde_json::json!([{
-                "trigger": "prompt_submit",
-                "command": "echo hi"
-            }])),
-            ..Default::default()
-        };
-        let hooks = load_hooks(&settings).unwrap();
-        assert_eq!(hooks[0].trigger, HookTrigger::UserPromptSubmit);
-    }
-
-    #[test]
-    fn parse_invalid_hooks_returns_error() {
-        let json = serde_json::json!({"not": "an array"});
-        let result = parse_hooks(&json);
-        assert!(result.is_err());
     }
 }

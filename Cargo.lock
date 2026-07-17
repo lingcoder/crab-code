@@ -1308,6 +1308,8 @@ version = "0.1.0"
 dependencies = [
  "crab-core",
  "crab-process",
+ "futures",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

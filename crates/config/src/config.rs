@@ -553,7 +553,9 @@ model = "deepseek-chat"
             permission_mode: Some("trust-project".into()),
             system_prompt: Some("Be helpful".into()),
             mcp_servers: Some(serde_json::json!({"server1": {}})),
-            hooks: Some(serde_json::json!([{"trigger": "pre_tool_use", "command": "echo"}])),
+            hooks: Some(serde_json::json!({
+                "PreToolUse": [{"hooks": [{"type": "command", "command": "echo"}]}]
+            })),
             theme: Some("dark".into()),
             git_context: Some(GitContextConfig::default()),
             env: Some(HashMap::from([("FOO".into(), "bar".into())])),

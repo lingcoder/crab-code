@@ -493,13 +493,11 @@ command = "fs-mcp"
 [mcp_servers.github]
 command = "gh-mcp"
 
-[[hooks]]
-trigger = "pre_tool_use"
-command = "echo a"
+[[hooks.PreToolUse]]
+hooks = [{ type = "command", command = "echo a" }]
 
-[[hooks]]
-trigger = "stop"
-command = "echo b"
+[[hooks.Stop]]
+hooks = [{ type = "command", command = "echo b" }]
 
 [env]
 MY_KEY = "v1"

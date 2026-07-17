@@ -47,3 +47,4 @@ pub use crab_session::{
 pub use crab_skills::{Skill, SkillRegistry, SkillTrigger};
 pub use crab_tools::executor::{PermissionHandler, ToolExecutor};
 pub use crab_tools::registry::ToolRegistry;
+pub use runtime::build_hook_executor;

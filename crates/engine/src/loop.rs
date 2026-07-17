@@ -421,27 +421,6 @@ pub async fn query_loop(
         // Reset on non-truncated success
         state.output_token_retries = 0;
 
-        // PostSampling hook: allow hooks to rewrite the assistant text
-        // before it's persisted or seen by downstream consumers. Only the
-        // text is mutable — tool_use blocks stay verbatim so the tool
-        // boundary contract can't be circumvented.
-        if let Some(hooks) = config.hook_executor.as_deref() {
-            let hook_ctx = HookContext {
-                tool_name: String::new(),
-                tool_input: String::new(),
-                working_dir: Some(tool_ctx.working_dir.clone()),
-                tool_output: Some(outcome.message.text()),
-                tool_exit_code: None,
-                session_id: config.session_id.clone(),
-            };
-            if let Ok(hr) = hooks.run(HookTrigger::PostSampling, &hook_ctx).await
-                && hr.action == HookAction::Modify
-                && let Some(new_text) = hr.message
-            {
-                rewrite_assistant_text(&mut outcome.message, &new_text);
-            }
-        }
-
         // Add assistant message to conversation
         let has_tool_use = outcome.message.has_tool_use();
         if let Some(persister) = &config.session_persister {
@@ -459,6 +438,7 @@ pub async fn query_loop(
                     tool_output: Some(outcome.message.text()),
                     tool_exit_code: None,
                     session_id: config.session_id.clone(),
+                    transcript_path: None,
                 };
                 if let Ok(hr) = hooks.run(HookTrigger::Stop, &hook_ctx).await
                     && hr.action == HookAction::Retry
@@ -743,36 +723,6 @@ fn is_prompt_too_long_error(err: &crab_core::Error) -> bool {
         return kind == ApiErrorKind::PromptTooLong;
     }
     message_is_prompt_too_long(&err.to_string())
-}
-
-/// Replace the first `Text` block in an assistant message with `new_text`.
-///
-/// `PostSampling` hooks may rewrite the assistant's narrative text but
-/// never `tool_use` blocks or images. If the message has no text block,
-/// one is prepended — otherwise all text blocks are collapsed into the
-/// first, preserving order relative to `tool_use` blocks.
-fn rewrite_assistant_text(msg: &mut crab_core::message::Message, new_text: &str) {
-    use crab_core::message::ContentBlock;
-
-    let mut wrote = false;
-    msg.content.retain_mut(|block| {
-        if let ContentBlock::Text { text } = block {
-            if wrote {
-                return false;
-            }
-            *text = new_text.to_string();
-            wrote = true;
-        }
-        true
-    });
-    if !wrote {
-        msg.content.insert(
-            0,
-            ContentBlock::Text {
-                text: new_text.to_string(),
-            },
-        );
-    }
 }
 
 /// Whether the stop reason indicates the output was truncated at `max_tokens`.
@@ -1273,9 +1223,10 @@ fn fire_compact_hook(
         tool_output: None,
         tool_exit_code: None,
         session_id: session_id.map(String::from),
+        transcript_path: None,
     };
     tokio::spawn(async move {
-        if let Err(e) = hooks.run(HookTrigger::Compact, &ctx).await {
+        if let Err(e) = hooks.run(HookTrigger::PostCompact, &ctx).await {
             tracing::warn!(error = %e, "compact hook failed");
         }
     });

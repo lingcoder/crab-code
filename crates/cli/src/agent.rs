@@ -446,6 +446,10 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         );
         let resolved = resolve_slash_command(&prompt, &skill_registry);
         let mut session = AgentSession::new(session_config, backend, registry);
+        session.config.hook_executor = crab_agents::build_hook_executor(
+            settings.hooks.as_ref(),
+            cli.bare || settings.disable_all_hooks.unwrap_or(false),
+        );
         session
             .executor
             .set_permission_handler(Arc::new(CliPermissionHandler));
@@ -491,6 +495,10 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
                 &permission_mode,
             );
             let mut session = AgentSession::new(session_config, backend, registry);
+            session.config.hook_executor = crab_agents::build_hook_executor(
+                settings.hooks.as_ref(),
+                cli.bare || settings.disable_all_hooks.unwrap_or(false),
+            );
             session
                 .executor
                 .set_permission_handler(Arc::new(CliPermissionHandler));

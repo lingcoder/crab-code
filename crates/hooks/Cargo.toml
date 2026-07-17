@@ -9,6 +9,8 @@ description = "Lifecycle hook system for Crab Code"
 [dependencies]
 crab-core.workspace = true
 crab-process.workspace = true
+futures.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

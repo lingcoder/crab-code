@@ -13,11 +13,11 @@
 | Layer | Crate | Responsibility |
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `cli` | CLI entry point (clap) + composition root |
-| **Layer 3** Engine Layer | `agents` `engine` `session` `tui` `remote` | Query loop, multi-agent orchestration, session state, terminal UI, remote-control WebSocket server + client |
-| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `process` `sandbox` `ide` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
+| **Layer 3** Engine Layer | `agents` `engine` `tui` `remote` | Query loop, multi-agent orchestration, terminal UI, remote-control WebSocket server + client |
+| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `process` `sandbox` `ide` `session` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, session state + compaction, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
 | **Layer 1** Foundation Layer | `core` `utils` `config` `auth` | Domain model, utilities, layered config, authentication |
 
-> Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agents`. See §5.3 for inner-layer rules (aggregator vs leaf service; Layer 3 Event-only control flow).
+> Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agents`. See §5.3 for inner-layer rules (aggregator vs leaf service; the Layer 3 orchestration chain).
 
 ### Architecture Diagram
 
@@ -30,25 +30,25 @@
 │  └──────┬───────┘                                                        │
 ├─────────┼────────────────────────────────────────────────────────────────┤
 │         │                 Layer 3: Engine Layer                          │
-│  ┌──────▼──────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────────┐ │
-│  │   agents   │ │  engine  │ │ session  │ │  tui   │ │   remote    │ │
-│  │ orchestra + │ │ raw loop │ │ state +  │ │ ratatui│ │ WS server + │ │
-│  │ team +      │ │ stream + │ │ compact  │ │ views  │ │ client +    │ │
-│  │ proactive   │ │ tooluse  │ │ memory   │ │        │ │ crab-proto  │ │
-│  └────┬────────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └──────┬──────┘ │
-├───────┼────────────────┼─────────────┼───────────┼────────────┼────────┤
-│       │                │  Layer 2: Service Layer │            │        │
-│  ┌────▼─────┐ ┌────────▼──┐ ┌────────┐ ┌────────▼─┐ ┌────────▼────┐  │
+│  ┌──────▼──────┐ ┌──────────┐ ┌────────┐ ┌─────────────┐              │
+│  │   agents    │ │  engine  │ │  tui   │ │   remote    │              │
+│  │ orchestra + │ │ raw loop │ │ ratatui│ │ WS server + │              │
+│  │ team +      │ │ stream + │ │ views  │ │ client +    │              │
+│  │ proactive   │ │ tooluse  │ │        │ │ crab-proto  │              │
+│  └─────────────┘ └──────────┘ └────────┘ └─────────────┘              │
+├───────────────────────────────────────────────────────────────────────┤
+│                         Layer 2: Service Layer                        │
+│  ┌──────────┐ ┌───────────┐ ┌────────┐ ┌──────────┐ ┌─────────────┐  │
 │  │  tools   │ │   mcp     │ │  api   │ │ telemetry│ │   plugin    │  │
 │  │ aggreg   │ │ JSON-RPC  │ │ Llm-   │ │  local   │ │ WASM +      │  │
 │  │ 40 built │ │ +streams  │ │ Backend│ │  only    │ │ skill↔mcp   │  │
 │  └──┬──┬──┬─┘ └───────────┘ └────────┘ └──────────┘ └─────────────┘  │
 │     │  │  │                                                           │
 │  ┌──▼┐┌▼─┐┌▼──────┐ ┌──────────┐ ┌────────┐ ┌───────┐ ┌──────┐ ┌───┐ │
-│  │fs ││pr││sandbox│ │  remote  │ │  ide   │ │ skill │ │memory│ │.. │ │
-│  │   ││oc││seat+  │ │claude.ai │ │IDE MCP │ │ reg + │ │store │ │   │ │
-│  │   ││  ││landlk+│ │trigger + │ │ client │ │builtin│ │ rank │ │   │ │
-│  │   ││  ││wsl    │ │ schedule │ │        │ │       │ │ age  │ │   │ │
+│  │fs ││pr││sandbox│ │ session  │ │  ide   │ │ skill │ │memory│ │.. │ │
+│  │   ││oc││seat+  │ │ state +  │ │IDE MCP │ │ reg + │ │store │ │   │ │
+│  │   ││  ││landlk+│ │ compact +│ │ client │ │builtin│ │ rank │ │   │ │
+│  │   ││  ││wsl    │ │ costs    │ │        │ │       │ │ age  │ │   │ │
 │  └───┘└──┘└───────┘ └──────────┘ └────────┘ └───────┘ └──────┘ └───┘ │
 ├───────────────────────────────────────────────────────────────────────┤
 │                       Layer 1: Foundation Layer                         │
@@ -339,11 +339,11 @@ edge list is the manifest in §5.2.
 Rule 1: Upper layer -> lower layer. Reverse dependencies are prohibited.
 
 Rule 2: Layer 2 is sub-layered into aggregators and leaves.
-  - Aggregators (tools, commands, plugin, hooks) may depend on leaf services
+  - Aggregators (tools, plugin, hooks, session) may depend on leaf services
     in the same layer (tools -> fs/process/sandbox/mcp/cron; plugin ->
-    mcp/skills; hooks -> process).
+    mcp/skills; hooks -> process; session -> memory).
   - Leaf services (fs, process, mcp, acp, api, sandbox, cron, skills,
-    memory, team, telemetry) must NOT depend on each other.
+    memory, team, telemetry, commands, ide) must NOT depend on each other.
   - Example: tools -> sandbox (OK); fs -> process (NOT OK).
   - Exception 1: ide -> mcp — the IDE client *speaks* MCP; the protocol
     crate is its substrate, not a peer service.
@@ -357,12 +357,14 @@ Rule 4: telemetry is a sidecar; it does not participate in the main dependency c
 
 Rule 5: cli only does assembly; it contains no business logic.
 
-Rule 6: Layer 3 internal control flow goes via core::Event only.
-  - agents/session/tui/remote/engine do not make direct method calls that trigger
-    work in another Layer 3 crate.
-  - Exception 1: remote and agents may WRAP engine (engine does not call back up).
-  - Exception 2: agents and tui may READ session state (Conversation, costs) as a
-    data consumer; read-only access is not considered control flow.
+Rule 6: Layer 3 is an orchestration chain: engine -> agents -> tui.
+  - engine owns the raw query loop; agents wraps engine for multi-agent
+    orchestration; tui wraps agents for presentation. Dependencies flow
+    down the chain only (tui -> agents -> engine); skipping a link
+    (tui -> engine) is prohibited.
+  - remote wraps engine directly — a headless peer of tui on the chain.
+  - Cross-cutting conversation state lives in Layer 2 (session); chain
+    crates consume it like any other Layer 2 service.
 ```
 
 ---
@@ -2679,7 +2681,7 @@ proactive  = []
 
 **Responsibility**: All terminal interface rendering.
 
-Crab uses ratatui + crossterm for the terminal UI. Control flow between tui and other Layer 3 crates (agent / session / remote / engine) follows Rule 6 (§5.3): state is consumed via `core::Event` broadcasts. Read-only access to `session::Conversation` and cost accumulators is allowed.
+Crab uses ratatui + crossterm for the terminal UI. tui sits at the top of the Layer 3 orchestration chain (Rule 6, §5.3): it wraps `agents` for presentation and never reaches past it to `engine` directly. Conversation state and costs come from the Layer 2 `session` crate, consumed like any other service dependency.
 
 **Architecture overview**:
 
@@ -2927,7 +2929,7 @@ src/
     └── file_access.rs    // PostToolUse file access tracking (local-only)
 ```
 
-**Hook Triggers**: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `PostSampling`, `Stop`, `Notification`, `SessionStart`, `SessionEnd`, `Setup`, `FileChanged`, `Compact`
+**Hook Triggers**: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `Notification`, `SessionStart`, `SessionEnd`, `Setup`, `FileChanged`, `PostCompact`
 
 **Hook Actions**: `Allow` (default), `Deny` (block execution), `Modify` (alter tool input), `Retry` (request the query loop to continue instead of stopping; used by Stop hooks)
 

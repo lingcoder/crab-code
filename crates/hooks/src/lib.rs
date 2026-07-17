@@ -13,7 +13,7 @@ pub mod watcher;
 
 pub use crab_core::hook::HookTrigger;
 pub use executor::{
-    HookAction, HookContext, HookDef, HookExecutor, HookResult, StructuredHookResult,
+    DEFAULT_HOOK_TIMEOUT_SECS, HookAction, HookContext, HookDef, HookExecutor, HookResult,
 };
 pub use registry::{HookEvent, HookEventType, HookRegistry, HookSource, RegisteredHook};
 pub use types::{
