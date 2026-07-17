@@ -37,8 +37,11 @@ pub async fn print_events(
         }
 
         match event {
-            // Only print text content (index 0), not tool arguments (index 1000+)
-            Event::ContentDelta { index: 0, delta } => {
+            // Print text blocks only; tool-argument deltas arrive at
+            // indices >= TOOL_ARG_INDEX_BASE per the Event contract.
+            Event::ContentDelta { index, delta }
+                if index < crab_core::event::TOOL_ARG_INDEX_BASE =>
+            {
                 if let Some(mut s) = spinner.take() {
                     s.stop();
                 }

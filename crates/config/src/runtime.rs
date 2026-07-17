@@ -28,13 +28,13 @@ use toml::value::Table;
 /// | `CRAB_API_PROVIDER`  | `apiProvider`  |                                        |
 /// | `CRAB_DEFAULT_SHELL` | `default_shell`| `"bash"` or `"powershell"` for `!` routing |
 /// | `CRAB_BASE_URL`       | `base_url`   | universal override (highest priority)  |
-/// | `ANTHROPIC_BASE_URL` | `base_url`   | only when provider is anthropic/unset                  |
-/// | `OPENAI_BASE_URL`     | `base_url`   | only when provider is openai          |
-/// | `DEEPSEEK_BASE_URL`   | `base_url`   | only when provider is deepseek         |
 ///
-/// URL vars are **mutually exclusive** — `CRAB_BASE_URL` wins outright; otherwise the
-/// provider-specific URL matching `CRAB_API_PROVIDER` (defaulting to anthropic if unset)
-/// is used. Empty values behave the same as unset.
+/// Provider-specific URL vars (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
+/// `DEEPSEEK_BASE_URL`) are deliberately **not** mapped here: they bind to the
+/// *effective* provider, which is only known after all config layers and CLI
+/// overrides merge. `crab_api::create_backend` resolves them at backend
+/// creation as `base_url` (config / `CRAB_BASE_URL`) → provider env var →
+/// provider default.
 ///
 /// Secret env vars (`CRAB_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `<PROVIDER>_API_KEY`) are
 /// deliberately **not** mapped here — they flow through the `auth` module so they never
@@ -55,29 +55,7 @@ pub fn env_to_value(env: &HashMap<String, String>) -> Value {
     put("CRAB_MODEL", "model");
     put("CRAB_API_PROVIDER", "api_provider");
     put("CRAB_DEFAULT_SHELL", "default_shell");
-
-    // API base URL: mutually exclusive, applied conservatively.
-    //   1. CRAB_BASE_URL — universal override (highest priority).
-    //   2. <PROVIDER>_BASE_URL — only when CRAB_API_PROVIDER env is **explicitly**
-    //      set to that provider. We never pick a provider-specific URL by default,
-    //      because the active provider may come from the file layer (which env_to_value
-    //      cannot see); guessing here would silently override the wrong target.
-    let url = env
-        .get("CRAB_BASE_URL")
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            let provider = env.get("CRAB_API_PROVIDER")?;
-            let var = match provider.as_str() {
-                "anthropic" => "ANTHROPIC_BASE_URL",
-                "openai" => "OPENAI_BASE_URL",
-                "deepseek" => "DEEPSEEK_BASE_URL",
-                _ => return None,
-            };
-            env.get(var).filter(|s| !s.is_empty())
-        });
-    if let Some(v) = url {
-        root.insert("base_url".into(), Value::String(v.clone()));
-    }
+    put("CRAB_BASE_URL", "base_url");
 
     Value::Table(root)
 }
@@ -270,25 +248,22 @@ mod tests {
     }
 
     #[test]
-    fn env_to_value_url_provider_routing() {
-        // DEEPSEEK_BASE_URL only honored when CRAB_API_PROVIDER=deepseek
+    fn env_to_value_ignores_provider_specific_urls() {
+        // Provider-specific URL vars resolve at backend creation
+        // (crab_api::create_backend), never at the env layer.
         let v = env_to_value(&env_map(&[
-            ("CRAB_API_PROVIDER", "deepseek"),
+            ("ANTHROPIC_BASE_URL", "https://anthropic-proxy"),
+            ("OPENAI_BASE_URL", "https://openai-proxy"),
             ("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-            ("ANTHROPIC_BASE_URL", "https://wrong"),
         ]));
-        assert_eq!(
-            v.as_table().unwrap()["base_url"].as_str(),
-            Some("https://api.deepseek.com/v1"),
-        );
+        assert!(!v.as_table().unwrap().contains_key("base_url"));
     }
 
     #[test]
-    fn env_to_value_crab_api_url_wins_over_provider_specific() {
+    fn env_to_value_maps_crab_base_url() {
         let v = env_to_value(&env_map(&[
-            ("CRAB_API_PROVIDER", "deepseek"),
-            ("DEEPSEEK_BASE_URL", "https://provider-specific"),
             ("CRAB_BASE_URL", "https://universal"),
+            ("ANTHROPIC_BASE_URL", "https://provider-specific"),
         ]));
         assert_eq!(
             v.as_table().unwrap()["base_url"].as_str(),

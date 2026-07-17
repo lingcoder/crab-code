@@ -12,7 +12,7 @@ use crab_api::rate_limit::RetryPolicy;
 use crab_api::streaming::StreamingToolParser;
 use crab_api::types::{CacheBreakpoint, MessageRequest, StreamEvent};
 use crab_core::error::ApiErrorKind;
-use crab_core::event::Event;
+use crab_core::event::{Event, TOOL_ARG_INDEX_BASE};
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
 use crab_core::tool::{ToolContext, ToolOutput};
@@ -805,6 +805,18 @@ struct InlineExecCtx<'a> {
 /// A stream that ends without a terminal `MessageStop` is treated as a
 /// truncated transport failure (retryable `Api` error), not a complete
 /// response — its partial message is discarded and its tools are never run.
+/// Remap a `tool_use` block's natural stream index into the
+/// `TOOL_ARG_INDEX_BASE` range required by the `Event::ContentDelta`
+/// contract. The Anthropic stream uses natural block indexes; the `OpenAI`
+/// converter pre-offsets, so already-offset indexes pass through unchanged.
+fn remap_tool_block_index(tool_parser: &StreamingToolParser, index: usize) -> usize {
+    if index < TOOL_ARG_INDEX_BASE && tool_parser.is_tool_block(index) {
+        TOOL_ARG_INDEX_BASE + index
+    } else {
+        index
+    }
+}
+
 async fn stream_response(
     backend: &LlmBackend,
     req: MessageRequest<'_>,
@@ -864,7 +876,7 @@ async fn stream_response(
             StreamEvent::ContentDelta { index, delta } => {
                 let _ = event_tx
                     .send(Event::ContentDelta {
-                        index: *index,
+                        index: remap_tool_block_index(&tool_parser, *index),
                         delta: delta.clone(),
                     })
                     .await;
@@ -880,7 +892,9 @@ async fn stream_response(
             }
             StreamEvent::ContentBlockStop { index } => {
                 let _ = event_tx
-                    .send(Event::ContentBlockStop { index: *index })
+                    .send(Event::ContentBlockStop {
+                        index: remap_tool_block_index(&tool_parser, *index),
+                    })
                     .await;
             }
             StreamEvent::MessageStop => {

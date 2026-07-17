@@ -224,6 +224,12 @@ impl StreamingToolParser {
         }
     }
 
+    /// Whether the block at `index` was declared a `tool_use` block.
+    #[must_use]
+    pub fn is_tool_block(&self, index: usize) -> bool {
+        self.block_types.get(index).copied() == Some(BlockType::ToolUse)
+    }
+
     /// Get all completed tool accumulators (draining the internal buffer).
     pub fn take_completed(&mut self) -> Vec<ToolUseAccumulator> {
         std::mem::take(&mut self.completed)
@@ -562,6 +568,39 @@ mod tests {
         let tools = parser.take_completed();
         assert_eq!(tools.len(), 1);
         assert!(parser.completed_tools().is_empty());
+    }
+
+    #[test]
+    fn parser_is_tool_block() {
+        let mut parser = StreamingToolParser::new();
+        parser.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: "thinking".into(),
+            tool_id: None,
+            tool_name: None,
+        });
+        parser.process(&StreamEvent::ContentBlockStart {
+            index: 1,
+            content_type: "text".into(),
+            tool_id: None,
+            tool_name: None,
+        });
+        parser.process(&StreamEvent::ContentBlockStart {
+            index: 2,
+            content_type: "tool_use".into(),
+            tool_id: Some("tc_1".into()),
+            tool_name: Some("bash".into()),
+        });
+
+        assert!(!parser.is_tool_block(0));
+        assert!(!parser.is_tool_block(1));
+        assert!(parser.is_tool_block(2));
+        assert!(!parser.is_tool_block(99));
+
+        // Block type persists after the block completes, so late events
+        // (ContentBlockStop) still classify correctly.
+        parser.process(&StreamEvent::ContentBlockStop { index: 2 });
+        assert!(parser.is_tool_block(2));
     }
 
     #[test]

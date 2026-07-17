@@ -155,17 +155,26 @@ impl LlmBackend {
 /// - `"bedrock"` → `BedrockClient` (requires `bedrock` feature)
 /// - `"vertex"` → `VertexClient` (requires `vertex` feature)
 /// - Everything else (including `None`) → `AnthropicClient`
+///
+/// The endpoint base URL resolves as `settings.base_url` (config file or
+/// `CRAB_BASE_URL`) → the effective provider's `<PROVIDER>_BASE_URL` env var
+/// → the provider default. Resolution happens here because only this point
+/// sees the final provider after all config layers and CLI overrides.
 #[must_use]
 pub fn create_backend(settings: &crab_config::Config) -> LlmBackend {
     match settings.api_provider.as_deref() {
         Some(provider @ ("openai" | "deepseek")) => {
-            let default_url = match provider {
-                "deepseek" => "https://api.deepseek.com/v1",
-                _ => "https://api.openai.com/v1",
+            let (env_var, default_url) = match provider {
+                "deepseek" => ("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+                _ => ("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             };
-            let base_url = settings.base_url.as_deref().unwrap_or(default_url);
+            let base_url = select_base_url(
+                settings.base_url.as_deref(),
+                env_base_url(env_var),
+                default_url,
+            );
             let api_key = crab_auth::resolve_auth_key(settings);
-            LlmBackend::OpenAi(openai::OpenAiClient::new(base_url, api_key))
+            LlmBackend::OpenAi(openai::OpenAiClient::new(&base_url, api_key))
         }
         #[cfg(feature = "bedrock")]
         Some("bedrock") => {
@@ -228,12 +237,54 @@ pub fn create_backend(settings: &crab_config::Config) -> LlmBackend {
             )
         }
         _ => {
-            let base_url = settings
-                .base_url
-                .as_deref()
-                .unwrap_or("https://api.anthropic.com");
+            let base_url = select_base_url(
+                settings.base_url.as_deref(),
+                env_base_url("ANTHROPIC_BASE_URL"),
+                "https://api.anthropic.com",
+            );
             let auth = crab_auth::create_auth_provider(settings);
-            LlmBackend::Anthropic(anthropic::AnthropicClient::new(base_url, auth))
+            LlmBackend::Anthropic(anthropic::AnthropicClient::new(&base_url, auth))
         }
+    }
+}
+
+/// Read a base-URL env var, treating empty values as unset.
+fn env_base_url(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|s| !s.is_empty())
+}
+
+/// Pick the endpoint base URL: explicit config beats the provider-specific
+/// env var, which beats the provider default.
+fn select_base_url(configured: Option<&str>, env_url: Option<String>, default: &str) -> String {
+    configured
+        .map(str::to_string)
+        .or(env_url)
+        .unwrap_or_else(|| default.to_string())
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::select_base_url;
+
+    #[test]
+    fn configured_wins_over_env_and_default() {
+        let url = select_base_url(
+            Some("https://configured"),
+            Some("https://from-env".into()),
+            "https://default",
+        );
+        assert_eq!(url, "https://configured");
+    }
+
+    #[test]
+    fn env_wins_over_default() {
+        let url = select_base_url(None, Some("https://from-env".into()), "https://default");
+        assert_eq!(url, "https://from-env");
+    }
+
+    #[test]
+    fn default_when_nothing_set() {
+        let url = select_base_url(None, None, "https://default");
+        assert_eq!(url, "https://default");
     }
 }
