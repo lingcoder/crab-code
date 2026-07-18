@@ -50,59 +50,67 @@ fn plugins_dir() -> PathBuf {
 }
 
 fn run_list() -> anyhow::Result<()> {
-    let dir = plugins_dir();
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    if !dir.exists() {
-        eprintln!("No plugins installed.");
-        eprintln!("Plugin directory: {}", dir.display());
+    // CC-installed plugins (~/.claude/plugins, gated by enabledPlugins).
+    let claude_home = crab_utils::path::home_dir_or_cwd().join(".claude");
+    let cc_enabled = crab_plugin::read_cc_enabled_plugins(&claude_home.join("settings.json"));
+    let mut plugins =
+        crab_plugin::discover_cc_installed(&claude_home.join("plugins"), cc_enabled.as_ref());
+    let cc_count = plugins.len();
+
+    // Crab-native plugin directories (same override rule as the agent path).
+    let roots = [plugins_dir(), working_dir.join(".crab").join("plugins")];
+    for plugin in crab_plugin::discover_plugins(&roots) {
+        if let Some(existing) = plugins.iter_mut().find(|p| p.name == plugin.name) {
+            *existing = plugin;
+        } else {
+            plugins.push(plugin);
+        }
+    }
+
+    if plugins.is_empty() {
+        eprintln!("No plugins loaded.");
         eprintln!();
-        eprintln!("Install a plugin with: crab plugin install <source>");
+        eprintln!(
+            "Crab reads Claude Code plugins from {} (enabled via",
+            claude_home.join("plugins").display()
+        );
+        eprintln!("Claude Code's enabledPlugins) and native plugins from:");
+        eprintln!("  {}", plugins_dir().display());
+        eprintln!("  <project>/.crab/plugins/");
         return Ok(());
     }
 
-    let entries = list_plugin_dirs(&dir)?;
-
-    if entries.is_empty() {
-        eprintln!("No plugins found in {}", dir.display());
-        return Ok(());
+    eprintln!("Loaded plugins ({}):", plugins.len());
+    for plugin in &plugins {
+        let mut parts = Vec::new();
+        if !plugin.skill_dirs.is_empty() {
+            parts.push("skills");
+        }
+        if plugin.agents_dir.is_some() {
+            parts.push("agents");
+        }
+        if plugin.hooks.is_some() {
+            parts.push("hooks");
+        }
+        if plugin.mcp_servers.is_some() {
+            parts.push("mcp");
+        }
+        let version = plugin
+            .manifest
+            .as_ref()
+            .and_then(|m| m.version.as_deref())
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
+        eprintln!("  {}{version} — {}", plugin.name, parts.join(", "));
     }
-
-    eprintln!("Installed plugins:");
-    for entry in &entries {
-        let status = plugin_status(&dir, entry);
-        eprintln!("  {entry} — {status}");
+    if cc_count > 0 {
+        eprintln!();
+        eprintln!("{cc_count} from Claude Code (~/.claude/plugins).");
     }
 
     Ok(())
-}
-
-fn list_plugin_dirs(dir: &Path) -> anyhow::Result<Vec<String>> {
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir()
-            && let Some(name) = entry.file_name().to_str()
-        {
-            names.push(name.to_string());
-        }
-    }
-    names.sort();
-    Ok(names)
-}
-
-fn plugin_status(plugins_dir: &Path, name: &str) -> &'static str {
-    let manifest = plugins_dir.join(name).join("plugin.json");
-    if !manifest.exists() {
-        return "invalid (missing plugin.json)";
-    }
-
-    // Check disabled marker
-    let disabled_marker = plugins_dir.join(name).join(".disabled");
-    if disabled_marker.exists() {
-        "disabled"
-    } else {
-        "enabled"
-    }
 }
 
 fn run_install(source: &str) -> anyhow::Result<()> {
@@ -207,54 +215,6 @@ mod tests {
     fn plugins_dir_under_global_config() {
         let dir = plugins_dir();
         assert!(dir.to_str().unwrap().contains("plugins"));
-    }
-
-    #[test]
-    fn list_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let names = list_plugin_dirs(dir.path()).unwrap();
-        assert!(names.is_empty());
-    }
-
-    #[test]
-    fn list_with_plugins() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("alpha")).unwrap();
-        std::fs::create_dir(dir.path().join("beta")).unwrap();
-        // Create a file (should be ignored)
-        std::fs::write(dir.path().join("readme.txt"), "").unwrap();
-
-        let names = list_plugin_dirs(dir.path()).unwrap();
-        assert_eq!(names, vec!["alpha", "beta"]);
-    }
-
-    #[test]
-    fn plugin_status_missing_manifest() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("test")).unwrap();
-        assert_eq!(
-            plugin_status(dir.path(), "test"),
-            "invalid (missing plugin.json)"
-        );
-    }
-
-    #[test]
-    fn plugin_status_enabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("test");
-        std::fs::create_dir(&plugin_dir).unwrap();
-        std::fs::write(plugin_dir.join("plugin.json"), "{}").unwrap();
-        assert_eq!(plugin_status(dir.path(), "test"), "enabled");
-    }
-
-    #[test]
-    fn plugin_status_disabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("test");
-        std::fs::create_dir(&plugin_dir).unwrap();
-        std::fs::write(plugin_dir.join("plugin.json"), "{}").unwrap();
-        std::fs::write(plugin_dir.join(".disabled"), "").unwrap();
-        assert_eq!(plugin_status(dir.path(), "test"), "disabled");
     }
 
     #[test]

@@ -133,7 +133,7 @@ fn decide(
     //    Runs after deny/whitelist/Dangerously/read-only so the classifier
     //    only sees ambiguous, non-read-only tool calls.
     if policy.mode == PermissionMode::Auto {
-        return match AutoModeClassifier::classify(tool_name, is_read_only, input) {
+        return match AutoModeClassifier::classify(tool_name, is_read_only, input, working_dir) {
             RiskLevel::Safe => PermissionDecision::Allow,
             RiskLevel::Risky => {
                 PermissionDecision::AskUser(format!("Auto-mode: '{tool_name}' classified as risky"))

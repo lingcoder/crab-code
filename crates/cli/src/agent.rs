@@ -508,7 +508,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         );
         session
             .executor
-            .set_permission_handler(Arc::new(CliPermissionHandler));
+            .set_permission_handler(Arc::new(CliPermissionHandler {
+                interactive: std::io::stdin().is_terminal(),
+            }));
         if let Some(hooks) = &session.config.hook_executor {
             session.executor.set_permission_hooks(Arc::clone(hooks));
         }
@@ -560,7 +562,9 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
             );
             session
                 .executor
-                .set_permission_handler(Arc::new(CliPermissionHandler));
+                .set_permission_handler(Arc::new(CliPermissionHandler {
+                    interactive: std::io::stdin().is_terminal(),
+                }));
             if let Some(hooks) = &session.config.hook_executor {
                 session.executor.set_permission_hooks(Arc::clone(hooks));
             }
@@ -631,7 +635,15 @@ pub fn resolve_slash_command(input: &str, skill_registry: &crab_skills::SkillReg
 }
 
 /// CLI-based permission handler: prints prompt to stderr, reads y/n from stdin.
-struct CliPermissionHandler;
+/// Interactive permission prompt handler for the CLI.
+///
+/// `interactive` is `true` only when stdin is a real terminal. In
+/// non-interactive (headless / piped) runs there is nobody to answer the
+/// prompt, so the handler denies with actionable feedback instead of
+/// silently reading EOF and pretending the user said "no".
+struct CliPermissionHandler {
+    interactive: bool,
+}
 
 /// Format a CLI permission prompt line, picking the best representation
 /// for well-known tools so the user sees the actual command/path instead
@@ -678,6 +690,25 @@ impl PermissionHandler for CliPermissionHandler {
         prompt: &str,
         tool_input: &Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionResult> + Send + '_>> {
+        if !self.interactive {
+            // Headless: no terminal to prompt on. Deny with guidance the
+            // model can act on, rather than reading EOF and looking like a
+            // manual rejection (which sends the model into confused retries).
+            let line = format_cli_permission(tool_name, prompt, tool_input);
+            return Box::pin(async move {
+                eprintln!("{line} — denied (non-interactive)");
+                PermissionResult {
+                    allowed: false,
+                    feedback: Some(
+                        "Permission required but no terminal is available in non-interactive \
+                         mode. Re-run with `--permission-mode acceptEdits` (auto-approve file \
+                         edits), `--auto` (heuristic auto-approve), or \
+                         `--dangerously-skip-permissions`."
+                            .to_string(),
+                    ),
+                }
+            });
+        }
         let line = format_cli_permission(tool_name, prompt, tool_input);
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
@@ -685,15 +716,16 @@ impl PermissionHandler for CliPermissionHandler {
                 eprint!("{line} [y/N] ");
                 let _ = std::io::stderr().flush();
                 let mut line = String::new();
-                if std::io::stdin().lock().read_line(&mut line).is_ok() {
-                    let answer = line.trim().to_lowercase();
-                    let allowed = answer == "y" || answer == "yes";
-                    PermissionResult {
-                        allowed,
-                        feedback: None,
-                    }
-                } else {
-                    PermissionResult::deny()
+                let n = std::io::stdin().lock().read_line(&mut line).unwrap_or(0);
+                if n == 0 {
+                    // EOF (stdin closed): treat as deny, not a blank "no".
+                    return PermissionResult::deny();
+                }
+                let answer = line.trim().to_lowercase();
+                let allowed = answer == "y" || answer == "yes";
+                PermissionResult {
+                    allowed,
+                    feedback: None,
                 }
             })
             .await
