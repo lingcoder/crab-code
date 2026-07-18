@@ -1,39 +1,26 @@
-//! Backend auto-selection: [`create_sandbox`] and the convenience
-//! [`apply_policy`] entry point that bundles "pick + apply" into one
+//! Backend selection: [`create_sandbox`] and the convenience
+//! [`apply_policy`] entry point that bundles pick + apply into one
 //! call for tool callers.
 
-use super::NoopSandbox;
-
-#[cfg(target_os = "linux")]
-use super::LandlockSandbox;
-
-#[cfg(target_os = "windows")]
-use super::WindowsJobSandbox;
-
+use super::{LandlockSandbox, NoopSandbox, SeatbeltSandbox, WindowsSandbox};
 use crate::policy::SandboxPolicy;
 use crate::traits::{Sandbox, SandboxResult};
 
-/// Create the best available sandbox backend for the current platform.
+/// Create the sandbox backend designated for the current platform.
 #[must_use]
 pub fn create_sandbox() -> Box<dyn Sandbox> {
-    #[cfg(target_os = "linux")]
-    {
-        let landlock = LandlockSandbox::new();
-        if landlock.is_available() {
-            return Box::new(landlock);
-        }
+    if cfg!(target_os = "linux") {
+        Box::new(LandlockSandbox::new())
+    } else if cfg!(target_os = "macos") {
+        Box::new(SeatbeltSandbox::new())
+    } else if cfg!(target_os = "windows") {
+        Box::new(WindowsSandbox::new())
+    } else {
+        Box::new(NoopSandbox::new())
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        return Box::new(WindowsJobSandbox::new());
-    }
-
-    #[allow(unreachable_code)]
-    Box::new(NoopSandbox::new())
 }
 
-/// Apply a sandbox policy to a command using the best available backend.
+/// Apply a sandbox policy to a command using the platform backend.
 ///
 /// Main entry point for callers (e.g. `BashTool`) that want to sandbox
 /// a child process without caring which backend is active.
@@ -48,24 +35,28 @@ pub fn apply_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::PathAccess;
     use crate::traits::SandboxBackend;
 
     #[test]
-    fn create_sandbox_returns_some_backend() {
-        let sandbox = create_sandbox();
-        let backend = sandbox.backend();
-        assert!(
-            backend == SandboxBackend::Landlock
-                || backend == SandboxBackend::WindowsJobObject
-                || backend == SandboxBackend::Noop
-        );
+    fn create_sandbox_selects_platform_backend() {
+        let expected = if cfg!(target_os = "linux") {
+            SandboxBackend::Landlock
+        } else if cfg!(target_os = "macos") {
+            SandboxBackend::Seatbelt
+        } else if cfg!(target_os = "windows") {
+            SandboxBackend::Windows
+        } else {
+            SandboxBackend::Noop
+        };
+        assert_eq!(create_sandbox().backend(), expected);
     }
 
     #[tokio::test]
-    async fn apply_policy_works() {
-        let policy = SandboxPolicy::tool_default("/project", "/project/out");
+    async fn apply_policy_reports_not_applied() {
+        let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
         let mut cmd = tokio::process::Command::new("echo");
         let result = apply_policy(&policy, &mut cmd).unwrap();
-        assert!(!result.description.is_empty());
+        assert!(!result.applied);
     }
 }

@@ -91,15 +91,14 @@ mod tests {
     }
 
     #[test]
-    fn create_sandbox_returns_real_backend() {
+    fn create_sandbox_returns_platform_backend() {
         let config = SandboxConfig::default();
         let sandbox = create_sandbox(&config);
-        // On Windows this should be WindowsJobObject, on Linux
-        // Landlock (if kernel >= 5.13), otherwise Noop.
         let backend = sandbox.backend();
         assert!(
-            backend == crab_sandbox::SandboxBackend::WindowsJobObject
+            backend == crab_sandbox::SandboxBackend::Windows
                 || backend == crab_sandbox::SandboxBackend::Landlock
+                || backend == crab_sandbox::SandboxBackend::Seatbelt
                 || backend == crab_sandbox::SandboxBackend::Noop
         );
     }

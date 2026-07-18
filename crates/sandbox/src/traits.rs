@@ -13,10 +13,12 @@ use crate::policy::SandboxPolicy;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxBackend {
-    /// Linux Landlock LSM.
+    /// Linux Landlock LSM (kernel 5.13+).
     Landlock,
-    /// Windows Job Object with restricted token.
-    WindowsJobObject,
+    /// macOS Seatbelt (`sandbox-exec` SBPL profiles).
+    Seatbelt,
+    /// Windows restricted token / `AppContainer`.
+    Windows,
     /// No sandboxing available — policy checked but not enforced.
     Noop,
 }
@@ -25,7 +27,8 @@ impl fmt::Display for SandboxBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Landlock => f.write_str("landlock"),
-            Self::WindowsJobObject => f.write_str("windows_job_object"),
+            Self::Seatbelt => f.write_str("seatbelt"),
+            Self::Windows => f.write_str("windows"),
             Self::Noop => f.write_str("noop"),
         }
     }
@@ -77,10 +80,8 @@ mod tests {
     #[test]
     fn sandbox_backend_display() {
         assert_eq!(SandboxBackend::Landlock.to_string(), "landlock");
-        assert_eq!(
-            SandboxBackend::WindowsJobObject.to_string(),
-            "windows_job_object"
-        );
+        assert_eq!(SandboxBackend::Seatbelt.to_string(), "seatbelt");
+        assert_eq!(SandboxBackend::Windows.to_string(), "windows");
         assert_eq!(SandboxBackend::Noop.to_string(), "noop");
     }
 }
