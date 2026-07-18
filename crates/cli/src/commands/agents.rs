@@ -39,16 +39,18 @@ pub fn run() -> anyhow::Result<()> {
     if !found_any {
         eprintln!("No agent definitions found.");
         eprintln!();
-        eprintln!("To create an agent, add a JSON file to:");
+        eprintln!("To create an agent, add a Markdown file with frontmatter to:");
         eprintln!("  .crab/agents/         (project-level)");
         eprintln!("  {}/  (global)", global_agents.display());
+        eprintln!("  .claude/agents/       (Claude Code compatibility)");
         eprintln!();
-        eprintln!("Example agent definition (my-agent.json):");
-        eprintln!("  {{");
-        eprintln!("    \"name\": \"my-agent\",");
-        eprintln!("    \"description\": \"A custom agent\",");
-        eprintln!("    \"model\": \"claude-sonnet-4-latest\"");
-        eprintln!("  }}");
+        eprintln!("Example agent definition (reviewer.md):");
+        eprintln!("  ---");
+        eprintln!("  name: reviewer");
+        eprintln!("  description: Reviews code for bugs");
+        eprintln!("  tools: Read, Grep");
+        eprintln!("  ---");
+        eprintln!("  You are a code reviewer. Find bugs.");
     }
 
     Ok(())
@@ -59,41 +61,50 @@ fn list_agents(dir: &Path) -> anyhow::Result<Vec<String>> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "json") {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let name = val
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("<unnamed>");
-                        let desc = val
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let model = val
-                            .get("model")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default");
-                        if desc.is_empty() {
-                            agents.push(format!("{name} (model: {model})"));
-                        } else {
-                            agents.push(format!("{name} — {desc} (model: {model})"));
-                        }
-                    } else {
-                        let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                        agents.push(format!("{filename} — invalid JSON"));
-                    }
-                }
-                Err(e) => {
-                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                    agents.push(format!("{filename} — read error: {e}"));
-                }
-            }
+        if path.extension().is_none_or(|e| e != "md") {
+            continue;
+        }
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        match std::fs::read_to_string(&path) {
+            Ok(content) => agents.push(describe_agent(&filename, &content)),
+            Err(e) => agents.push(format!("{filename} — read error: {e}")),
         }
     }
     agents.sort();
     Ok(agents)
+}
+
+/// Summarize one agent Markdown file from its frontmatter.
+fn describe_agent(filename: &str, content: &str) -> String {
+    let stem = filename.strip_suffix(".md").unwrap_or(filename);
+    let Ok((frontmatter, _)) = crab_skills::frontmatter::split_frontmatter(content) else {
+        return format!("{stem} — missing frontmatter");
+    };
+    let yaml = crab_skills::frontmatter::parse_simple_yaml(&frontmatter);
+    let name = yaml
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(stem);
+    let desc = yaml
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let tools = yaml.get("tools").and_then(|v| v.as_str());
+    let mut line = if desc.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} — {desc}")
+    };
+    if let Some(tools) = tools.filter(|s| !s.is_empty()) {
+        use std::fmt::Write as _;
+        let _ = write!(line, " (tools: {tools})");
+    }
+    line
 }
 
 #[cfg(test)]
@@ -108,46 +119,64 @@ mod tests {
     }
 
     #[test]
-    fn list_agents_with_valid_json() {
+    fn list_agents_with_frontmatter() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("test-agent.json"),
-            r#"{"name": "test", "description": "A test agent", "model": "gpt-4"}"#,
+            dir.path().join("reviewer.md"),
+            "---
+name: reviewer
+description: Reviews code
+tools: Read, Grep
+---
+You review code.",
         )
         .unwrap();
         let agents = list_agents(dir.path()).unwrap();
         assert_eq!(agents.len(), 1);
-        assert!(agents[0].contains("test"));
-        assert!(agents[0].contains("A test agent"));
-        assert!(agents[0].contains("gpt-4"));
+        assert!(agents[0].contains("reviewer"));
+        assert!(agents[0].contains("Reviews code"));
+        assert!(agents[0].contains("Read, Grep"));
     }
 
     #[test]
-    fn list_agents_with_minimal_json() {
+    fn list_agents_name_falls_back_to_stem() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("minimal.json"), r#"{"name": "min"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("helper.md"),
+            "---
+description: A helper
+---
+Help.",
+        )
+        .unwrap();
         let agents = list_agents(dir.path()).unwrap();
         assert_eq!(agents.len(), 1);
-        assert!(agents[0].contains("min"));
-        assert!(agents[0].contains("default")); // default model
+        assert!(agents[0].contains("helper"));
     }
 
     #[test]
-    fn list_agents_skips_non_json() {
+    fn list_agents_skips_non_md() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("readme.md"), "# Agents").unwrap();
-        std::fs::write(dir.path().join("agent.json"), r#"{"name": "ok"}"#).unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not an agent").unwrap();
+        std::fs::write(
+            dir.path().join("a.md"),
+            "---
+name: a
+---
+Agent.",
+        )
+        .unwrap();
         let agents = list_agents(dir.path()).unwrap();
         assert_eq!(agents.len(), 1);
     }
 
     #[test]
-    fn list_agents_invalid_json_handled() {
+    fn list_agents_missing_frontmatter_handled() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("bad.json"), "not json!").unwrap();
+        std::fs::write(dir.path().join("bad.md"), "no frontmatter here").unwrap();
         let agents = list_agents(dir.path()).unwrap();
         assert_eq!(agents.len(), 1);
-        assert!(agents[0].contains("invalid JSON"));
+        assert!(agents[0].contains("missing frontmatter"));
     }
 
     #[test]
