@@ -13,8 +13,11 @@ use crate::args::OutputFormat;
 
 /// Drain events from the receiver and print them to stdout/stderr.
 ///
-/// `OutputFormat::Json` and `StreamJson` emit NDJSON to stdout.
-/// `OutputFormat::Text` uses colored human-readable output.
+/// - `OutputFormat::StreamJson` emits one NDJSON line per event (live).
+/// - `OutputFormat::Json` accumulates the turn and emits a single result
+///   object at the end (`{type: "result", ...}`), matching CC's `-p
+///   --output-format json` so consumers can `jq .result`.
+/// - `OutputFormat::Text` uses colored human-readable output.
 pub async fn print_events(
     mut rx: mpsc::Receiver<Event>,
     output_format: OutputFormat,
@@ -23,13 +26,38 @@ pub async fn print_events(
     let mut stdout = std::io::stdout();
     let mut spinner: Option<Spinner> = None;
 
+    // Json (single-result) mode accumulator.
+    let mut json_result = String::new();
+    let mut json_usage = crab_core::model::TokenUsage::default();
+    let mut json_error: Option<String> = None;
+
     while let Some(event) = rx.recv().await {
         match output_format {
-            OutputFormat::Json | OutputFormat::StreamJson => {
+            OutputFormat::StreamJson => {
                 if let Some(value) = event_to_json(&event)
                     && let Ok(line) = serde_json::to_string(&value)
                 {
                     println!("{line}");
+                }
+                continue;
+            }
+            OutputFormat::Json => {
+                match &event {
+                    Event::ContentDelta { index, delta }
+                        if *index < crab_core::event::TOOL_ARG_INDEX_BASE =>
+                    {
+                        json_result.push_str(delta);
+                    }
+                    Event::MessageEnd { usage } => {
+                        json_usage.input_tokens += usage.input_tokens;
+                        json_usage.output_tokens += usage.output_tokens;
+                        json_usage.cache_read_tokens += usage.cache_read_tokens;
+                        json_usage.cache_creation_tokens += usage.cache_creation_tokens;
+                    }
+                    Event::Error { message } => {
+                        json_error = Some(message.clone());
+                    }
+                    _ => {}
                 }
                 continue;
             }
@@ -109,6 +137,25 @@ pub async fn print_events(
                 );
             }
             _ => {}
+        }
+    }
+
+    // Json (single-result) mode: emit one result object after the turn.
+    if output_format == OutputFormat::Json {
+        let value = json!({
+            "type": "result",
+            "subtype": if json_error.is_some() { "error" } else { "success" },
+            "is_error": json_error.is_some(),
+            "result": json_error.clone().unwrap_or(json_result),
+            "usage": {
+                "input_tokens": json_usage.input_tokens,
+                "output_tokens": json_usage.output_tokens,
+                "cache_read_tokens": json_usage.cache_read_tokens,
+                "cache_creation_tokens": json_usage.cache_creation_tokens,
+            },
+        });
+        if let Ok(line) = serde_json::to_string(&value) {
+            println!("{line}");
         }
     }
 }
