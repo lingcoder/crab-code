@@ -82,7 +82,13 @@ pub fn load_plugin(root: &Path) -> crab_core::Result<LoadedPlugin> {
     let hooks_path = root.join("hooks").join("hooks.json");
     let hooks = match std::fs::read_to_string(&hooks_path) {
         Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(value) => value.get("hooks").cloned().or(Some(value)),
+            Ok(value) => {
+                let mut value = value.get("hooks").cloned().unwrap_or(value);
+                // CC resolves ${CLAUDE_PLUGIN_ROOT} at load time so hook
+                // commands can reference files shipped with the plugin.
+                substitute_plugin_root(&mut value, root);
+                Some(value)
+            }
             Err(e) => {
                 tracing::warn!(
                     path = %hooks_path.display(),
@@ -120,6 +126,29 @@ pub fn load_plugin(root: &Path) -> crab_core::Result<LoadedPlugin> {
         hooks,
         mcp_servers,
     })
+}
+
+/// Replace `${CLAUDE_PLUGIN_ROOT}` in every string of a hooks value with
+/// the plugin root path.
+fn substitute_plugin_root(value: &mut serde_json::Value, root: &Path) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.contains("${CLAUDE_PLUGIN_ROOT}") {
+                *s = s.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                substitute_plugin_root(item, root);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                substitute_plugin_root(item, root);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Discover plugins across root directories.
@@ -259,6 +288,24 @@ mod tests {
         assert_eq!(plugins.len(), 2);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn hooks_substitute_plugin_root() {
+        let root = std::env::temp_dir().join("crab_plugin_var_sub");
+        let _ = std::fs::remove_dir_all(&root);
+        write(
+            &root.join("hooks").join("hooks.json"),
+            r#"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run.cmd start"}]}]}}"#,
+        );
+        let plugin = load_plugin(&root).unwrap();
+        let hooks = plugin.hooks.unwrap();
+        let command = hooks["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(!command.contains("${CLAUDE_PLUGIN_ROOT}"));
+        assert!(command.contains("run.cmd start"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

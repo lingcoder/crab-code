@@ -147,6 +147,12 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
 
     // CC-format plugins: skills feed the skill registry via extra
     // directories; hooks and MCP servers merge under settings-level values.
+    // CC-installed plugins (~/.claude/plugins, gated by CC's enabledPlugins)
+    // load first; same-name plugins from Crab directories override them.
+    let claude_home = crab_utils::path::home_dir_or_cwd().join(".claude");
+    let cc_enabled = crab_plugin::read_cc_enabled_plugins(&claude_home.join("settings.json"));
+    let mut plugins =
+        crab_plugin::discover_cc_installed(&claude_home.join("plugins"), cc_enabled.as_ref());
     let plugin_roots: Vec<PathBuf> = [
         crab_config::config::global_config_dir().join("plugins"),
         working_dir.join(".crab").join("plugins"),
@@ -154,7 +160,13 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
     .into_iter()
     .chain(cli.plugin_dir.iter().cloned())
     .collect();
-    let plugins = crab_plugin::discover_plugins(&plugin_roots);
+    for plugin in crab_plugin::discover_plugins(&plugin_roots) {
+        if let Some(existing) = plugins.iter_mut().find(|p| p.name == plugin.name) {
+            *existing = plugin;
+        } else {
+            plugins.push(plugin);
+        }
+    }
     let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
     for plugin in &plugins {
         tracing::debug!(plugin = plugin.name.as_str(), "loaded plugin");
