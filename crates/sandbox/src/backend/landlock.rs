@@ -1,23 +1,22 @@
-//! Linux Landlock backend.
+//! Linux Landlock backend — availability probing only.
 //!
-//! Uses the Landlock LSM (Linux Security Module), available on Linux
-//! kernel 5.13+. When Landlock is not available, `apply` returns a
-//! non-applied result rather than failing hard — callers decide whether
-//! that degradation is acceptable.
+//! Landlock (kernel 5.13+) restricts filesystem access, but a correct
+//! implementation must install the ruleset **in the child** between
+//! `fork` and `exec` (`Command::pre_exec`). Calling `restrict_self()`
+//! from `apply()` would sandbox the *entire agent process* — every
+//! subsequent file operation of the main loop, not just the spawned
+//! tool — which is why this backend deliberately does not enforce yet.
 //!
-//! Filesystem restrictions are enforced via the `landlock` crate's
-//! safe API. Network and resource limits are not yet supported by
-//! Landlock and are silently ignored.
+//! Until pre-exec enforcement lands (deferred with the rest of the
+//! sandbox wiring), `apply` reports `applied: false` so callers and
+//! `crab doctor` can tell the truth about the protection level.
 
-use landlock::{
-    ABI, Access, AccessFs, BitFlags, LandlockStatus, Ruleset, RulesetAttr, RulesetCreatedAttr,
-    path_beneath_rules,
-};
+use landlock::ABI;
 
-use crate::policy::{PathAccess, SandboxPolicy};
+use crate::policy::SandboxPolicy;
 use crate::traits::{Sandbox, SandboxBackend, SandboxResult};
 
-/// Linux Landlock sandbox.
+/// Linux Landlock sandbox (probe-only; enforcement deferred).
 pub struct LandlockSandbox {
     abi: Option<ABI>,
 }
@@ -50,58 +49,23 @@ impl Sandbox for LandlockSandbox {
         policy: &SandboxPolicy,
         _cmd: &mut tokio::process::Command,
     ) -> crab_core::Result<SandboxResult> {
-        let Some(abi) = self.abi else {
-            return Ok(SandboxResult {
-                applied: false,
-                description: "Landlock not available on this kernel".into(),
-                backend: SandboxBackend::Landlock,
-            });
+        let description = match self.abi {
+            Some(abi) => {
+                tracing::warn!(
+                    policy = policy.summary(),
+                    "Landlock enforcement is not wired yet (requires pre_exec in the child); \
+                     running WITHOUT filesystem restrictions"
+                );
+                format!(
+                    "Landlock available (ABI {}) but enforcement is deferred — policy NOT applied",
+                    abi as u32
+                )
+            }
+            None => "Landlock not available on this kernel".to_string(),
         };
-
-        let ruleset = Ruleset::default()
-            .handle_access(AccessFs::from_all(abi))
-            .map_err(|e| crab_core::Error::Other(format!("Landlock ruleset init failed: {e}")))?;
-
-        let mut ruleset_created = ruleset
-            .create()
-            .map_err(|e| crab_core::Error::Other(format!("Landlock ruleset create failed: {e}")))?;
-
-        for rule in &policy.path_rules {
-            let access = path_access_to_landlock(rule.access, abi);
-            ruleset_created = ruleset_created
-                .add_rules(path_beneath_rules(&rule.path, access))
-                .map_err(|e| {
-                    crab_core::Error::Other(format!(
-                        "Landlock add_rule({}) failed: {e}",
-                        rule.path.display()
-                    ))
-                })?;
-        }
-
-        // Install the ruleset on the current thread. The child inherits
-        // this restriction when spawned.
-        let status = ruleset_created
-            .restrict_self()
-            .map_err(|e| crab_core::Error::Other(format!("Landlock restrict_self failed: {e}")))?;
-
-        let applied = matches!(status.landlock, LandlockStatus::Available { .. });
-
-        if matches!(
-            status.landlock,
-            LandlockStatus::NotEnabled | LandlockStatus::NotImplemented
-        ) {
-            tracing::warn!(
-                "Landlock ruleset was not enforced — kernel may not support the requested ABI"
-            );
-        }
-
         Ok(SandboxResult {
-            applied,
-            description: format!(
-                "Landlock (ABI {}): filesystem restricted, {}",
-                abi as u32,
-                policy.summary()
-            ),
+            applied: false,
+            description,
             backend: SandboxBackend::Landlock,
         })
     }
@@ -128,18 +92,10 @@ fn parse_kernel_version(version: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// Convert our `PathAccess` to Landlock `AccessFs` flags.
-fn path_access_to_landlock(access: PathAccess, abi: ABI) -> BitFlags<AccessFs> {
-    match access {
-        PathAccess::ReadOnly => AccessFs::from_read(abi),
-        PathAccess::ReadWrite => AccessFs::from_read(abi) | AccessFs::from_write(abi),
-        PathAccess::Full => AccessFs::from_all(abi),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::PathAccess;
 
     #[test]
     fn parse_kernel_version_valid() {
@@ -155,8 +111,6 @@ mod tests {
     #[test]
     fn is_available_depends_on_kernel() {
         let sandbox = LandlockSandbox::new();
-        // On Linux CI with kernel >= 5.13 this should be true;
-        // on Windows/macOS it will be false.
         if cfg!(target_os = "linux") {
             // May or may not be available depending on kernel version.
             let _ = sandbox.is_available();
@@ -166,12 +120,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_returns_not_applied_when_unavailable() {
-        let sandbox = LandlockSandbox { abi: None };
-        let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
-        let mut cmd = tokio::process::Command::new("echo");
-        let result = sandbox.apply(&policy, &mut cmd).unwrap();
-        assert!(!result.applied);
-        assert_eq!(result.backend, SandboxBackend::Landlock);
+    async fn apply_never_enforces_and_never_restricts_parent() {
+        // Enforcement is deferred: apply must report not-applied even when
+        // Landlock is available, and must not touch the current process.
+        for abi in [None, Some(ABI::V3)] {
+            let sandbox = LandlockSandbox { abi };
+            let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
+            let mut cmd = tokio::process::Command::new("echo");
+            let result = sandbox.apply(&policy, &mut cmd).unwrap();
+            assert!(!result.applied);
+            assert_eq!(result.backend, SandboxBackend::Landlock);
+        }
+        // Prove the parent is unrestricted: writing outside the policy's
+        // allowed paths still works.
+        let probe = std::env::temp_dir().join("crab_landlock_parent_probe");
+        std::fs::write(&probe, "ok").expect("parent process must remain unsandboxed");
+        let _ = std::fs::remove_file(&probe);
     }
 }
