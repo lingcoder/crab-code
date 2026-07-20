@@ -108,7 +108,7 @@ semver = "1"
 
 # ─── Misc ───
 uuid = { version = "1", features = ["v4"] }
-ulid = "1"
+ulid = "3"
 lru = "0.18"
 unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
