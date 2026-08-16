@@ -14,7 +14,7 @@
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `cli` | CLI entry point (clap) + composition root |
 | **Layer 3** Engine Layer | `agents` `engine` `tui` `remote` | Query loop, multi-agent orchestration, terminal UI, remote-control WebSocket server + client |
-| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `process` `sandbox` `ide` `session` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/process/sandbox, IDE client, session state + compaction, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
+| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `sandbox` `ide` `session` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/sandbox (spawn + confinement), IDE client, session state + compaction, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
 | **Layer 1** Foundation Layer | `core` `utils` `config` `auth` | Domain model, utilities, layered config, authentication |
 
 > Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agents`. See §5.3 for inner-layer rules (aggregator vs leaf service; the Layer 3 orchestration chain).
@@ -199,7 +199,7 @@ crab-code/
 ├── rust-toolchain.toml                # pinned toolchain
 ├── rustfmt.toml / clippy.toml         # lint config
 │
-├── crates/                            # 26 crates (details: §6.x)
+├── crates/                            # 25 crates (details: §6.x)
 │   │
 │   │  # ── Layer 1: Foundation ──
 │   ├── utils/                         # shared utils (path/text/id/debug)
@@ -212,8 +212,7 @@ crab-code/
 │   ├── mcp/                           # MCP facade (client + server/ + transport/ + auth/)
 │   ├── acp/                           # ACP stdio server (Zed/Neovim/Helix)
 │   ├── fs/                            # glob, grep, diff, watch, lock, symlink
-│   ├── process/                       # subprocess spawn, tree kill, signal
-│   ├── sandbox/                       # Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
+│   ├── sandbox/                       # spawn::run + Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
 │   ├── ide/                           # IDE MCP client + quirks/ (vscode/jetbrains/wsl)
 │   ├── skills/                        # skill registry + builtin/ skills
 │   ├── memory/                        # persistent memory store + ranking + AGENTS.md
@@ -246,12 +245,12 @@ crab-code/
 
 | Type | Count | Notes |
 |------|-------|-------|
-| Library crate | 25 | `crates/*` — includes `commands`, `hooks`, `team`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `cron` |
+| Library crate | 24 | `crates/*` — includes `commands`, `hooks`, `team`, `ide`, `memory`, `engine`, `remote`, `sandbox`, `acp`, `cron` |
 | Binary crate | 1 | `crates/cli` |
 | Helper crate | 1 | `xtask` (build tooling, not shipped) |
-| **Total** | **26 + 1** | 26 product crates + xtask |
+| **Total** | **25 + 1** | 25 product crates + xtask |
 | Total source files | ~570 | `.rs` files across `crates/*` |
-| Total tests | ~4970 | `cargo nextest run --workspace` |
+| Total tests | ~4975 | `cargo nextest run --workspace` |
 
 
 ---
@@ -282,11 +281,11 @@ crab-code/
                 │
                 └►┌───────────────────────────────────────┐
                   │       tools (Layer 2 aggregator)      │
-                  └──┬──────┬──────┬──────┬──────┬────────┘
-                     │      │      │      │      │
-                  ┌──▼─┐ ┌──▼─┐ ┌──▼┐ ┌───▼┐ ┌───▼┐
-                  │ fs │ │proc│ │mcp│ │sbox│ │cron│
-                  └────┘ └────┘ └───┘ └────┘ └────┘
+                  └──┬──────┬──────┬──────┬───────────────┘
+                     │      │      │      │
+                  ┌──▼─┐ ┌──▼┐ ┌───▼┐ ┌───▼┐
+                  │ fs │ │mcp│ │sbox│ │cron│
+                  └────┘ └───┘ └────┘ └────┘
 
                   ┌─────────────────────────────────────────────┐
                   │ Foundation: api / auth / remote → config →  │
@@ -299,7 +298,7 @@ crab-code/
                   └────────────┘
 ```
 
-Legend: `sbox` = sandbox, `proc` = process. Edges are the load-bearing ones; the full
+Legend: `sbox` = sandbox. Edges are the load-bearing ones; the full
 edge list is the manifest in §5.2.
 
 ### 5.2 Dependency Manifest (Bottom-Up)
@@ -312,26 +311,25 @@ edge list is the manifest in §5.2.
 | 4 | **auth** | utils, core, config | Credential chain |
 | 5 | **api** | core, config, auth | LlmBackend + Anthropic/OpenAI clients |
 | 6 | **fs** | utils, core | File system ops |
-| 7 | **process** | utils, core | Subprocess mgmt |
-| 8 | **mcp** | utils, core | MCP client/server |
-| 9 | **telemetry** | utils, core | Sidecar, optional |
-| 10 | **sandbox** | core | Trait + platform backends (seatbelt/landlock/windows/noop) |
-| 11 | **remote** | utils, core, config, auth | crab-proto protocol + WS server + outbound client (inbound hinge for web/app/desktop entry points) |
-| 12 | **acp** | utils, core | Agent Client Protocol server (editor → crab, Zed/Neovim/Helix) |
-| 13 | **ide** | utils, core, mcp | Client to IDE-hosted MCP server (lockfile-based VSCode/JetBrains plugins) |
-| 14 | **cron** | core | Unified scheduler — one-shot / interval / cron |
-| 15 | **skills** | core | Skill discovery + built-in definitions |
-| 16 | **memory** | utils, core (+ api, optional) | Persistent memory store + ranking + AGENTS.md parsing; `api` only behind the `mem-ranker` feature |
-| 17 | **hooks** | core, process | Lifecycle hook executor, registry, file watcher, built-in hooks |
-| 18 | **plugin** | core, config, mcp, skills | WASM sandbox + skill↔mcp bridge |
-| 19 | **tools** | utils, core, config, cron, fs, process, sandbox, mcp | Layer 2 aggregator; built-in tools |
-| 20 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
-| 21 | **team** | utils, core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
-| 22 | **session** | utils, core, memory | Session + context compaction |
-| 23 | **engine** | core, config, api, memory, session, telemetry, tools, hooks, plugin | Raw query loop |
-| 24 | **agents** | utils, core, config, engine, memory, session, tools, api, mcp, hooks, plugin, team, skills | Orchestrator + coordinator + builtin agents + proactive |
-| 25 | **tui** | utils, core, config, agents, commands, memory, tools | Terminal UI; receives tool state via `core::Event` |
-| 26 | **cli** (bin) | utils, core, config, auth, api, mcp, process, tools, session, agents, commands, plugin, skills, telemetry, acp, tui | Thin composition root (interactive + `--acp` + `-p` print mode) |
+| 7 | **mcp** | utils, core | MCP client/server |
+| 8 | **telemetry** | utils, core | Sidecar, optional |
+| 9 | **sandbox** | utils, core | Subprocess spawn (`spawn::run`) + trait and platform backends (seatbelt/landlock/windows/noop) |
+| 10 | **remote** | utils, core, config, auth | crab-proto protocol + WS server + outbound client (inbound hinge for web/app/desktop entry points) |
+| 11 | **acp** | utils, core | Agent Client Protocol server (editor → crab, Zed/Neovim/Helix) |
+| 12 | **ide** | utils, core, mcp | Client to IDE-hosted MCP server (lockfile-based VSCode/JetBrains plugins) |
+| 13 | **cron** | core | Unified scheduler — one-shot / interval / cron |
+| 14 | **skills** | core | Skill discovery + built-in definitions |
+| 15 | **memory** | utils, core (+ api, optional) | Persistent memory store + ranking + AGENTS.md parsing; `api` only behind the `mem-ranker` feature |
+| 16 | **hooks** | core, sandbox | Lifecycle hook executor, registry, file watcher, built-in hooks |
+| 17 | **plugin** | core, config, mcp, skills | WASM sandbox + skill↔mcp bridge |
+| 18 | **tools** | utils, core, config, cron, fs, sandbox, mcp | Layer 2 aggregator; built-in tools |
+| 19 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
+| 20 | **team** | utils, core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
+| 21 | **session** | utils, core, memory | Session + context compaction |
+| 22 | **engine** | core, config, api, memory, session, telemetry, tools, hooks, plugin | Raw query loop |
+| 23 | **agents** | utils, core, config, engine, memory, session, tools, api, mcp, hooks, plugin, team, skills | Orchestrator + coordinator + builtin agents + proactive |
+| 24 | **tui** | utils, core, config, agents, commands, memory, tools | Terminal UI; receives tool state via `core::Event` |
+| 25 | **cli** (bin) | utils, core, config, auth, api, mcp, sandbox, tools, session, agents, commands, plugin, skills, telemetry, acp, tui | Thin composition root (interactive + `--acp` + `-p` print mode) |
 
 ### 5.3 Dependency Direction Principles
 
@@ -340,12 +338,12 @@ Rule 1: Upper layer -> lower layer. Reverse dependencies are prohibited.
 
 Rule 2: Layer 2 is sub-layered into aggregators and leaves.
   - Aggregators (tools, hooks, session) may depend on leaf services
-    in the same layer (tools -> fs/process/sandbox/mcp/cron/hooks;
-    hooks -> process; session -> memory).
-  - Leaf services (fs, process, mcp, acp, api, sandbox, cron, skills,
+    in the same layer (tools -> fs/sandbox/mcp/cron/hooks;
+    hooks -> sandbox; session -> memory).
+  - Leaf services (fs, mcp, acp, api, sandbox, cron, skills,
     memory, team, telemetry, commands, ide, plugin) must NOT depend on
     each other.
-  - Example: tools -> sandbox (OK); fs -> process (NOT OK).
+  - Example: tools -> sandbox (OK); fs -> sandbox (NOT OK).
   - Exception 1: ide -> mcp — the IDE client *speaks* MCP; the protocol
     crate is its substrate, not a peer service.
   - Exception 2: memory -> api, behind the optional `mem-ranker` feature
@@ -656,7 +654,7 @@ pub trait Tool: Send + Sync {
 //     fn execute(&self, input: Value, ctx: &ToolContext) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
 //         Box::pin(async move {
 //             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-//             let output = crab_process::run(/* ... */).await?;
+//             let output = crab_sandbox::spawn::run(/* ... */).await?;
 //             Ok(ToolOutput::success(output.stdout))
 //         })
 //     }
@@ -1537,98 +1535,7 @@ pub fn apply_edit(
 
 ---
 
-### 6.8 `crates/process/` -- Subprocess Management
-
-**Responsibility**: Subprocess lifecycle management (underlying execution layer used by `BashTool`)
-
-**Directory Structure**
-
-```
-src/
-├── lib.rs
-├── spawn.rs              // Subprocess launching, environment inheritance
-├── pty.rs                // Pseudo-terminal allocation (feature = "pty")
-├── tree.rs               // Process tree kill (sysinfo)
-└── signal.rs             // Signal handling, graceful shutdown
-```
-
-**Core Interface**
-
-```rust
-// spawn.rs -- Subprocess execution
-use std::path::Path;
-use std::time::Duration;
-
-pub struct SpawnOptions {
-    pub command: String,
-    pub args: Vec<String>,
-    pub working_dir: Option<std::path::PathBuf>,
-    pub env: Vec<(String, String)>,
-    pub timeout: Option<Duration>,
-    pub stdin_data: Option<String>,
-}
-
-pub struct SpawnOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-    pub timed_out: bool,
-}
-
-/// Execute a command and wait for the result
-pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
-    use tokio::process::Command;
-    // 1. Build Command
-    // 2. Set working_dir, env
-    // 3. Wrap with tokio::time::timeout if timeout is set
-    // 4. Collect stdout/stderr
-    // ...
-}
-
-/// Execute a command and stream output
-pub async fn run_streaming(
-    opts: SpawnOptions,
-    on_stdout: impl Fn(&str) + Send,
-    on_stderr: impl Fn(&str) + Send,
-) -> crab_core::Result<i32> {
-    // ...
-}
-
-// tree.rs -- Process tree management
-/// Kill a process and all its child processes
-pub fn kill_tree(pid: u32) -> crab_core::Result<()> {
-    use sysinfo::{Pid, System};
-    let mut sys = System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    // Recursively find child processes and kill
-    // ...
-}
-
-// signal.rs -- Signal handling
-/// Register Ctrl+C / SIGTERM handler
-pub fn register_shutdown_handler(
-    on_shutdown: impl Fn() + Send + 'static,
-) {
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        on_shutdown();
-    });
-}
-```
-
-**External Dependencies**: `crab-utils`, `crab-core`, `tokio` (process, signal), `sysinfo`
-
-**Feature Flags**
-
-```toml
-[features]
-default = []
-pty = ["portable-pty"]
-```
-
----
-
-### 6.9 `crates/tools/` -- Tool System
+### 6.8 `crates/tools/` -- Tool System
 
 **Responsibility**: Tool registration, lookup, execution, including all built-in tools
 
@@ -2063,7 +1970,7 @@ impl ToolExecutor {
 | TaskCreateTool | TaskCreateTool | `task.rs` |
 | MCPTool | McpToolAdapter | `mcp_tool.rs` |
 
-**External Dependencies**: `crab-core`, `crab-config`, `crab-fs`, `crab-process`, `crab-sandbox`, `crab-mcp`
+**External Dependencies**: `crab-core`, `crab-config`, `crab-fs`, `crab-sandbox`, `crab-mcp`
 
 **Feature Flags**
 
@@ -2076,7 +1983,7 @@ pty = ["portable-pty", "strip-ansi-escapes"]
 
 ---
 
-### 6.10 `crates/session/` -- Session Management
+### 6.9 `crates/session/` -- Session Management
 
 **Responsibility**: State management for multi-turn conversations. Memory system extracted to `crates/memory/`; session re-exports core memory types.
 
@@ -2243,7 +2150,7 @@ impl MemoryStore {
 
 ---
 
-### 6.11 `crates/team/` -- Multi-Agent Infrastructure
+### 6.10 `crates/team/` -- Multi-Agent Infrastructure
 
 **Responsibility**: domain-pure building blocks for all multi-agent execution modes. Extracted from `agent/src/teams/` so that team primitives have zero engine/api/session coupling. Only depends on `core`.
 
@@ -2270,7 +2177,7 @@ src/
 
 ---
 
-### 6.12 `crates/agents/` -- Orchestrator & Multi-Agent System
+### 6.11 `crates/agents/` -- Orchestrator & Multi-Agent System
 
 **Responsibility**: wraps the raw query loop (`crates/engine`) and adds session-aware orchestration — system prompt assembly, context injection (git/PR), error recovery, multi-agent coordination, file-history snapshots, conversation compaction. Slash commands are in `crates/commands/` (see §6.27). **Does not** contain the low-level message loop (that lives in `crates/engine`, see §6.21).
 
@@ -2676,7 +2583,7 @@ proactive  = []
 
 ---
 
-### 6.13 `crates/tui/` -- Terminal UI
+### 6.12 `crates/tui/` -- Terminal UI
 
 **Layer**: Layer 3 Engine.
 
@@ -2879,7 +2786,7 @@ src/
 
 ---
 
-### 6.14 `crates/skills/` -- Skill System
+### 6.13 `crates/skills/` -- Skill System
 
 **Responsibility**: Skill discovery, loading, registry, and built-in skill definitions
 
@@ -2911,7 +2818,7 @@ src/
 
 ---
 
-### 6.15 `crates/hooks/` -- Lifecycle Hook System
+### 6.14 `crates/hooks/` -- Lifecycle Hook System
 
 **Responsibility**: Hook executor, async registry, file watcher, frontmatter parsing, built-in hooks
 
@@ -2936,9 +2843,9 @@ src/
 
 **Action priority**: Deny > Retry > Modify > Allow — when multiple hooks return different actions, the highest-priority action wins.
 
-**External Dependencies**: `crab-core`, `crab-process`
+**External Dependencies**: `crab-core`, `crab-sandbox`
 
-### 6.16 `crates/plugin/` -- Plugin System
+### 6.15 `crates/plugin/` -- Plugin System
 
 **Responsibility**: WASM sandbox, MCP↔skill bridge, plugin discovery
 
@@ -2965,7 +2872,7 @@ wasm = ["wasmtime"]
 
 ---
 
-### 6.17 `crates/memory/` -- Persistent Memory System
+### 6.16 `crates/memory/` -- Persistent Memory System
 
 **Responsibility**: File-based cross-session memory storage — user preferences, feedback, project context, external references
 
@@ -3001,7 +2908,7 @@ mem-ranker = ["dep:crab-api", "dep:tokio"]                   # LLM-driven memory
 
 ---
 
-### 6.18 `crates/telemetry/` -- Observability
+### 6.17 `crates/telemetry/` -- Observability
 
 **Responsibility**: Distributed tracing and metrics collection
 
@@ -3071,7 +2978,7 @@ otlp = [                                                       # OpenTelemetry O
 
 ---
 
-### 6.19 `crates/cli/` -- Terminal Entry Point
+### 6.18 `crates/cli/` -- Terminal Entry Point
 
 **Responsibility**: An extremely thin binary entry point that only does assembly with no business logic
 
@@ -3153,7 +3060,7 @@ full = ["tui", "crab-plugin/wasm", "crab-api/bedrock", "crab-api/vertex", "crab-
 
 ---
 
-### 6.20 Global State Split: AppConfig / AppRuntime
+### 6.19 Global State Split: AppConfig / AppRuntime
 
 Global state shared across the app is split into **immutable configuration** and **mutable runtime** halves,
 avoiding a single `Arc<RwLock<AppState>>` where read paths get blocked by write locks.
@@ -3198,7 +3105,7 @@ pub struct AppRuntime {
 
 ---
 
-### 6.21 `crates/engine/` -- Raw Query Loop
+### 6.20 `crates/engine/` -- Raw Query Loop
 
 **Responsibility**: the pure "conversation + backend + tool executor → streaming events" loop. Contains no session persistence, no REPL state, no team orchestration, no system-prompt assembly.
 
@@ -3264,7 +3171,7 @@ Net invariant: every tool invocation — read or write, concurrent or sequential
 
 ---
 
-### 6.22 `crates/remote/` -- crab-proto: Remote-Control Protocol (server + client)
+### 6.21 `crates/remote/` -- crab-proto: Remote-Control Protocol (server + client)
 
 **Responsibility**: Layer 3 crate that owns the `crab-proto` open protocol and both of its endpoints — a WebSocket **server** that attaches running sessions to remote clients, and an outbound **client** that connects to another crab-proto server. This is the **hinge for every non-CLI entry point**: web UI, mobile app, desktop app all attach via the server side; the client side powers crab-to-crab dispatch (supervisor crab driving worker crab) and bot integrations.
 
@@ -3310,7 +3217,7 @@ src/
 
 ---
 
-### 6.23 `crates/sandbox/` -- Process Sandbox
+### 6.22 `crates/sandbox/` -- Process Sandbox
 
 **Responsibility**: Layer 2 leaf service. `Sandbox` trait + platform backends (seatbelt / landlock / windows / noop), consumed by `crates/tools` for Bash/PowerShell execution.
 
@@ -3363,7 +3270,7 @@ pub trait Sandbox: Send + Sync {
 
 ---
 
-### 6.24 `crates/ide/` -- IDE MCP Client
+### 6.23 `crates/ide/` -- IDE MCP Client
 
 **Responsibility**: Layer 2 leaf service. Client that connects to an IDE plugin's MCP server (hosted by VS Code / JetBrains extensions) and receives ambient context (selection, opened file, `@`-mentions). Publishes `IdeSelection` / `IdeAtMention` / `IdeConnection` to shared state consumed by `tui` (for display) and `agent` (for system-prompt injection).
 
@@ -3393,7 +3300,7 @@ src/
 
 ---
 
-### 6.25 `crates/acp/` -- Agent Client Protocol server
+### 6.24 `crates/acp/` -- Agent Client Protocol server
 
 **Responsibility**: Layer 2 leaf service that implements the server side of the [Agent Client Protocol](https://agentclientprotocol.com), the open JSON-RPC standard introduced by Zed in 2025 that lets editors drive external AI coding agents the way LSP lets them drive language servers. This crate lets crab **be** such an external agent: users in Zed / Neovim / Helix pick crab from their editor's "external agents" menu, the editor spawns crab as a child process, and messages flow over stdio framed as ACP JSON-RPC.
 
@@ -3432,7 +3339,7 @@ src/
 
 ---
 
-### 6.26 `crates/cron/` -- Unified Scheduling
+### 6.25 `crates/cron/` -- Unified Scheduling
 
 **Responsibility**: Layer 2 crate that replaces the hand-rolled `tokio::time::interval` and `sleep_until` calls scattered across `crab-mcp` (heartbeat), `crab-agents` (proactive timers), `crab-remote` (server-scheduled triggers), and provides user-facing cron jobs. One API, one view — TUI can render "pending jobs", web UI can show a jobs panel, CLI can offer `crab cron list / cancel`.
 
@@ -3473,7 +3380,7 @@ The crate itself is a pure in-memory scheduler: `JobScheduler::register(JobSpec,
 
 **External dependencies**: `croner` (cron expression parsing, already in workspace), `tokio` (timers), `serde`, `thiserror`, `tracing`.
 
-### 6.27 `crates/commands/` -- Slash Command System
+### 6.26 `crates/commands/` -- Slash Command System
 
 **Responsibility**: Layer 2 aggregator. Defines the `SlashCommand` trait, `CommandRegistry`, and 34 built-in slash commands grouped into 7 domain modules. Mirrors the `crates/tools/` pattern (trait + registry + builtin/). Extracted from `crates/agents/src/slash_commands/` so both TUI and CLI can consume commands without depending on the full agent crate.
 
@@ -3555,14 +3462,14 @@ crab models multi-agent collaboration in **three conceptually distinct layers**,
 |---|-----------|-------------|-----------|
 | 1 | **core has zero I/O** | Pure data structures and traits, no file/network/process operations | Reusable by CLI/GUI/WASM frontends; unit tests need no mocking |
 | 2 | **tools as independent crate** | 40 built-in tools have significant compile cost; keeping them separate means incremental compilation only triggers on changed tools | Changing one tool doesn't recompile everything |
-| 3 | **fs and process are separate** | Orthogonal responsibilities: fs handles file content, process handles execution | GlobTool doesn't need sysinfo, BashTool doesn't need globset |
+| 3 | **fs and sandbox are separate** | Orthogonal responsibilities: fs handles file content, sandbox handles command execution and its confinement | GlobTool doesn't need tokio::process, BashTool doesn't need globset |
 | 4 | **tui is optional** | cli bin uses feature flags to decide whether to compile tui | Future Tauri GUI imports core+session+tools but not tui |
 | 5 | **api and session are layered** | api only handles HTTP communication, session manages business state | Replacing an API provider doesn't affect session logic |
 | 6 | **Feature flags control optional dependencies** | No Bedrock? Don't compile AWS SDK. No WASM? Don't compile wasmtime. | Reduces compile time and binary size |
 | 7 | **workspace.dependencies unifies versions** | All crates share the same version of third-party libraries | Avoids dependency conflicts and duplicate compilation |
-| 8 | **Binary crates only do assembly** | the `cli` binary only does assembly; all logic lives in library crates | Makes it easy to add new entry points in the future (desktop/wasm/mobile) |
-| 9 | **Reference parity audit per crate** | Every existing crate gets a per-crate gap report vs the upstream reference; reports live in `docs/superpowers/audits/` | Prevents silent drift and makes Rust-idiom divergence decisions explicit. See `docs/superpowers/specs/2026-04-17-crate-restructure-design.md` §11 |
-| 10 | **Upstream references stay in docs, not code** | Audit reports, specs, and architecture docs may cite reference paths. Code comments, identifier names, and test names must not. | Maintains clean separation between research material and shipping code |
+| 7 | **Binary crates only do assembly** | the `cli` binary only does assembly; all logic lives in library crates | Makes it easy to add new entry points in the future (desktop/wasm/mobile) |
+| 8 | **Reference parity audit per crate** | Every existing crate gets a per-crate gap report vs the upstream reference; reports live in `docs/superpowers/audits/` | Prevents silent drift and makes Rust-idiom divergence decisions explicit. See `docs/superpowers/specs/2026-04-17-crate-restructure-design.md` §11 |
+| 9 | **Upstream references stay in docs, not code** | Audit reports, specs, and architecture docs may cite reference paths. Code comments, identifier names, and test names must not. | Maintains clean separation between research material and shipping code |
 
 ---
 

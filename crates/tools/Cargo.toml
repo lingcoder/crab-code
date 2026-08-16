@@ -12,7 +12,6 @@ crab-config.workspace = true
 crab-cron.workspace = true
 crab-fs.workspace = true
 crab-hooks.workspace = true
-crab-process.workspace = true
 crab-sandbox.workspace = true
 crab-mcp.workspace = true
 crab-utils.workspace = true

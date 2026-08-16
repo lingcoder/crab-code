@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
-use crab_process::spawn::{SpawnOptions, run};
+use crab_sandbox::spawn::{SpawnOptions, run};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing;
@@ -194,7 +194,7 @@ pub(crate) fn append_denial_hint(mut text: String, sandboxed: bool, exit_code: i
 }
 
 /// Combine stdout and stderr from a process output into a single string.
-fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
+fn format_output(output: &crab_sandbox::spawn::SpawnOutput) -> String {
     let mut combined = String::new();
     if !output.stdout.is_empty() {
         combined.push_str(&output.stdout);
@@ -604,7 +604,7 @@ impl BashTool {
 
         // Transform the command through the sandbox before spawning. This path
         // keeps its own streaming/cancel loop, so it applies the sandbox in
-        // place rather than going through `crab_process::run_streaming`.
+        // place rather than going through `crab_sandbox::spawn::run_streaming`.
         let mut sandboxed_command = if let Some(policy) = &sandbox_policy {
             crab_sandbox::prepare_command(policy, &prog, &args, &working_dir)?.command
         } else {

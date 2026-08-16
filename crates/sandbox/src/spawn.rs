@@ -27,9 +27,9 @@ pub struct SpawnOptions {
     /// Sandbox policy to enforce on the spawned command. `None` runs the
     /// command with full privileges (the right choice for trusted subprocesses
     /// like hooks, MCP servers, and network fetches). `Some` transforms the
-    /// command through [`crab_sandbox`] before spawning (argv wrap on macOS,
+    /// command through [`crate::prepare_command`] before spawning (argv wrap on macOS,
     /// `pre_exec` ruleset on Linux).
-    pub sandbox_policy: Option<crab_sandbox::SandboxPolicy>,
+    pub sandbox_policy: Option<crate::SandboxPolicy>,
 }
 
 /// Captured output from a completed child process.
@@ -53,7 +53,7 @@ fn build_command(opts: &SpawnOptions) -> crab_core::Result<Command> {
             .working_dir
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        crab_sandbox::prepare_command(policy, &opts.command, &opts.args, &cwd)?.command
+        crate::prepare_command(policy, &opts.command, &opts.args, &cwd)?.command
     } else {
         let mut cmd = Command::new(&opts.command);
         cmd.args(&opts.args);

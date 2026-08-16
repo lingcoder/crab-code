@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
-use crab_process::spawn::{SpawnOptions, run};
+use crab_sandbox::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
 use crate::builtin::bash::{append_denial_hint, command_sandbox_policy, resolve_timeout};

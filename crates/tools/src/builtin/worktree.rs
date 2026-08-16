@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
-use crab_process::spawn::{SpawnOptions, run};
+use crab_sandbox::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
 pub const ENTER_WORKTREE_TOOL_NAME: &str = "EnterWorktree";

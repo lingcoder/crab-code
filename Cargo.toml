@@ -73,7 +73,6 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 pulldown-cmark = "0.13"
 
 # ─── System ───
-sysinfo = "0.39"
 directories = "6"
 libc = "0.2"
 
@@ -165,7 +164,6 @@ crab-mcp = { path = "crates/mcp" }
 crab-acp = { path = "crates/acp" }
 crab-ide = { path = "crates/ide" }
 crab-fs = { path = "crates/fs" }
-crab-process = { path = "crates/process" }
 crab-tools = { path = "crates/tools" }
 crab-session = { path = "crates/session" }
 crab-agents = { path = "crates/agents" }

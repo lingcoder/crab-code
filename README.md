@@ -15,7 +15,7 @@
 
 ---
 
-> **Active Development** — 4980 tests · 26 crates · ~163k LOC
+> **Active Development** — 4975 tests · 25 crates · ~163k LOC
 
 Crab Code is a Rust-native agentic coding CLI. It aligns with Claude Code's toolset, permission model, and interaction patterns while supporting any LLM provider (Anthropic / OpenAI / DeepSeek / Bedrock / Vertex).
 
@@ -110,12 +110,12 @@ Env (runtime layer) always wins over file. Mutually-exclusive variants apply hig
 
 ## Architecture
 
-26 Rust crates in 4 layers. See [`docs/architecture.md`](docs/architecture.md) for details.
+25 Rust crates in 4 layers. See [`docs/architecture.md`](docs/architecture.md) for details.
 
 ```
 Entry     cli
 Engine    agents · engine · session · tui · remote
-Service   api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · team · cron · fs · memory · process
+Service   api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · team · cron · fs · memory
 Foundation core · utils · config · auth
 ```
 
