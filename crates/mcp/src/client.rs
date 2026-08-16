@@ -146,21 +146,31 @@ impl McpClient {
         service: RmcpClientService,
         server_name: &str,
     ) -> crab_core::Result<Self> {
-        let peer_info = service
-            .peer()
-            .peer_info()
-            .map(|info| info.as_ref().clone())
+        let peer_info = service.peer().peer_info().map(|info| info.as_ref().clone());
+        let server_impl = peer_info.as_ref().and_then(|info| info.server_info.clone());
+        let capabilities = peer_info
+            .as_ref()
+            .map(|info| info.capabilities.clone())
             .unwrap_or_default();
+        let protocol_version = peer_info
+            .as_ref()
+            .map(|info| info.protocol_version.to_string())
+            .unwrap_or_default();
+        let impl_name = server_impl
+            .as_ref()
+            .map(|info| info.name.clone())
+            .unwrap_or_default();
+        let impl_version = server_impl.map(|info| info.version).unwrap_or_default();
 
         tracing::info!(
             server = server_name,
-            server_name = peer_info.server_info.name,
-            server_version = peer_info.server_info.version,
-            protocol_version = peer_info.protocol_version.to_string(),
+            server_name = impl_name,
+            server_version = impl_version,
+            protocol_version = protocol_version.as_str(),
             "MCP server initialized"
         );
 
-        let tools = if peer_info.capabilities.tools.is_some() {
+        let tools = if capabilities.tools.is_some() {
             fetch_tools_rmcp(service.peer()).await?
         } else {
             Vec::new()
@@ -176,10 +186,10 @@ impl McpClient {
             backend: ClientBackend::Rmcp(service),
             server_name: server_name.to_string(),
             server_info: ServerInfo {
-                name: peer_info.server_info.name,
-                version: peer_info.server_info.version,
+                name: impl_name,
+                version: impl_version,
             },
-            capabilities: convert_server_capabilities(&peer_info.capabilities),
+            capabilities: convert_server_capabilities(&capabilities),
             tools,
             acl: crate::server_acl::ServerAclRegistry::new(),
         })

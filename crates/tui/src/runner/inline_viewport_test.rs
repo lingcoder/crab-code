@@ -260,6 +260,7 @@ fn streaming_assistant_not_drained_when_tool_calls_follow() {
         streaming: true,
     });
     app.messages.push(ChatMessage::ToolUse {
+        id: "bash_tu".into(),
         name: "bash".into(),
         summary: Some("Bash(ls)".into()),
         color: None,

@@ -94,6 +94,14 @@ fn main() -> anyhow::Result<()> {
         None => Cli::parse(),
     };
 
+    // Apply the sandbox on/off switch before any tool can spawn a subprocess.
+    if let Some(mode) = &cli.sandbox {
+        let mode = mode
+            .parse::<crab_sandbox::SandboxMode>()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        crab_sandbox::set_mode(mode);
+    }
+
     // ACP mode: bypass all interactive / print-mode plumbing and run
     // as a JSON-RPC stdio child process for the spawning editor. All
     // other CLI flags are ignored.

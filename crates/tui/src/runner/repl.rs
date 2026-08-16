@@ -144,14 +144,26 @@ pub(super) async fn run_loop(
                     for name in &meta.mcp_failures {
                         app.notifications.warn(format!("MCP server '{name}' failed to connect"));
                     }
-                    if !meta.resumed_grants.is_empty() {
-                        app.session_grants =
-                            meta.resumed_grants.iter().cloned().collect();
-                    }
                     app.state = crate::app::AppState::Idle;
 
                     push_welcome_if_needed(app);
                     push_startup_overlays(app);
+
+                    // Resume: replay the loaded transcript. AgentRuntime::init
+                    // has already loaded + sanitized every resume message into
+                    // the conversation, so this mirrors the /switch path.
+                    // `load_session_with_grants` restores grants *after* the
+                    // reset inside message loading, which would otherwise wipe
+                    // them. Bare `--resume` (no id) has no messages yet and
+                    // routes through the picker instead.
+                    if !runtime.conversation().messages().is_empty() {
+                        app.load_session_with_grants(
+                            runtime.conversation(),
+                            &meta.resumed_grants,
+                        );
+                    } else if !meta.resumed_grants.is_empty() {
+                        app.session_grants = meta.resumed_grants.iter().cloned().collect();
+                    }
 
                     cancel = runtime.cancellation_token().clone();
                     let working_dir = app.working_dir.clone();

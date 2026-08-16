@@ -1,10 +1,14 @@
-//! Backend selection: [`create_sandbox`] and the convenience
-//! [`apply_policy`] entry point that bundles pick + apply into one
-//! call for tool callers.
+//! Backend selection and command preparation.
+//!
+//! [`create_sandbox`] picks the platform backend, and [`prepare_command`] is the
+//! one call tool/process code makes to turn a raw invocation into a spawnable,
+//! (possibly) sandboxed [`PreparedCommand`].
+
+use std::path::Path;
 
 use super::{LandlockSandbox, NoopSandbox, SeatbeltSandbox, WindowsSandbox};
 use crate::policy::SandboxPolicy;
-use crate::traits::{Sandbox, SandboxResult};
+use crate::traits::{PreparedCommand, Sandbox};
 
 /// Create the sandbox backend designated for the current platform.
 #[must_use]
@@ -20,22 +24,28 @@ pub fn create_sandbox() -> Box<dyn Sandbox> {
     }
 }
 
-/// Apply a sandbox policy to a command using the platform backend.
+/// Prepare a command for sandboxed execution under the platform backend.
 ///
-/// Main entry point for callers (e.g. `BashTool`) that want to sandbox
-/// a child process without caring which backend is active.
-pub fn apply_policy(
+/// The returned [`PreparedCommand`] has its program/args set (rewritten on
+/// macOS) and any `pre_exec` hook installed (Linux). Fail-open/closed is decided
+/// by the selected backend: Linux/macOS fail closed (error) when isolation was
+/// requested but cannot be provided; Windows and the no-op backend fail open.
+///
+/// # Errors
+///
+/// Propagates the backend's error when a fail-closed platform cannot enforce.
+pub fn prepare_command(
     policy: &SandboxPolicy,
-    cmd: &mut tokio::process::Command,
-) -> crab_core::Result<SandboxResult> {
-    let sandbox = create_sandbox();
-    sandbox.apply(policy, cmd)
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+) -> crab_core::Result<PreparedCommand> {
+    create_sandbox().prepare(policy, program, args, cwd)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::PathAccess;
     use crate::traits::SandboxBackend;
 
     #[test]
@@ -53,10 +63,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_policy_reports_not_applied() {
-        let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
-        let mut cmd = tokio::process::Command::new("echo");
-        let result = apply_policy(&policy, &mut cmd).unwrap();
-        assert!(!result.applied);
+    async fn prepare_command_returns_spawnable() {
+        // On every platform this must produce a command; whether it is actually
+        // enforced depends on backend availability.
+        let cwd = std::env::current_dir().unwrap();
+        let policy = SandboxPolicy::workspace_write(&cwd, false);
+        let prepared = prepare_command(&policy, "echo", &["hi".to_string()], &cwd);
+        // macOS with sandbox-exec + Linux both succeed; Windows/noop succeed
+        // (fail-open). The only error path is a fail-closed platform missing its
+        // primitive, which the CI matrix covers.
+        assert!(prepared.is_ok());
     }
 }

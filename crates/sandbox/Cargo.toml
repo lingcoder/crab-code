@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Process sandbox — trait + per-platform backend placeholders (landlock / seatbelt / windows / noop)"
+description = "Process sandbox — transform-style API with per-platform backends (landlock / seatbelt / windows / noop)"
 
 [dependencies]
 crab-core.workspace = true
@@ -13,5 +13,37 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-[lints]
-workspace = true
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+
+# The workspace forbids `unsafe_code`, but installing a Landlock ruleset in the
+# forked child requires `CommandExt::pre_exec`, which is an `unsafe fn`. Scope
+# the allowance to this crate; every other lint mirrors the workspace config so
+# behaviour stays consistent under `RUSTFLAGS=-Dwarnings`.
+[lints.rust]
+unsafe_code = "allow"
+unused_mut = "deny"
+unused_comparisons = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+missing_panics_doc = "allow"
+missing_const_for_fn = "allow"
+missing_errors_doc = "allow"
+unused_async = "allow"
+new_without_default = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+fn_params_excessive_bools = "allow"
+unnecessary_wraps = "allow"
+option_if_let_else = "allow"
+or_fun_call = "allow"
+comparison_chain = "allow"
+if_same_then_else = "allow"
+duration_suboptimal_units = "allow"

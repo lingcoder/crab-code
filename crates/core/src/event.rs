@@ -16,6 +16,23 @@ use serde_json::Value;
 /// into the message body.
 pub const TOOL_ARG_INDEX_BASE: usize = 1000;
 
+/// Category of a non-fatal [`Event::Notice`].
+///
+/// Lets the UI pick an icon/label for a recoverable progress event without
+/// parsing the human-readable message string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NoticeKind {
+    /// Retrying after a transient/recoverable error.
+    Retry,
+    /// Recovering from an over-long prompt (image strip / compaction).
+    Compacting,
+    /// Primary model overloaded; switching to a fallback model.
+    Fallback,
+    /// Output hit the token ceiling; escalating the cap or injecting a
+    /// continuation.
+    Truncated,
+}
+
 /// Domain events for agent-to-UI communication.
 ///
 /// All variants are `Clone + Send + 'static` to support
@@ -178,6 +195,12 @@ pub enum Event {
     },
 
     // ─── Errors ───
+    /// A non-fatal progress notice: a retry, model fallback, prompt-compaction
+    /// recovery, or output-truncation recovery. Unlike [`Event::Error`], this
+    /// does NOT end the turn — the UI keeps its spinner and Processing state and
+    /// surfaces the message as an inline status line rather than a fatal error.
+    Notice { kind: NoticeKind, message: String },
+
     /// An error occurred during processing.
     Error { message: String },
 
@@ -540,6 +563,21 @@ mod tests {
         serde_roundtrip(&Event::Error {
             message: "rate limit exceeded".into(),
         });
+    }
+
+    #[test]
+    fn event_serde_notice() {
+        for kind in [
+            NoticeKind::Retry,
+            NoticeKind::Compacting,
+            NoticeKind::Fallback,
+            NoticeKind::Truncated,
+        ] {
+            serde_roundtrip(&Event::Notice {
+                kind,
+                message: "retrying".into(),
+            });
+        }
     }
 
     #[test]

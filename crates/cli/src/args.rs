@@ -251,6 +251,13 @@ pub struct Cli {
     #[arg(long = "setting-sources")]
     pub setting_sources: Option<String>,
 
+    /// Command sandboxing: "auto" (default — confine tool commands where the
+    /// platform supports it) or "off" (disable). On Linux (Landlock) and macOS
+    /// (Seatbelt) this restricts filesystem writes to the workspace; Windows
+    /// has no isolation.
+    #[arg(long, value_name = "MODE")]
+    pub sandbox: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<CliCommand>,
 }
@@ -1069,6 +1076,18 @@ mod tests {
     fn cli_setting_sources_default_is_none() {
         let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
         assert!(cli.setting_sources.is_none());
+    }
+
+    #[test]
+    fn cli_parses_sandbox_off() {
+        let cli = Cli::try_parse_from(["crab", "--sandbox", "off", "hello"]).unwrap();
+        assert_eq!(cli.sandbox.as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn cli_sandbox_default_is_none() {
+        let cli = Cli::try_parse_from(["crab", "hello"]).unwrap();
+        assert!(cli.sandbox.is_none());
     }
 
     #[test]

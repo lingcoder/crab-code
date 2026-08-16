@@ -124,6 +124,7 @@ mod tests {
                 committed_lines: 0,
             },
             ChatMessage::ToolUse {
+                id: "tu_1".into(),
                 name: "read".into(),
                 summary: None,
                 color: None,

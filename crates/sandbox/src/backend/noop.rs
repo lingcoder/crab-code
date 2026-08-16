@@ -1,11 +1,11 @@
-//! No-op backend — always allows. Used as dev fallback and when the
-//! platform lacks a supported sandbox primitive.
+//! No-op backend — passthrough. Selected on platforms without a supported
+//! sandbox primitive (non-linux/macos/windows unix). Never enforces.
 
 use crate::policy::SandboxPolicy;
-use crate::traits::{Sandbox, SandboxBackend, SandboxResult};
+use crate::traits::{PreparedCommand, Sandbox, SandboxBackend};
 
-/// No-op sandbox. Records the policy in the result description but
-/// performs no enforcement.
+/// No-op sandbox: builds the command unchanged and records that nothing was
+/// enforced.
 pub struct NoopSandbox;
 
 impl NoopSandbox {
@@ -27,21 +27,23 @@ impl Sandbox for NoopSandbox {
     }
 
     fn is_available(&self) -> bool {
-        true // always "available" — just doesn't enforce anything
+        false
     }
 
-    fn apply(
+    fn prepare(
         &self,
         policy: &SandboxPolicy,
-        _cmd: &mut tokio::process::Command,
-    ) -> crab_core::Result<SandboxResult> {
-        Ok(SandboxResult {
+        program: &str,
+        args: &[String],
+        _cwd: &std::path::Path,
+    ) -> crab_core::Result<PreparedCommand> {
+        let mut command = tokio::process::Command::new(program);
+        command.args(args);
+        Ok(PreparedCommand {
+            command,
             applied: false,
-            description: format!(
-                "No sandbox enforcement available on this platform. Policy: {}",
-                policy.summary()
-            ),
             backend: SandboxBackend::Noop,
+            description: format!("noop: no enforcement (policy: {})", policy.summary()),
         })
     }
 }
@@ -50,22 +52,18 @@ impl Sandbox for NoopSandbox {
 mod tests {
     use super::*;
 
-    #[test]
-    fn is_available_returns_true() {
-        let sandbox = NoopSandbox::new();
-        assert!(sandbox.is_available());
-        assert_eq!(sandbox.backend(), SandboxBackend::Noop);
-    }
-
     #[tokio::test]
-    async fn apply_returns_not_applied() {
+    async fn noop_returns_unchanged_command() {
         let sandbox = NoopSandbox::new();
-        let policy = SandboxPolicy::deny_all().with_network(true);
-        let mut cmd = tokio::process::Command::new("echo");
-
-        let result = sandbox.apply(&policy, &mut cmd).unwrap();
-        assert!(!result.applied);
-        assert_eq!(result.backend, SandboxBackend::Noop);
-        assert!(result.description.contains("No sandbox enforcement"));
+        assert_eq!(sandbox.backend(), SandboxBackend::Noop);
+        let policy = SandboxPolicy::workspace_write("/work", true);
+        let prepared = sandbox
+            .prepare(&policy, "echo", &[], std::path::Path::new("/work"))
+            .unwrap();
+        assert!(!prepared.applied);
+        assert_eq!(
+            prepared.command.as_std().get_program().to_string_lossy(),
+            "echo"
+        );
     }
 }

@@ -162,6 +162,30 @@ impl App {
         }
     }
 
+    /// Close out an active thinking phase: transition `Thinking` → `ThoughtFor`
+    /// and stamp the elapsed duration onto the most recent `Thinking` cell.
+    /// No-op when not currently thinking.
+    ///
+    /// Called when the first non-thinking artifact of a turn arrives (assistant
+    /// text OR a tool call) and at turn completion. Without the tool-call and
+    /// completion calls, a turn that thinks and then only emits tool calls (no
+    /// text) would leave `thinking` stuck in `Thinking` forever, keeping
+    /// [`App::has_active_animation`] true and preventing the loop from idling.
+    pub(super) fn finalize_active_thinking(&mut self) {
+        if !matches!(self.thinking, ThinkingState::Thinking { .. }) {
+            return;
+        }
+        self.set_thinking(false);
+        if let ThinkingState::ThoughtFor { duration, .. } = self.thinking {
+            for msg in self.messages.iter_mut().rev() {
+                if let ChatMessage::Thinking { duration: d, .. } = msg {
+                    *d = Some(duration);
+                    break;
+                }
+            }
+        }
+    }
+
     /// Cycle to the next `PromptInputMode`.
     pub fn cycle_input_mode(&mut self) {
         use super::state::PromptInputMode;
@@ -290,7 +314,7 @@ impl App {
                         self.state = AppState::Idle;
                         let _ = writeln!(self.content_buffer, "\n[interrupted]");
                         self.messages.push(ChatMessage::System {
-                            text: "Interrupted \u{00b7} What should Claude do instead?".into(),
+                            text: "Interrupted \u{00b7} What should Crab do instead?".into(),
                             kind: SystemKind::Info,
                         });
                         return AppAction::InterruptPermissions { rejected_ids };
@@ -300,7 +324,7 @@ impl App {
                         self.state = AppState::Idle;
                         let _ = writeln!(self.content_buffer, "\n[interrupted]");
                         self.messages.push(ChatMessage::System {
-                            text: "Interrupted \u{00b7} What should Claude do instead?".into(),
+                            text: "Interrupted \u{00b7} What should Crab do instead?".into(),
                             kind: SystemKind::Info,
                         });
                         return AppAction::InterruptProcessing;
@@ -1034,6 +1058,12 @@ impl App {
                         message_count: *message_count,
                     }]
                 }
+                Event::Notice { kind, message } => {
+                    vec![AppEvent::Notice {
+                        kind: *kind,
+                        message: message.clone(),
+                    }]
+                }
                 Event::Error { message } => {
                     vec![AppEvent::AgentError(message.clone())]
                 }
@@ -1089,22 +1119,7 @@ impl App {
             }
             AppEvent::Resize(..) => AppAction::None,
             AppEvent::ContentAppend(delta) => {
-                if matches!(self.thinking, ThinkingState::Thinking { .. }) {
-                    self.set_thinking(false);
-                    let dur = if let ThinkingState::ThoughtFor { duration, .. } = &self.thinking {
-                        Some(*duration)
-                    } else {
-                        None
-                    };
-                    if let Some(dur) = dur {
-                        for msg in self.messages.iter_mut().rev() {
-                            if let ChatMessage::Thinking { duration: d, .. } = msg {
-                                *d = Some(dur);
-                                break;
-                            }
-                        }
-                    }
-                }
+                self.finalize_active_thinking();
                 if let Some(ChatMessage::Assistant {
                     text, streaming, ..
                 }) = self.messages.last_mut()
@@ -1138,6 +1153,10 @@ impl App {
                 AppAction::None
             }
             AppEvent::ToolStart { id, name, input } => {
+                // A tool call is the first non-thinking artifact of a tool-only
+                // turn; close out thinking here so it doesn't stay active with
+                // no assistant text to trigger the `ContentAppend` transition.
+                self.finalize_active_thinking();
                 let tool_ref = self
                     .tool_registry
                     .as_ref()
@@ -1146,6 +1165,17 @@ impl App {
                 let color = tool_ref.map(|t| t.display_color());
                 // Unknown tools default to interruptible.
                 let interruptible = tool_ref.is_none_or(|t| t.is_interruptible());
+                let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
+                let collapsed_label = tool_ref.and_then(|t| t.collapsed_group_label());
+                self.messages.push(ChatMessage::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    summary,
+                    color,
+                    is_read_only,
+                    status: ToolCallStatus::Running,
+                    collapsed_label,
+                });
                 self.active_tools.insert(
                     id,
                     ActiveToolInfo {
@@ -1155,16 +1185,6 @@ impl App {
                         interruptible,
                     },
                 );
-                let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
-                let collapsed_label = tool_ref.and_then(|t| t.collapsed_group_label());
-                self.messages.push(ChatMessage::ToolUse {
-                    name: name.clone(),
-                    summary,
-                    color,
-                    is_read_only,
-                    status: ToolCallStatus::Running,
-                    collapsed_label,
-                });
                 self.spinner.set_message(format!("Running {name}…"));
                 if self.processing_start.is_none() {
                     self.processing_start = Some(Instant::now());
@@ -1183,14 +1203,19 @@ impl App {
                 let started_at = self.processing_start;
                 let added_lines = delta.matches('\n').count().max(1);
 
+                // Update this tool's live progress cell by id wherever it sits,
+                // not just when it is the last message — otherwise interleaved
+                // output from a concurrent tool orphans this one's cell and
+                // spawns a duplicate.
+                let existing = self.messages.iter_mut().rev().find(|m| {
+                    matches!(m, ChatMessage::ToolProgress { tool_use_id, .. } if *tool_use_id == id)
+                });
                 if let Some(ChatMessage::ToolProgress {
-                    tool_use_id,
                     tail_output,
                     total_lines,
                     elapsed_secs,
                     ..
-                }) = self.messages.last_mut()
-                    && tool_use_id == &id
+                }) = existing
                 {
                     tail_output.push_str(&delta);
                     *tail_output = trim_to_last_lines(tail_output, 20);
@@ -1240,21 +1265,20 @@ impl App {
                     collapsed,
                     is_read_only,
                 };
-                // If a `ToolProgress` cell for this tool is still showing,
-                // swap it for the final result so the progress line doesn't
-                // persist alongside the completed output.
-                let replaced = matches!(
-                    self.messages.last(),
-                    Some(ChatMessage::ToolProgress { tool_use_id, .. }) if tool_use_id == &id,
-                );
-                if replaced {
-                    if let Some(last) = self.messages.last_mut() {
-                        *last = result_msg;
-                    }
+                // If a `ToolProgress` cell for this tool is still showing, swap
+                // it in place for the final result — located by id anywhere in
+                // the list, so a concurrent tool's progress cell at the tail
+                // can't hijack the replacement and leave this one orphaned.
+                let progress_idx = self.messages.iter().rposition(|m| {
+                    matches!(m, ChatMessage::ToolProgress { tool_use_id, .. } if *tool_use_id == id)
+                });
+                if let Some(pi) = progress_idx {
+                    self.messages[pi] = result_msg;
                 } else {
                     self.messages.push(result_msg);
                 }
-                // Update the matching ToolUse message's status dot color.
+                // Color the matching ToolUse card's status dot, keyed by id so
+                // a second call to the same tool in the turn isn't mis-targeted.
                 let final_status = if is_error {
                     ToolCallStatus::Error
                 } else {
@@ -1262,11 +1286,11 @@ impl App {
                 };
                 for msg in self.messages.iter_mut().rev() {
                     if let ChatMessage::ToolUse {
-                        name: n,
+                        id: cell_id,
                         status,
                         ..
                     } = msg
-                        && *n == tool_name
+                        && *cell_id == id
                     {
                         *status = final_status;
                         break;
@@ -1295,6 +1319,9 @@ impl App {
                 self.active_tools.clear();
                 self.state = AppState::Idle;
                 self.clear_streaming_assistant_flag();
+                // Turn is over: close out any thinking phase a tool-only turn
+                // left active, so the loop can idle instead of ticking forever.
+                self.finalize_active_thinking();
                 self.total_input_tokens += input_tokens;
                 self.total_output_tokens += output_tokens;
                 if let Some(start) = self.processing_start.take()
@@ -1309,6 +1336,9 @@ impl App {
                 self.active_tools.clear();
                 self.state = AppState::Idle;
                 self.clear_streaming_assistant_flag();
+                // Fatal end of turn: drop any active thinking phase so it can't
+                // keep `has_active_animation` true while idle.
+                self.thinking = ThinkingState::Idle;
                 self.processing_start = None;
                 let (text, kind) = crate::error_messages::classify_error(&message);
                 self.messages.push(ChatMessage::System { text, kind });
@@ -1316,11 +1346,29 @@ impl App {
                 crate::terminal_notify::notify("Crab Code", "Agent error");
                 AppAction::None
             }
+            AppEvent::Notice { message, .. } => {
+                // Non-fatal progress (retry / model fallback / prompt-compaction
+                // / output-truncation recovery). Unlike `AgentError`, this keeps
+                // the spinner running and stays in `Processing`; it only appends
+                // an inline dim status line, mirroring Claude Code's inline
+                // api-error row. No fatal toast, no desktop notification, no
+                // transition to Idle — so a subsequent `ContentAppend` from the
+                // recovered stream flows on without the turn appearing frozen.
+                self.messages.push(ChatMessage::System {
+                    text: message,
+                    kind: SystemKind::Info,
+                });
+                AppAction::None
+            }
             AppEvent::StreamAborted { reason } => {
                 if matches!(self.messages.last(), Some(ChatMessage::Assistant { .. })) {
                     self.messages.pop();
                 }
-                self.notifications.warn(reason);
+                // An empty reason means a paired `Notice` already carried the
+                // user-facing message; skip the redundant toast.
+                if !reason.is_empty() {
+                    self.notifications.warn(reason);
+                }
                 AppAction::None
             }
             AppEvent::PermissionRequested {
@@ -1484,9 +1532,7 @@ impl App {
                 if !matches!(self.thinking, ThinkingState::Thinking { .. }) {
                     self.set_thinking(true);
                 }
-                if std::env::var("CRAB_SHOW_THINKING")
-                    .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"))
-                {
+                if super::thinking_transcript_enabled() {
                     if let Some(ChatMessage::Thinking { text, .. }) = self.messages.last_mut() {
                         text.push_str(&delta);
                     } else {

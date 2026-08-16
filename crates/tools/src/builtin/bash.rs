@@ -153,6 +153,46 @@ pub fn sweep_stale_task_outputs() {
     }
 }
 
+/// Derive the sandbox policy for a shell invocation from the permission mode
+/// and working directory. `None` disables sandboxing (Dangerously mode, or the
+/// global switch off). Shared by the Bash and PowerShell tools.
+pub(crate) fn command_sandbox_policy(ctx: &ToolContext) -> Option<crab_sandbox::SandboxPolicy> {
+    crab_sandbox::SandboxPolicy::for_mode(ctx.permission_mode, &ctx.working_dir)
+}
+
+/// Whether the current platform actually enforces the sandbox. Used to avoid
+/// attributing a failure to the sandbox on Windows (fail-open) where a
+/// "permission denied" is never a sandbox denial.
+const SANDBOX_ENFORCED_PLATFORM: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
+/// If a command ran under an enforcing sandbox and failed in a way that looks
+/// like a sandbox denial, return the hint to append so the model/user knows.
+pub(crate) fn maybe_sandbox_denial_hint(
+    sandboxed: bool,
+    exit_code: i32,
+    combined: &str,
+) -> Option<&'static str> {
+    if sandboxed
+        && SANDBOX_ENFORCED_PLATFORM
+        && crab_sandbox::is_likely_sandbox_denied(exit_code, combined)
+    {
+        Some(crab_sandbox::SANDBOX_DENIAL_HINT)
+    } else {
+        None
+    }
+}
+
+/// Append the denial hint to `text` when one applies.
+pub(crate) fn append_denial_hint(mut text: String, sandboxed: bool, exit_code: i32) -> String {
+    if let Some(hint) = maybe_sandbox_denial_hint(sandboxed, exit_code, &text) {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(hint);
+    }
+    text
+}
+
 /// Combine stdout and stderr from a process output into a single string.
 fn format_output(output: &crab_process::spawn::SpawnOutput) -> String {
     let mut combined = String::new();
@@ -268,6 +308,8 @@ impl Tool for BashTool {
         let working_dir = ctx.working_dir.clone();
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
         let task_registry = ctx.task_registry.clone();
+        let sandbox_policy = command_sandbox_policy(ctx);
+        let sandboxed = sandbox_policy.is_some();
 
         Box::pin(async move {
             if command.is_empty() {
@@ -330,6 +372,7 @@ impl Tool for BashTool {
                         stdin_data: None,
                         clear_env: false,
                         kill_grace_period: None,
+                        sandbox_policy,
                     };
 
                     reg_spawn
@@ -387,6 +430,7 @@ impl Tool for BashTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy,
             };
 
             let output = run(opts).await?;
@@ -397,14 +441,14 @@ impl Tool for BashTool {
             }
 
             if output.exit_code != 0 {
+                let text = if combined.is_empty() {
+                    format!("Exit code: {}", output.exit_code)
+                } else {
+                    combined
+                };
+                let text = append_denial_hint(text, sandboxed, output.exit_code);
                 Ok(ToolOutput::with_content(
-                    vec![crab_core::tool::ToolOutputContent::Text {
-                        text: if combined.is_empty() {
-                            format!("Exit code: {}", output.exit_code)
-                        } else {
-                            combined
-                        },
-                    }],
+                    vec![crab_core::tool::ToolOutputContent::Text { text }],
                     true,
                 ))
             } else {
@@ -545,6 +589,8 @@ impl BashTool {
         let command = input["command"].as_str().unwrap_or("").to_owned();
         let timeout_ms = input["timeout"].as_u64();
         let working_dir = ctx.working_dir.clone();
+        let sandbox_policy = command_sandbox_policy(ctx);
+        let sandboxed = sandbox_policy.is_some();
 
         if command.is_empty() {
             return Ok(ToolOutput::error("command is required"));
@@ -556,11 +602,21 @@ impl BashTool {
             return Ok(ToolOutput::error(NO_SHELL_ERROR));
         };
 
-        let mut child = tokio::process::Command::new(&prog)
-            .args(&args)
+        // Transform the command through the sandbox before spawning. This path
+        // keeps its own streaming/cancel loop, so it applies the sandbox in
+        // place rather than going through `crab_process::run_streaming`.
+        let mut sandboxed_command = if let Some(policy) = &sandbox_policy {
+            crab_sandbox::prepare_command(policy, &prog, &args, &working_dir)?.command
+        } else {
+            let mut c = tokio::process::Command::new(&prog);
+            c.args(&args);
+            c
+        };
+        sandboxed_command
             .current_dir(&working_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = sandboxed_command
             .spawn()
             .map_err(|e| crab_core::Error::Other(format!("failed to spawn: {e}")))?;
 
@@ -624,14 +680,16 @@ impl BashTool {
                     Ok(s) if s.success() => Ok(ToolOutput::success(&combined)),
                     Ok(s) => {
                         let code = s.code().unwrap_or(-1);
-                        if combined.is_empty() {
-                            Ok(ToolOutput::error(format!("Exit code: {code}")))
+                        let text = if combined.is_empty() {
+                            format!("Exit code: {code}")
                         } else {
-                            Ok(ToolOutput::with_content(
-                                vec![crab_core::tool::ToolOutputContent::Text { text: combined }],
-                                true,
-                            ))
-                        }
+                            combined
+                        };
+                        let text = append_denial_hint(text, sandboxed, code);
+                        Ok(ToolOutput::with_content(
+                            vec![crab_core::tool::ToolOutputContent::Text { text }],
+                            true,
+                        ))
                     }
                     Err(e) => Ok(ToolOutput::error(format!("process error: {e}"))),
                 }
@@ -714,6 +772,12 @@ mod pty_support {
         strip_ansi: bool,
     ) -> Result<ToolOutput> {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        // `portable-pty` builds its child via its own `CommandBuilder`, which
+        // exposes no `pre_exec` hook and takes no `tokio::process::Command`, so
+        // the Landlock/Seatbelt transform cannot be applied here. PTY execution
+        // therefore runs unsandboxed in this MVP.
+        tracing::warn!("PTY execution runs without sandbox isolation");
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -799,10 +863,13 @@ mod tests {
     use crab_core::permission::{PermissionMode, PermissionPolicy};
     use tokio_util::sync::CancellationToken;
 
+    // `Dangerously` disables the sandbox so these tests exercise bash I/O
+    // (echo/stream/cancel/background) without coupling to whether the host
+    // kernel enforces Landlock. Sandbox behaviour is covered in `crab-sandbox`.
     fn make_ctx() -> ToolContext {
         ToolContext {
             working_dir: std::env::temp_dir(),
-            permission_mode: PermissionMode::Default,
+            permission_mode: PermissionMode::Dangerously,
             session_id: "test".into(),
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),

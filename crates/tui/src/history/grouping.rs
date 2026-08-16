@@ -75,6 +75,7 @@ mod tests {
 
     fn read_use() -> ChatMessage {
         ChatMessage::ToolUse {
+            id: "read_tu".into(),
             name: "Read".into(),
             summary: Some("Read (a.rs)".into()),
             color: None,
@@ -102,6 +103,7 @@ mod tests {
 
     fn bash_use() -> ChatMessage {
         ChatMessage::ToolUse {
+            id: "bash_tu".into(),
             name: "Bash".into(),
             summary: Some("Run (ls)".into()),
             color: None,

@@ -5,7 +5,7 @@
 **Claude Code 的开源替代品，完全用 Rust 从零构建。**
 
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/lingcoder/crab-code/actions/workflows/ci.yml/badge.svg)](https://github.com/lingcoder/crab-code/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#贡献)
 
@@ -15,7 +15,7 @@
 
 ---
 
-> **积极开发中** — 4970 测试 · 26 crate · ~161k LOC
+> **积极开发中** — 4980 测试 · 26 crate · ~163k LOC
 
 Crab Code 是一个 Rust 原生的 Agentic Coding CLI。它对齐 Claude Code 的工具集、权限模型和交互方式，同时支持任意 LLM 提供商（Anthropic / OpenAI / DeepSeek / Bedrock / Vertex）。
 
@@ -103,7 +103,7 @@ env（runtime 层）永远赢 file。互斥变量按"高优先级先生效"。
 
 | | Crab Code | Claude Code | OpenCode| Codex CLI |
 |--|-----------|-------------|----------|-----------|
-| 开源 | Apache 2.0 | 闭源 | MIT | Apache 2.0 |
+| 开源 | MIT | 闭源 | MIT | Apache 2.0 |
 | 语言 | Rust | TypeScript | TypeScript | Rust |
 | 模型 | 任意 | Anthropic | 任意 | 仅 OpenAI |
 | MCP | 3 传输 | 6 传输 | LSP | 2 传输 |
@@ -115,7 +115,7 @@ env（runtime 层）永远赢 file。互斥变量按"高优先级先生效"。
 ```
 入口    cli
 编排    agents · engine · session · tui · remote
-服务    api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · swarm · cron · fs · memory · process
+服务    api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · team · cron · fs · memory · process
 基础    core · utils · config · auth
 ```
 
@@ -133,5 +133,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)
+[MIT License](LICENSE)
 

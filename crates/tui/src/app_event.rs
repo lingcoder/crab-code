@@ -99,7 +99,16 @@ pub enum AppEvent {
     },
     /// An agent error occurred.
     AgentError(String),
+    /// A non-fatal progress notice (retry, model fallback, prompt-compaction
+    /// or output-truncation recovery). Surfaced as an inline status line
+    /// without ending the turn — spinner and Processing state are preserved.
+    Notice {
+        kind: crab_core::event::NoticeKind,
+        message: String,
+    },
     /// Streaming response was aborted — discard partial assistant content.
+    /// An empty `reason` suppresses the toast (a paired `Notice` already
+    /// carries the user-facing message).
     StreamAborted { reason: String },
     /// A permission request arrived from the agent.
     PermissionRequested {

@@ -165,6 +165,10 @@ pub enum ChatMessage {
     },
     /// Tool invocation start — rendered as `● {summary}` or `● {name}`.
     ToolUse {
+        /// `tool_use_id` from the model — the stable key used to color this
+        /// card's status dot when its matching result arrives (matching by
+        /// `name` mis-targets when the same tool is called twice in a turn).
+        id: String,
         name: String,
         /// Custom summary from `Tool::format_use_summary()`.
         summary: Option<String>,

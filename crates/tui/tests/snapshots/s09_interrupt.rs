@@ -10,7 +10,7 @@ use super::helpers::{assert_snapshot, render_lines_to_text};
 #[test]
 fn s09_partial_assistant_then_interrupted() {
     let asst = AssistantCell::new("Let me start by reading the");
-    let sys = SystemCell::new("Interrupted \u{00b7} What should Claude do instead?");
+    let sys = SystemCell::new("Interrupted \u{00b7} What should Crab do instead?");
 
     let mut lines = Vec::new();
     lines.extend(asst.display_lines(80));

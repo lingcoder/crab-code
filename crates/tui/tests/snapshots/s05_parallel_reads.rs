@@ -18,6 +18,7 @@ fn read_label() -> CollapsedGroupLabel {
 
 fn read_use(path: &str) -> ChatMessage {
     ChatMessage::ToolUse {
+        id: format!("tu_{path}"),
         name: "Read".into(),
         summary: Some(format!("Read ({path})")),
         color: None,

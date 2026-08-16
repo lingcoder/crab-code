@@ -1,14 +1,15 @@
-//! Windows backend — empty placeholder.
+//! Windows backend — no real isolation.
 //!
-//! Intended implementation (deferred): restricted token /
-//! `AppContainer` for filesystem and network confinement. A Job
-//! Object alone only bounds process lifetime and resources, not
-//! filesystem access, so it is not a sandbox.
+//! A production Windows sandbox needs a restricted-token / `AppContainer`
+//! launcher (codex ships an entire `windows-sandbox` crate for it); that is out
+//! of scope here. To keep crab usable on Windows we **fail open**: the command
+//! runs unchanged and every attempt to sandbox emits a warning so the operator
+//! knows isolation is not in effect.
 
 use crate::policy::SandboxPolicy;
-use crate::traits::{Sandbox, SandboxBackend, SandboxResult};
+use crate::traits::{PreparedCommand, Sandbox, SandboxBackend};
 
-/// Windows sandbox (placeholder; enforcement deferred).
+/// Windows sandbox placeholder — never enforces.
 pub struct WindowsSandbox;
 
 impl WindowsSandbox {
@@ -33,19 +34,24 @@ impl Sandbox for WindowsSandbox {
         false
     }
 
-    fn apply(
+    fn prepare(
         &self,
         policy: &SandboxPolicy,
-        _cmd: &mut tokio::process::Command,
-    ) -> crab_core::Result<SandboxResult> {
+        program: &str,
+        args: &[String],
+        _cwd: &std::path::Path,
+    ) -> crab_core::Result<PreparedCommand> {
         tracing::warn!(
             policy = policy.summary(),
-            "Windows sandbox is not implemented; policy NOT applied"
+            "Windows has no sandbox isolation — command runs unconfined"
         );
-        Ok(SandboxResult {
+        let mut command = tokio::process::Command::new(program);
+        command.args(args);
+        Ok(PreparedCommand {
+            command,
             applied: false,
-            description: "Windows sandbox not implemented — policy NOT applied".into(),
             backend: SandboxBackend::Windows,
+            description: "windows: no isolation available (command runs unconfined)".to_string(),
         })
     }
 }
@@ -53,16 +59,24 @@ impl Sandbox for WindowsSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::PathAccess;
 
     #[tokio::test]
-    async fn placeholder_never_applies() {
+    async fn windows_fails_open_unchanged() {
         let sandbox = WindowsSandbox::new();
         assert!(!sandbox.is_available());
-        let policy = SandboxPolicy::deny_all().with_path("/tmp", PathAccess::ReadOnly);
-        let mut cmd = tokio::process::Command::new("echo");
-        let result = sandbox.apply(&policy, &mut cmd).unwrap();
-        assert!(!result.applied);
-        assert_eq!(result.backend, SandboxBackend::Windows);
+        let policy = SandboxPolicy::workspace_write("/work", false);
+        let prepared = sandbox
+            .prepare(
+                &policy,
+                "echo",
+                &["hi".to_string()],
+                std::path::Path::new("/work"),
+            )
+            .unwrap();
+        assert!(!prepared.applied);
+        assert_eq!(
+            prepared.command.as_std().get_program().to_string_lossy(),
+            "echo"
+        );
     }
 }

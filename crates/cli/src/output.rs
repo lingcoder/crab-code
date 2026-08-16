@@ -107,6 +107,15 @@ pub async fn print_events(
                     eprintln!("{} {display}", "result:".dimmed());
                 }
             }
+            Event::Notice { message, .. } => {
+                // Non-fatal progress (retry / fallback / compaction / truncation
+                // recovery). Print to stderr as a muted notice, never as a fatal
+                // error, so scripts don't treat a recovered retry as a failure.
+                if let Some(mut s) = spinner.take() {
+                    s.stop();
+                }
+                eprintln!("{} {message}", "notice:".yellow().bold());
+            }
             Event::Error { message } => {
                 eprintln!("{} {message}", "error:".red().bold());
             }
@@ -301,6 +310,11 @@ pub fn event_to_json(event: &Event) -> Option<Value> {
             "id": id,
             "is_error": output.is_error,
             "text": output.text(),
+        })),
+        Event::Notice { kind, message } => Some(json!({
+            "type": "notice",
+            "kind": format!("{kind:?}").to_lowercase(),
+            "message": message,
         })),
         Event::Error { message } => Some(json!({
             "type": "error",
@@ -522,6 +536,10 @@ mod tests {
             Event::ToolResult {
                 id: "t".into(),
                 output: ToolOutput::success("ok"),
+            },
+            Event::Notice {
+                kind: crab_core::event::NoticeKind::Retry,
+                message: "retrying".into(),
             },
             Event::Error {
                 message: "e".into(),

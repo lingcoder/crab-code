@@ -71,6 +71,7 @@ impl Tool for EnterWorktreeTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             })
             .await?;
 
@@ -113,6 +114,7 @@ impl Tool for EnterWorktreeTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             })
             .await?;
 
@@ -219,6 +221,7 @@ impl Tool for ExitWorktreeTool {
                             stdin_data: None,
                             clear_env: false,
                             kill_grace_period: None,
+                            sandbox_policy: None,
                         })
                         .await?;
 
@@ -247,6 +250,7 @@ impl Tool for ExitWorktreeTool {
                         stdin_data: None,
                         clear_env: false,
                         kill_grace_period: None,
+                        sandbox_policy: None,
                     })
                     .await?;
 

@@ -7,7 +7,7 @@ use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
 use crab_process::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
-use crate::builtin::bash::resolve_timeout;
+use crate::builtin::bash::{append_denial_hint, command_sandbox_policy, resolve_timeout};
 use crate::str_utils::truncate_chars;
 
 /// `PowerShell` command execution tool (Windows + cross-platform via `pwsh`).
@@ -75,6 +75,8 @@ impl Tool for PowerShellTool {
         let command = input["command"].as_str().unwrap_or("").to_owned();
         let timeout_ms = input["timeout"].as_u64();
         let working_dir = ctx.working_dir.clone();
+        let sandbox_policy = command_sandbox_policy(ctx);
+        let sandboxed = sandbox_policy.is_some();
 
         Box::pin(async move {
             if command.is_empty() {
@@ -94,6 +96,7 @@ impl Tool for PowerShellTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy,
             };
 
             let output = run(opts).await?;
@@ -114,14 +117,14 @@ impl Tool for PowerShellTool {
             }
 
             if output.exit_code != 0 {
+                let text = if combined.is_empty() {
+                    format!("Exit code: {}", output.exit_code)
+                } else {
+                    combined
+                };
+                let text = append_denial_hint(text, sandboxed, output.exit_code);
                 Ok(ToolOutput::with_content(
-                    vec![ToolOutputContent::Text {
-                        text: if combined.is_empty() {
-                            format!("Exit code: {}", output.exit_code)
-                        } else {
-                            combined
-                        },
-                    }],
+                    vec![ToolOutputContent::Text { text }],
                     true,
                 ))
             } else {

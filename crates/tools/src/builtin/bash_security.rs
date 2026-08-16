@@ -4,9 +4,8 @@
 //! Includes command allow/deny lists, dangerous-pattern detection with detailed
 //! explanations, sandbox policy generation, and an audit log for all executed commands.
 
-use crab_sandbox::{PathAccess, PathRule, SandboxPolicy};
+use crab_sandbox::SandboxPolicy;
 use std::fmt::Write;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 // ── Command whitelist / blacklist ──────────────────────────────────
@@ -164,42 +163,15 @@ pub fn analyze_command(command: &str) -> Vec<String> {
 
 /// Generate a `SandboxPolicy` suitable for a bash command execution.
 ///
-/// The policy allows read-write access to the working directory and
-/// read-only access to common system paths. Network is disabled by default.
+/// Full-disk read, write restricted to the working directory (plus `/tmp` and
+/// `$TMPDIR`, added during derivation). Network is disabled by default. Works
+/// on every platform — the writable-root model has no hardcoded unix paths.
 #[must_use]
 pub fn sandbox_policy_for_bash(
     working_dir: &std::path::Path,
     allow_network: bool,
 ) -> SandboxPolicy {
-    SandboxPolicy {
-        path_rules: vec![
-            PathRule {
-                path: working_dir.to_path_buf(),
-                access: PathAccess::ReadWrite,
-            },
-            PathRule {
-                path: PathBuf::from("/usr"),
-                access: PathAccess::ReadOnly,
-            },
-            PathRule {
-                path: PathBuf::from("/bin"),
-                access: PathAccess::ReadOnly,
-            },
-            PathRule {
-                path: PathBuf::from("/lib"),
-                access: PathAccess::ReadOnly,
-            },
-            PathRule {
-                path: PathBuf::from("/etc"),
-                access: PathAccess::ReadOnly,
-            },
-        ],
-        allow_network,
-        allow_subprocess: true,
-        max_memory_bytes: 0,
-        max_cpu_seconds: 0,
-        max_open_files: 0,
-    }
+    SandboxPolicy::workspace_write(working_dir, allow_network)
 }
 
 /// Format a `SandboxPolicy` as a human-readable summary.
@@ -480,23 +452,25 @@ mod tests {
         let policy = sandbox_policy_for_bash(Path::new("/home/user/project"), false);
         assert!(!policy.allow_network);
         assert!(policy.allow_subprocess);
+        assert!(!policy.read_only);
         let rw_rule = policy
             .path_rules
             .iter()
             .find(|r| r.path == Path::new("/home/user/project"));
         assert!(rw_rule.is_some());
-        assert_eq!(rw_rule.unwrap().access, PathAccess::ReadWrite);
+        assert_eq!(rw_rule.unwrap().access, crab_sandbox::PathAccess::ReadWrite);
     }
 
     #[test]
-    fn sandbox_policy_has_system_paths_ro() {
-        let policy = sandbox_policy_for_bash(Path::new("/tmp"), false);
-        let usr_rule = policy
-            .path_rules
-            .iter()
-            .find(|r| r.path == Path::new("/usr"));
-        assert!(usr_rule.is_some());
-        assert_eq!(usr_rule.unwrap().access, PathAccess::ReadOnly);
+    fn sandbox_policy_makes_working_dir_a_writable_root() {
+        let policy = sandbox_policy_for_bash(Path::new("/home/user/project"), false);
+        let derived = policy.derive(Path::new("/home/user/project"));
+        assert!(
+            derived
+                .writable_roots
+                .iter()
+                .any(|r| r.root == Path::new("/home/user/project"))
+        );
     }
 
     #[test]

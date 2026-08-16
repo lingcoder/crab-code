@@ -24,6 +24,12 @@ pub struct SpawnOptions {
     /// Only meaningful on Unix; Windows always does a hard kill.
     /// Defaults to 3 seconds if `None`.
     pub kill_grace_period: Option<Duration>,
+    /// Sandbox policy to enforce on the spawned command. `None` runs the
+    /// command with full privileges (the right choice for trusted subprocesses
+    /// like hooks, MCP servers, and network fetches). `Some` transforms the
+    /// command through [`crab_sandbox`] before spawning (argv wrap on macOS,
+    /// `pre_exec` ruleset on Linux).
+    pub sandbox_policy: Option<crab_sandbox::SandboxPolicy>,
 }
 
 /// Captured output from a completed child process.
@@ -34,9 +40,25 @@ pub struct SpawnOutput {
     pub timed_out: bool,
 }
 
-fn build_command(opts: &SpawnOptions) -> Command {
-    let mut cmd = Command::new(&opts.command);
-    cmd.args(&opts.args);
+/// Build the `Command`, applying the sandbox policy (if any) before setting the
+/// working directory and environment.
+///
+/// # Errors
+///
+/// Returns an error when a fail-closed sandbox backend (Linux/macOS) is asked
+/// to enforce a policy it cannot provide.
+fn build_command(opts: &SpawnOptions) -> crab_core::Result<Command> {
+    let mut cmd = if let Some(policy) = &opts.sandbox_policy {
+        let cwd = opts
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        crab_sandbox::prepare_command(policy, &opts.command, &opts.args, &cwd)?.command
+    } else {
+        let mut cmd = Command::new(&opts.command);
+        cmd.args(&opts.args);
+        cmd
+    };
     if let Some(ref cwd) = opts.working_dir {
         cmd.current_dir(cwd);
     }
@@ -46,7 +68,7 @@ fn build_command(opts: &SpawnOptions) -> Command {
     for (k, v) in &opts.env {
         cmd.env(k, v);
     }
-    cmd
+    Ok(cmd)
 }
 
 /// Escape a string for use as a `cmd.exe /C` argument on Windows.
@@ -84,6 +106,7 @@ pub fn shell_command(cmd_str: &str) -> SpawnOptions {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
+            sandbox_policy: None,
         }
     } else {
         SpawnOptions {
@@ -95,6 +118,7 @@ pub fn shell_command(cmd_str: &str) -> SpawnOptions {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
+            sandbox_policy: None,
         }
     }
 }
@@ -160,7 +184,7 @@ async fn join_drain(handle: JoinHandle<Vec<u8>>) -> String {
 ///
 /// Returns an error if the command cannot be spawned or output cannot be captured.
 pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
-    let mut cmd = build_command(&opts);
+    let mut cmd = build_command(&opts)?;
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
@@ -232,7 +256,7 @@ pub async fn run_streaming(
     on_stdout: impl Fn(&str) + Send + 'static,
     on_stderr: impl Fn(&str) + Send + 'static,
 ) -> crab_core::Result<i32> {
-    let mut cmd = build_command(&opts);
+    let mut cmd = build_command(&opts)?;
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::null());
@@ -284,6 +308,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -295,6 +320,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         }
     }
@@ -319,6 +345,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -330,6 +357,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -348,6 +376,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -359,6 +388,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -377,6 +407,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -388,6 +419,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -408,6 +440,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -419,6 +452,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -450,6 +484,7 @@ mod tests {
                 stdin_data: Some("hello from stdin\n".into()),
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -461,6 +496,7 @@ mod tests {
                 stdin_data: Some("hello from stdin\n".into()),
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -504,6 +540,7 @@ mod tests {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
+            sandbox_policy: None,
         };
         let result = run(opts).await;
         assert!(result.is_err());
@@ -522,6 +559,7 @@ mod tests {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
+            sandbox_policy: None,
         };
         let result = run(opts).await;
         assert!(result.is_err());
@@ -543,6 +581,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -557,6 +596,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -579,6 +619,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -590,6 +631,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -610,6 +652,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -621,6 +664,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -645,6 +689,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -656,6 +701,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -676,6 +722,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -687,6 +734,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -712,6 +760,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -723,6 +772,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -744,6 +794,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -755,6 +806,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let exit_code = run_streaming(
@@ -829,6 +881,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -840,6 +893,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -861,6 +915,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -875,6 +930,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -912,6 +968,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -926,6 +983,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -965,6 +1023,7 @@ mod tests {
                 stdin_data: Some(payload),
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -976,6 +1035,7 @@ mod tests {
                 stdin_data: Some(payload),
                 clear_env: false,
                 kill_grace_period: None,
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -1007,6 +1067,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         } else {
             SpawnOptions {
@@ -1018,6 +1079,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
+                sandbox_policy: None,
             }
         };
         let out = run(opts).await.unwrap();

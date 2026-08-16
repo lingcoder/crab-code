@@ -3,7 +3,7 @@
 #[cfg(test)]
 use super::state::AppAction;
 use super::state::{
-    ActiveToolInfo, AppState, ChatMessage, ExitKey, PromptInputMode, ThinkingState,
+    ActiveToolInfo, AppState, ChatMessage, ExitKey, PromptInputMode, ThinkingState, ToolCallStatus,
 };
 
 use std::collections::HashMap;
@@ -472,33 +472,66 @@ impl App {
     }
 
     /// Rebuild the message list from a loaded conversation.
+    ///
+    /// Replays the full transcript — assistant text, tool calls, tool
+    /// results, and thinking blocks — through the same `ChatMessage`
+    /// variants the live event path produces, so resumed sessions render
+    /// identically to live ones (grouping, collapsing, dot colors all
+    /// reuse the live cells). Truncated to the window returned by
+    /// [`replay_start_index`]: everything before the last compaction
+    /// boundary is dropped (its content is summarized into the boundary),
+    /// and at most [`MAX_REPLAY_MESSAGES`] trailing messages are shown.
     pub fn load_session_messages(&mut self, conversation: &crab_agents::Conversation) {
+        use crab_core::message::{ContentBlock, Role};
+
         self.reset_for_new_session();
         self.session_id.clone_from(&conversation.id);
 
-        // Compaction injects its summary back into the conversation as a
-        // synthetic user (+ assistant ack) pair. The live `/compact` flow only
-        // ever shows a boundary divider for it, so collapse the same pair here
-        // to keep resumed sessions consistent with live ones.
         let messages = conversation.messages();
-        let mut idx = 0;
+        let registry = self.tool_registry.clone();
+
+        // Pre-scan so result cells can be reconstructed with the metadata the
+        // live path caches per tool call: result blocks only carry the
+        // `tool_use_id`, so the tool name and input are recovered from the
+        // matching `ToolUse` block, and each call's final error status colors
+        // the `●` dot on its call cell.
+        let mut tool_meta: HashMap<String, (String, serde_json::Value)> = HashMap::new();
+        let mut tool_errors: HashMap<String, bool> = HashMap::new();
+        for msg in messages {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::ToolUse { id, name, input } => {
+                        tool_meta.insert(id.clone(), (name.clone(), input.clone()));
+                    }
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        is_error,
+                        ..
+                    } => {
+                        tool_errors.insert(tool_use_id.clone(), *is_error);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let show_thinking = super::thinking_transcript_enabled();
+        let mut idx = replay_start_index(messages);
         while idx < messages.len() {
             let msg = &messages[idx];
-            let text = msg.text();
 
-            if msg.role == crab_core::message::Role::User
-                && (text.starts_with(crab_agents::COMPACT_SUMMARY_USER_PREFIX)
-                    || text.starts_with(crab_agents::COMPACT_HEURISTIC_USER_PREFIX))
-            {
+            // Compaction injects its summary back into the conversation as a
+            // synthetic user (+ assistant ack) pair. The live `/compact` flow
+            // only shows a boundary divider for it, so collapse the same pair
+            // here to keep resumed sessions consistent with live ones.
+            if is_compact_boundary(msg) {
                 self.messages.push(ChatMessage::CompactBoundary {
                     strategy: "summary".into(),
                     after_tokens: 0,
                     removed_messages: 0,
                 });
-                // Swallow the synthetic assistant acknowledgement that the LLM
-                // summarize path appends right after the summary message.
                 if matches!(messages.get(idx + 1), Some(next)
-                    if next.role == crab_core::message::Role::Assistant
+                    if next.role == Role::Assistant
                         && next.text() == crab_agents::COMPACT_SUMMARY_ACK)
                 {
                     idx += 1;
@@ -507,21 +540,34 @@ impl App {
                 continue;
             }
 
-            let chat_msg = match msg.role {
-                crab_core::message::Role::User => ChatMessage::User { text },
-                crab_core::message::Role::Assistant => ChatMessage::Assistant {
-                    streaming: false,
-                    text,
-                    committed_lines: 0,
-                },
-                crab_core::message::Role::System => ChatMessage::System {
-                    text,
-                    kind: crate::history::cells::SystemKind::Info,
-                },
-            };
-            self.messages.push(chat_msg);
+            replay_message(
+                msg,
+                registry.as_deref(),
+                &tool_meta,
+                &tool_errors,
+                show_thinking,
+                &mut self.messages,
+            );
             idx += 1;
         }
+    }
+
+    /// Resume a saved session: replay its transcript and restore its
+    /// permission grants.
+    ///
+    /// [`load_session_messages`] runs [`reset_for_new_session`], which clears
+    /// `session_grants`; grants are applied here afterward so a resumed
+    /// session's prior authorizations are not wiped.
+    ///
+    /// [`load_session_messages`]: Self::load_session_messages
+    /// [`reset_for_new_session`]: Self::reset_for_new_session
+    pub fn load_session_with_grants(
+        &mut self,
+        conversation: &crab_agents::Conversation,
+        grants: &[String],
+    ) {
+        self.load_session_messages(conversation);
+        self.session_grants = grants.iter().cloned().collect();
     }
 
     /// Set custom keybindings.
@@ -875,6 +921,201 @@ fn render_autocomplete_popup(ac: &AutoComplete, input_area: Rect, buf: &mut Buff
             height: 1,
         };
         Widget::render(line, line_area, buf);
+    }
+}
+
+/// Maximum number of trailing conversation messages replayed into the TUI on
+/// resume. Longer histories are truncated from the front so a resumed session
+/// cannot flood the terminal's native scrollback on startup.
+const MAX_REPLAY_MESSAGES: usize = 200;
+
+/// Whether `msg` is the synthetic user message that compaction injects to
+/// carry its summary (either the LLM-summarize or heuristic-trim variant).
+fn is_compact_boundary(msg: &crab_core::message::Message) -> bool {
+    if msg.role != crab_core::message::Role::User {
+        return false;
+    }
+    let text = msg.text();
+    text.starts_with(crab_agents::COMPACT_SUMMARY_USER_PREFIX)
+        || text.starts_with(crab_agents::COMPACT_HEURISTIC_USER_PREFIX)
+}
+
+/// First message index to replay on resume: the later of the last compaction
+/// boundary (content before it is summarized into the boundary) and the
+/// [`MAX_REPLAY_MESSAGES`] cap counted back from the end.
+fn replay_start_index(messages: &[crab_core::message::Message]) -> usize {
+    let boundary_start = messages.iter().rposition(is_compact_boundary).unwrap_or(0);
+    let cap_start = messages.len().saturating_sub(MAX_REPLAY_MESSAGES);
+    boundary_start.max(cap_start)
+}
+
+/// Expand one persisted message into the `ChatMessage` cells the renderer
+/// consumes, appending to `out`. Mirrors the live event path so history and
+/// live turns share the same cell types.
+fn replay_message(
+    msg: &crab_core::message::Message,
+    registry: Option<&crab_agents::ToolRegistry>,
+    tool_meta: &HashMap<String, (String, serde_json::Value)>,
+    tool_errors: &HashMap<String, bool>,
+    show_thinking: bool,
+    out: &mut Vec<ChatMessage>,
+) {
+    use crab_core::message::{ContentBlock, Role};
+
+    match msg.role {
+        Role::Assistant => {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Text { text } if !text.is_empty() => {
+                        out.push(ChatMessage::Assistant {
+                            streaming: false,
+                            text: text.clone(),
+                            committed_lines: 0,
+                        });
+                    }
+                    ContentBlock::Thinking { thinking }
+                        if !thinking.is_empty() && show_thinking =>
+                    {
+                        out.push(ChatMessage::Thinking {
+                            text: thinking.clone(),
+                            collapsed: true,
+                            duration: None,
+                        });
+                    }
+                    ContentBlock::ToolUse { id, name, input } => {
+                        out.push(build_tool_use_cell(id, name, input, registry, tool_errors));
+                    }
+                    ContentBlock::Image { .. } => {
+                        out.push(ChatMessage::Assistant {
+                            streaming: false,
+                            text: "[image]".into(),
+                            committed_lines: 0,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Role::User => {
+            let mut text_parts: Vec<String> = Vec::new();
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Text { text } if !text.is_empty() => {
+                        text_parts.push(text.clone());
+                    }
+                    ContentBlock::Image { .. } => text_parts.push("[image]".into()),
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } => {
+                        flush_user_text(&mut text_parts, out);
+                        out.push(build_tool_result_cell(
+                            tool_use_id,
+                            content,
+                            *is_error,
+                            registry,
+                            tool_meta,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            flush_user_text(&mut text_parts, out);
+        }
+        Role::System => {
+            let text = msg.text();
+            if !text.is_empty() {
+                out.push(ChatMessage::System {
+                    text,
+                    kind: crate::history::cells::SystemKind::Info,
+                });
+            }
+        }
+    }
+}
+
+/// Push accumulated user text/image parts as a single `User` cell, then clear
+/// the buffer. A message that is purely tool-result blocks leaves `parts`
+/// empty, so no empty `❯` shell is produced.
+fn flush_user_text(parts: &mut Vec<String>, out: &mut Vec<ChatMessage>) {
+    if parts.is_empty() {
+        return;
+    }
+    out.push(ChatMessage::User {
+        text: parts.join("\n"),
+    });
+    parts.clear();
+}
+
+/// Reconstruct a `ToolUse` cell from a persisted `tool_use` block, resolving
+/// the same display metadata the live `ToolStart` path caches. Final dot status is
+/// recovered from the matching result's error flag (no result → `Success`,
+/// since orphaned calls are already sanitized out before resume).
+fn build_tool_use_cell(
+    id: &str,
+    name: &str,
+    input: &serde_json::Value,
+    registry: Option<&crab_agents::ToolRegistry>,
+    tool_errors: &HashMap<String, bool>,
+) -> ChatMessage {
+    let tool_ref = registry.and_then(|r| r.get(name));
+    let summary = tool_ref.and_then(|t| t.format_use_summary(input));
+    let color = tool_ref.map(|t| t.display_color());
+    let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
+    let collapsed_label = tool_ref.and_then(|t| t.collapsed_group_label());
+    let status = match tool_errors.get(id) {
+        Some(true) => ToolCallStatus::Error,
+        _ => ToolCallStatus::Success,
+    };
+    ChatMessage::ToolUse {
+        id: id.to_string(),
+        name: name.to_string(),
+        summary,
+        color,
+        is_read_only,
+        status,
+        collapsed_label,
+    }
+}
+
+/// Reconstruct a `ToolResult` cell from a persisted `tool_result` block. The
+/// stored content string is wrapped back into a `ToolOutput` so the tool's own
+/// `format_result`/`format_error` render exactly as they did live.
+fn build_tool_result_cell(
+    tool_use_id: &str,
+    content: &str,
+    is_error: bool,
+    registry: Option<&crab_agents::ToolRegistry>,
+    tool_meta: &HashMap<String, (String, serde_json::Value)>,
+) -> ChatMessage {
+    use crab_core::tool::{ToolOutput, ToolOutputContent};
+
+    let fallback = (String::new(), serde_json::Value::Null);
+    let (tool_name, input) = tool_meta.get(tool_use_id).unwrap_or(&fallback);
+    let tool_ref = registry.and_then(|r| r.get(tool_name));
+    let output = ToolOutput {
+        content: vec![ToolOutputContent::Text {
+            text: content.to_string(),
+        }],
+        is_error,
+    };
+    let display = if is_error {
+        tool_ref
+            .and_then(|t| t.format_error(&output, input))
+            .or_else(|| tool_ref.and_then(|t| t.format_result(&output)))
+    } else {
+        tool_ref.and_then(|t| t.format_result(&output))
+    };
+    let collapsed = tool_ref.is_some_and(|t| t.is_result_collapsible(&output));
+    let is_read_only = tool_ref.is_some_and(|t| t.is_read_only());
+    ChatMessage::ToolResult {
+        tool_name: tool_name.clone(),
+        output: content.to_string(),
+        is_error,
+        display,
+        collapsed,
+        is_read_only,
     }
 }
 
@@ -2527,8 +2768,10 @@ mod tests {
         let mut app = App::new("test");
         app.load_session_messages(&conv);
 
-        // The summary user message + assistant ack collapse to one boundary; the
-        // surrounding real turns survive verbatim.
+        // The summary user message + assistant ack collapse to one boundary;
+        // replay starts at the boundary, so the real turns before it are
+        // sliced off (their content lives in the summary), and turns after it
+        // survive verbatim.
         let boundaries = app
             .messages
             .iter()
@@ -2544,7 +2787,10 @@ mod tests {
             crab_agents::COMPACT_SUMMARY_ACK
         ));
         assert!(messages_contain(&app.messages, "what next?"));
-        assert!(messages_contain(&app.messages, "hello"));
+        assert!(
+            !messages_contain(&app.messages, "hello"),
+            "content before the last compaction boundary is sliced off on resume"
+        );
     }
 
     #[test]
@@ -2569,6 +2815,207 @@ mod tests {
         // No follower ack for the heuristic path, so the next real user message
         // must remain intact.
         assert!(messages_contain(&app.messages, "resumed question"));
+    }
+
+    #[test]
+    fn resume_slices_from_last_of_multiple_boundaries() {
+        let mut conv = crab_agents::Conversation::new("s3".into(), String::new(), 100_000);
+        conv.push_user("first");
+        conv.push_user(format!(
+            "{}\nsummary A",
+            crab_agents::COMPACT_HEURISTIC_USER_PREFIX
+        ));
+        conv.push_user("middle");
+        conv.push_user(format!(
+            "{}\nsummary B",
+            crab_agents::COMPACT_HEURISTIC_USER_PREFIX
+        ));
+        conv.push_user("after");
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        // Only the last boundary and what follows it are replayed.
+        assert_eq!(
+            app.messages
+                .iter()
+                .filter(|m| matches!(m, ChatMessage::CompactBoundary { .. }))
+                .count(),
+            1
+        );
+        assert!(!messages_contain(&app.messages, "first"));
+        assert!(!messages_contain(&app.messages, "middle"));
+        assert!(messages_contain(&app.messages, "after"));
+    }
+
+    #[test]
+    fn resume_caps_replay_at_max_messages() {
+        let mut conv = crab_agents::Conversation::new("s4".into(), String::new(), 100_000);
+        for i in 0..(MAX_REPLAY_MESSAGES + 50) {
+            conv.push_user(format!("unique-{i}-marker"));
+        }
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        assert_eq!(app.messages.len(), MAX_REPLAY_MESSAGES);
+        // Window is the last MAX_REPLAY_MESSAGES messages (indices 50..250).
+        assert!(!messages_contain(&app.messages, "unique-49-marker"));
+        assert!(messages_contain(&app.messages, "unique-50-marker"));
+        assert!(messages_contain(
+            &app.messages,
+            &format!("unique-{}-marker", MAX_REPLAY_MESSAGES + 49)
+        ));
+    }
+
+    #[test]
+    fn resume_replays_tool_session_without_empty_user_shell() {
+        use crab_core::message::{ContentBlock, Message, Role};
+
+        let mut conv = crab_agents::Conversation::new("s5".into(), String::new(), 100_000);
+        conv.push_user("read the file");
+        conv.push(Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::text("I'll read it"),
+                ContentBlock::tool_use("t1", "Read", serde_json::json!({"path": "a.rs"})),
+            ],
+        ));
+        conv.push(Message::tool_result("t1", "file contents", false));
+        conv.push_assistant("done");
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        let tool_uses = app
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::ToolUse { .. }))
+            .count();
+        let tool_results = app
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::ToolResult { .. }))
+            .count();
+        assert_eq!(tool_uses, 1, "one tool call cell");
+        assert_eq!(tool_results, 1, "one tool result cell");
+
+        // The tool_result user message must not render an empty `❯` shell.
+        let empty_user = app
+            .messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::User { text } if text.is_empty()));
+        assert!(
+            !empty_user,
+            "tool_result-only user message produced an empty User cell"
+        );
+
+        assert!(messages_contain(&app.messages, "I'll read it"));
+        assert!(messages_contain(&app.messages, "done"));
+        assert!(messages_contain(&app.messages, "file contents"));
+    }
+
+    #[test]
+    fn resume_tool_use_status_reflects_result_error() {
+        use crab_core::message::{ContentBlock, Message, Role};
+
+        let mut conv = crab_agents::Conversation::new("s6".into(), String::new(), 100_000);
+        conv.push(Message::new(
+            Role::Assistant,
+            vec![ContentBlock::tool_use(
+                "ok",
+                "Read",
+                serde_json::json!({"path": "a.rs"}),
+            )],
+        ));
+        conv.push(Message::tool_result("ok", "content", false));
+        conv.push(Message::new(
+            Role::Assistant,
+            vec![ContentBlock::tool_use(
+                "bad",
+                "Bash",
+                serde_json::json!({"command": "false"}),
+            )],
+        ));
+        conv.push(Message::tool_result("bad", "boom", true));
+
+        let mut app = App::new("test");
+        app.load_session_messages(&conv);
+
+        let statuses: Vec<ToolCallStatus> = app
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::ToolUse { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![ToolCallStatus::Success, ToolCallStatus::Error]
+        );
+    }
+
+    #[test]
+    fn resume_replays_thinking_block() {
+        use crab_core::message::{ContentBlock, Message, Role};
+
+        let mut conv = crab_agents::Conversation::new("s7".into(), String::new(), 100_000);
+        conv.push(Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::Thinking {
+                    thinking: "let me reason".into(),
+                },
+                ContentBlock::text("the answer"),
+            ],
+        ));
+
+        // Thinking is gated on `CRAB_SHOW_THINKING`, matching the live stream
+        // path. Drive `replay_message` directly rather than mutating the env:
+        // `unsafe_code` is forbidden workspace-wide, so `set_var` is off the
+        // table, and an env-dependent assertion would race parallel tests.
+        let msg = &conv.messages()[0];
+        let meta = HashMap::new();
+        let errors = HashMap::new();
+
+        let mut shown = Vec::new();
+        replay_message(msg, None, &meta, &errors, true, &mut shown);
+        let thinking = shown
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::Thinking { .. }))
+            .count();
+        assert_eq!(thinking, 1);
+        assert!(messages_contain(&shown, "let me reason"));
+        assert!(messages_contain(&shown, "the answer"));
+
+        let mut hidden = Vec::new();
+        replay_message(msg, None, &meta, &errors, false, &mut hidden);
+        assert!(
+            !hidden
+                .iter()
+                .any(|m| matches!(m, ChatMessage::Thinking { .. }))
+        );
+        assert!(messages_contain(&hidden, "the answer"));
+    }
+
+    #[test]
+    fn resume_load_with_grants_survives_reset() {
+        let mut conv = crab_agents::Conversation::new("s8".into(), String::new(), 100_000);
+        conv.push_user("hello");
+
+        let mut app = App::new("test");
+        // A grant that predates the resume must be replaced, not merged.
+        app.session_grants.insert("stale".to_string());
+        let grants = vec!["Bash".to_string(), "Write".to_string()];
+        app.load_session_with_grants(&conv, &grants);
+
+        // Grants are applied after `load_session_messages` runs its reset, so
+        // the restored set survives and the stale pre-resume grant is gone.
+        assert!(!app.session_grants.is_empty());
+        assert!(app.session_grants.contains("Bash"));
+        assert!(app.session_grants.contains("Write"));
+        assert!(!app.session_grants.contains("stale"));
     }
 
     #[test]

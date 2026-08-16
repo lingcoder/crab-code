@@ -212,6 +212,7 @@ mod tests {
 
     fn read_use(path: &str) -> ChatMessage {
         ChatMessage::ToolUse {
+            id: format!("tu_{path}"),
             name: "Read".into(),
             summary: Some(format!("Read ({path})")),
             color: None,
@@ -286,6 +287,7 @@ mod tests {
         let msgs = vec![
             read_use("a.rs"),
             ChatMessage::ToolUse {
+                id: "grep_tu".into(),
                 name: "Grep".into(),
                 summary: None,
                 color: None,

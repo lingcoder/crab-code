@@ -39,3 +39,5 @@ mod s08_compact;
 mod s09_interrupt;
 #[path = "snapshots/s10_spinner_status.rs"]
 mod s10_spinner_status;
+#[path = "snapshots/s11_resume_replay.rs"]
+mod s11_resume_replay;

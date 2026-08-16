@@ -65,6 +65,7 @@ mod tests {
 
     fn read_use() -> ChatMessage {
         ChatMessage::ToolUse {
+            id: "read_tu".into(),
             name: "Read".into(),
             summary: Some("Read (a.rs)".into()),
             color: None,

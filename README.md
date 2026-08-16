@@ -5,7 +5,7 @@
 **Open-source alternative to Claude Code, built from scratch in Rust.**
 
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/lingcoder/crab-code/actions/workflows/ci.yml/badge.svg)](https://github.com/lingcoder/crab-code/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
@@ -15,7 +15,7 @@
 
 ---
 
-> **Active Development** — 4970 tests · 26 crates · ~161k LOC
+> **Active Development** — 4980 tests · 26 crates · ~163k LOC
 
 Crab Code is a Rust-native agentic coding CLI. It aligns with Claude Code's toolset, permission model, and interaction patterns while supporting any LLM provider (Anthropic / OpenAI / DeepSeek / Bedrock / Vertex).
 
@@ -103,7 +103,7 @@ Env (runtime layer) always wins over file. Mutually-exclusive variants apply hig
 
 | | Crab Code | Claude Code | OpenCode| Codex CLI |
 |--|-----------|-------------|---------|-----------|
-| Open Source | Apache 2.0 | Proprietary | MIT | Apache 2.0 |
+| Open Source | MIT | Proprietary | MIT | Apache 2.0 |
 | Language | Rust | TypeScript | TypeScript | Rust |
 | Models | Any provider | Anthropic | Any provider | OpenAI only |
 | MCP | 3 transports | 6 transports | LSP | 2 transports |
@@ -115,7 +115,7 @@ Env (runtime layer) always wins over file. Mutually-exclusive variants apply hig
 ```
 Entry     cli
 Engine    agents · engine · session · tui · remote
-Service   api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · swarm · cron · fs · memory · process
+Service   api · tools · commands · hooks · mcp · acp · skills · plugin · telemetry · ide · sandbox · team · cron · fs · memory · process
 Foundation core · utils · config · auth
 ```
 
@@ -133,5 +133,5 @@ PRs welcome.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[MIT License](LICENSE)
 

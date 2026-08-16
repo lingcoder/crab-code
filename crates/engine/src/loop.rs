@@ -12,7 +12,7 @@ use crab_api::rate_limit::RetryPolicy;
 use crab_api::streaming::StreamingToolParser;
 use crab_api::types::{CacheBreakpoint, MessageRequest, StreamEvent};
 use crab_core::error::ApiErrorKind;
-use crab_core::event::{Event, TOOL_ARG_INDEX_BASE};
+use crab_core::event::{Event, NoticeKind, TOOL_ARG_INDEX_BASE};
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
 use crab_core::tool::{ToolContext, ToolOutput};
@@ -293,7 +293,8 @@ pub async fn query_loop(
             Err(e) if is_prompt_too_long_error(&e) && state.ptl_retries < MAX_PTL_RETRIES => {
                 state.ptl_retries += 1;
                 let _ = event_tx
-                    .send(Event::Error {
+                    .send(Event::Notice {
+                        kind: NoticeKind::Compacting,
                         message: format!(
                             "Prompt too long, compacting and retrying ({}/{MAX_PTL_RETRIES})",
                             state.ptl_retries
@@ -320,19 +321,20 @@ pub async fn query_loop(
             Err(e) if is_overloaded_error(&e) && config.fallback_model.is_some() => {
                 let fallback = config.fallback_model.as_ref().unwrap();
                 let _ = event_tx
-                    .send(Event::Error {
+                    .send(Event::Notice {
+                        kind: NoticeKind::Fallback,
                         message: format!(
                             "Primary model overloaded, falling back to {}",
                             fallback.as_str()
                         ),
                     })
                     .await;
+                // The `Notice` above already carries the user-facing message;
+                // this only signals the TUI to discard any partial content the
+                // aborted primary attempt streamed (empty reason = no toast).
                 let _ = event_tx
                     .send(Event::StreamAborted {
-                        reason: format!(
-                            "Primary model overloaded, falling back to {}",
-                            fallback.as_str()
-                        ),
+                        reason: String::new(),
                     })
                     .await;
                 let fallback_req = MessageRequest {
@@ -397,7 +399,8 @@ pub async fn query_loop(
             {
                 state.effective_max_tokens = ESCALATED_MAX_TOKENS;
                 let _ = event_tx
-                    .send(Event::Error {
+                    .send(Event::Notice {
+                        kind: NoticeKind::Truncated,
                         message: format!(
                             "Output truncated, escalating to {ESCALATED_MAX_TOKENS} tokens \
                              ({}/{MAX_OUTPUT_TOKEN_RETRIES})",
@@ -410,7 +413,8 @@ pub async fn query_loop(
 
             // Subsequent: keep truncated assistant message, inject continuation
             let _ = event_tx
-                .send(Event::Error {
+                .send(Event::Notice {
+                    kind: NoticeKind::Truncated,
                     message: format!(
                         "Output truncated, injecting continuation \
                          ({}/{MAX_OUTPUT_TOKEN_RETRIES})",
@@ -674,7 +678,8 @@ async fn stream_with_retry(
                         .retry_after()
                         .unwrap_or_else(|| policy.delay_for_attempt(attempt));
                     let _ = event_tx
-                        .send(Event::Error {
+                        .send(Event::Notice {
+                            kind: NoticeKind::Retry,
                             message: format!(
                                 "Retrying after error (attempt {}/{}): {e}",
                                 attempt + 1,
@@ -858,11 +863,12 @@ async fn stream_response(
                 saw_message_stop = true;
             }
             StreamEvent::Error { message } => {
-                let _ = event_tx
-                    .send(Event::Error {
-                        message: message.clone(),
-                    })
-                    .await;
+                // Do NOT surface a fatal `Event::Error` here: this mid-stream
+                // provider error is returned as an `Err` and handed to the
+                // retry/fallback machinery, which either recovers (emitting a
+                // non-fatal `Event::Notice`) or propagates the failure to the
+                // runner, which surfaces the final fatal error. Emitting here
+                // would flash a fatal error even when the attempt is retried.
                 if let Some(se) = &mut streaming_executor {
                     se.abort_all();
                 }

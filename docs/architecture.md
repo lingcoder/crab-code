@@ -3314,41 +3314,52 @@ src/
 
 **Responsibility**: Layer 2 leaf service. `Sandbox` trait + platform backends (seatbelt / landlock / windows / noop), consumed by `crates/tools` for Bash/PowerShell execution.
 
+The API is **transform-style**: a backend receives the raw invocation
+`(policy, program, args, cwd)` and returns a spawnable `tokio::process::Command`.
+Rewriting argv (macOS wraps it with `sandbox-exec`) and installing a `pre_exec`
+hook (Linux Landlock) both have to happen before the `Command` exists, so this
+cannot be a "mutate an existing `Command`" API.
+
 **Directory Structure**
 
 ```
 src/
-├── lib.rs
-├── traits.rs                // Sandbox trait
-├── config.rs                // SandboxConfig: workdir / env / timeout
-├── policy.rs                // SandboxPolicy: read/write/exec/net allowlist
+├── lib.rs                   // prepare_command + global set_enabled/is_enabled switch
+├── traits.rs                // Sandbox trait, SandboxBackend tag, PreparedCommand
+├── config.rs                // SandboxMode
+├── policy.rs                // SandboxPolicy: writable roots / path rules / net
 ├── error.rs                 // SandboxError
-├── doctor.rs                // diagnose platform support
-├── violation.rs             // violation reporting
+├── denial.rs                // heuristics: was this failure caused by the sandbox?
 │
 └── backend/
-    ├── mod.rs               // auto-select: seatbelt > landlock > windows > noop
-    ├── factory.rs           // backend auto-selection factory
-    ├── noop.rs              // dev / fallback: allow-all
-    ├── seatbelt.rs          // macOS: generate .sb profile + sandbox-exec
-    ├── landlock.rs          // Linux 5.13+: landlock crate (cfg-gated)
-    └── windows.rs           // Windows sandbox
+    ├── mod.rs               // backend re-exports + prepare_command
+    ├── factory.rs           // create_sandbox: pick backend by cfg(target_os)
+    ├── noop.rs              // dev / fallback: passthrough, no enforcement
+    ├── seatbelt.rs          // macOS: SBPL profile + sandbox-exec argv wrap
+    ├── seatbelt_base_policy.sbpl  // base SBPL profile
+    ├── landlock.rs          // Linux 5.13+: landlock ruleset via pre_exec
+    └── windows.rs           // Windows: fail-open (no isolation available)
 ```
 
 **Core trait**:
 
 ```rust
 pub trait Sandbox: Send + Sync {
-    fn spawn(&self, cmd: &mut std::process::Command, policy: &SandboxPolicy)
-        -> Result<std::process::Child, SandboxError>;
-    fn name(&self) -> &'static str;
-    fn is_supported() -> bool where Self: Sized;
+    fn backend(&self) -> SandboxBackend;
+    fn is_available(&self) -> bool;
+    fn prepare(
+        &self,
+        policy: &SandboxPolicy,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+    ) -> crab_core::Result<PreparedCommand>;
 }
 ```
 
 **Platform selection**: no feature flags — backends are selected via `cfg(target_os)`. `landlock` dep is `[target.'cfg(target_os = "linux")'.dependencies]` so it only compiles on Linux. On platforms without a native sandbox we fall back to `noop`.
 
-**UI**: sandbox violations surface in TUI via `core::Event` broadcasts, not this crate.
+**UI**: this crate emits no events. A suspected denial is folded into the tool's own result text by `tools/builtin/bash.rs`, which the TUI renders like any other tool output.
 
 ---
 
@@ -3673,7 +3684,7 @@ members = ["crates/*", "xtask"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/lingcoder/crab-code"
 description = "Rust-native agentic coding CLI — open-source alternative to Claude Code"
 
@@ -3995,23 +4006,34 @@ Flow:
 
 ```
 ┌──────────────────────┐
-│ create_sandbox(None) │
+│ create_sandbox()     │
 └──────────┬───────────┘
+           │ cfg(target_os)
+           v
+┌──────────────────────────────────────────────┐
+│ linux   -> LandlockSandbox  (fail-closed)    │
+│ macos   -> SeatbeltSandbox  (fail-closed)    │
+│ windows -> WindowsSandbox   (fail-open+warn) │
+│ other   -> NoopSandbox      (passthrough)    │
+└──────────┬───────────────────────────────────┘
            │
            v
-┌──────────────────────┐
-│ for each backend in  │
-│ precedence order:    │
-│   if is_supported()  │──── yes ──> return Box<dyn Sandbox>
-│     return it        │
-└──────────┬───────────┘
-           │ no backend supported
-           v
-┌──────────────────────┐
-│ noop + warn!()       │
-└──────────────────────┘
+┌──────────────────────────────────────────────┐
+│ .prepare(policy, program, args, cwd)         │
+│   -> PreparedCommand { command, applied,     │
+│                        backend, description }│
+└──────────────────────────────────────────────┘
 ```
 
-Doctor (`sandbox::doctor::diagnose()`) reports each backend's support status, used by `/doctor` and the TUI Sandbox settings tab. Consumers (e.g., `tools/builtin/bash.rs`) may override precedence by passing `Some("seatbelt")` etc. to force a specific backend for testing.
+Selection is a compile-time `cfg(target_os)` branch, not a runtime "first
+supported backend wins" scan. `is_available()` then reports whether the selected
+backend can actually enforce on this machine (e.g. Landlock needs kernel 5.13+);
+when it cannot, Linux/macOS fail closed and Windows fails open with a warning.
+`crab_sandbox::set_enabled(false)` (driven by `--sandbox off`) disables
+enforcement process-wide.
 
-Violation events flow upward via `core::Event` broadcasts, consumed by the TUI for display and by the denial tracker (`core/permission/denial_tracker.rs`) for repeat-offense patterns.
+After a sandboxed command fails, `sandbox::denial::is_likely_sandbox_denied()`
+keyword-matches its output so the tool layer can append `SANDBOX_DENIAL_HINT`
+instead of returning a bare non-zero exit. Repeat-offense tracking for denied
+*permission* prompts is separate and lives in
+`core/permission/denial_tracker.rs`.

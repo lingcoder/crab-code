@@ -5,7 +5,7 @@ members = ["crates/*", "xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/lingcoder/crab-code.git"
 homepage = "https://github.com/lingcoder/crab-code"
 keywords = ["cli", "ai", "coding-assistant", "llm", "agent"]
@@ -83,16 +83,16 @@ oauth2 = "5"
 
 # ─── WebSocket / MCP ───
 tokio-tungstenite = "0.30"
-rmcp = { version = "2", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
-wasmtime = "46"
+wasmtime = "47"
 
 # ─── Process ───
 portable-pty = "0.9"
 
 # ─── Encoding & Crypto ───
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.11"
 hmac = "0.13"
 rand = "0.10"
@@ -108,13 +108,13 @@ semver = "1"
 
 # ─── Misc ───
 uuid = { version = "1", features = ["v4"] }
-ulid = "1"
+ulid = "3"
 lru = "0.18"
 unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
 textwrap = "0.16"
 url = "2"
-jsonschema = "0.47"
+jsonschema = "0.49"
 toml_edit = "0.25"
 schemars = "1"
 nucleo-matcher = "0.3"
@@ -122,13 +122,13 @@ nucleo-matcher = "0.3"
 # ─── Remote / Sandbox / Jobs ───
 # rust_crypto: pure-rust HMAC/RSA backend; avoids cmake + aws_lc_rs build deps
 # across Windows / Linux CI.
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 # AWS event-stream (vnd.amazon.eventstream) framing for Bedrock streaming.
 aws-smithy-eventstream = "0.61"
 aws-smithy-types = "1"
 bytes = "1"
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
-agent-client-protocol = "1"
+agent-client-protocol = "2"
 async-trait = "0.1"
 webbrowser = "1"
 urlencoding = "2"

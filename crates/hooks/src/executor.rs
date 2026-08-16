@@ -289,6 +289,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         stdin_data: Some(payload.to_string()),
         clear_env: false,
         kill_grace_period: None,
+        sandbox_policy: None,
     };
 
     let output = match crab_process::spawn::run(opts).await {

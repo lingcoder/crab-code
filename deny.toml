@@ -1,6 +1,6 @@
 [advisories]
 ignore = [
-    # RSA Marvin Attack (timing sidechannel). Transitive via jsonwebtoken 10 →
+    # RSA Marvin Attack (timing sidechannel). Transitive via jsonwebtoken 11 →
     # rsa 0.9.10. No safe upgrade published yet. Threat model: the JWT signer
     # runs on loopback for the local session-attach server; there is no
     # network-observable timing signal for an attacker to exploit.
