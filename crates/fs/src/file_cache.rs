@@ -211,10 +211,13 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    /// No `sync_all` here on purpose. These tests only need the write to be
+    /// visible to a later `fs::metadata` / `fs::read_to_string` in the same
+    /// process, which the page cache already guarantees. Forcing a physical
+    /// flush buys nothing and fails with `EIO` on GitHub's macOS runners.
     fn write_file(path: &Path, contents: &str) {
         let mut f = fs::File::create(path).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
-        f.sync_all().unwrap();
     }
 
     #[test]
