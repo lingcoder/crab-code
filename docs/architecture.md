@@ -211,7 +211,7 @@ crab-code/
 │   ├── api/                           # LLM clients (anthropic/ + openai/ + bedrock/vertex)
 │   ├── mcp/                           # MCP facade (client + server/ + transport/ + auth/)
 │   ├── acp/                           # ACP stdio server (Zed/Neovim/Helix)
-│   ├── fs/                            # glob, grep, diff, watch, lock, symlink
+│   ├── fs/                            # glob, grep, diff
 │   ├── sandbox/                       # Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
 │   ├── ide/                           # IDE MCP client + quirks/ (vscode/jetbrains/wsl)
 │   ├── skills/                        # skill registry + builtin/ skills
@@ -250,7 +250,7 @@ crab-code/
 | Helper crate | 1 | `xtask` (build tooling, not shipped) |
 | **Total** | **25 + 1** | 25 product crates + xtask |
 | Total source files | ~570 | `.rs` files across `crates/*` |
-| Total tests | ~4975 | `cargo nextest run --workspace` |
+| Total tests | ~4916 | `cargo nextest run --workspace` |
 
 
 ---
@@ -310,7 +310,7 @@ edge list is the manifest in §5.2.
 | 3 | **config** | utils, core | Layered merge |
 | 4 | **auth** | utils, core, config | Credential chain |
 | 5 | **api** | core, config, auth | LlmBackend + Anthropic/OpenAI clients |
-| 6 | **fs** | utils, core | File system ops |
+| 6 | **fs** | core | glob / grep / diff primitives for the matching tools |
 | 7 | **mcp** | utils, core | MCP client/server |
 | 8 | **telemetry** | utils, core | Sidecar, optional |
 | 9 | **sandbox** | core | Trait + platform backends (seatbelt/landlock/windows/noop) |
@@ -1449,21 +1449,18 @@ ws = ["tokio-tungstenite"]
 
 ### 6.7 `crates/fs/` -- File System Operations
 
-**Responsibility**: Encapsulate all file system related operations (underlying logic for GlobTool/GrepTool/FileReadTool)
+**Responsibility**: The search and diff primitives behind `GlobTool`, `GrepTool`,
+and `EditTool`. Three independent modules with no cross-references — each is
+consumed directly by one tool in `crates/tools`.
 
 **Directory Structure**
 
 ```
 src/
 ├── lib.rs
-├── glob.rs               // globset wrapper
-├── grep.rs               // ripgrep core integration
-├── gitignore.rs          // .gitignore rule parsing and filtering
-├── watch.rs              // notify file watching (with debouncing + batch aggregation)
-├── lock.rs               // File locking (fd-lock)
-├── diff.rs               // similar wrapper, edit/patch generation
-├── symlink.rs            // Symbolic link handling + secure path resolution (escape prevention)
-└── file_cache.rs         // File content cache
+├── glob.rs               // globset + ignore walker (respects .gitignore)
+├── grep.rs               // ripgrep core (grep-matcher/regex/searcher)
+└── diff.rs               // similar wrapper, edit/patch generation
 ```
 
 **Core Interface**
@@ -1529,7 +1526,7 @@ pub fn apply_edit(
 }
 ```
 
-**External Dependencies**: `crab-utils`, `crab-core`, `globset`, `grep-matcher`, `grep-regex`, `grep-searcher`, `ignore`, `notify`, `similar`, `fd-lock`
+**External Dependencies**: `crab-core`, `globset`, `ignore`, `grep-matcher`, `grep-regex`, `grep-searcher`, `similar`
 
 **Feature Flags**: None
 

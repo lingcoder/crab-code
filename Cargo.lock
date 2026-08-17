@@ -1258,20 +1258,13 @@ name = "crab-fs"
 version = "0.1.0"
 dependencies = [
  "crab-core",
- "crab-utils",
  "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
- "lru",
- "notify",
- "regex",
- "serde",
- "serde_json",
  "similar",
  "tempfile",
- "toml",
 ]
 
 [[package]]
