@@ -8,7 +8,7 @@ description = "Lifecycle hook system for Crab Code"
 
 [dependencies]
 crab-core.workspace = true
-crab-sandbox.workspace = true
+crab-utils.workspace = true
 futures.workspace = true
 regex.workspace = true
 serde.workspace = true

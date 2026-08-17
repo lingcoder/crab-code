@@ -23,7 +23,6 @@ pub mod config;
 pub mod denial;
 pub mod error;
 pub mod policy;
-pub mod spawn;
 pub mod traits;
 
 pub use backend::{

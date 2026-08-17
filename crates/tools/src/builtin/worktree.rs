@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput};
-use crab_sandbox::spawn::{SpawnOptions, run};
+use crab_utils::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
 pub const ENTER_WORKTREE_TOOL_NAME: &str = "EnterWorktree";
@@ -71,7 +71,7 @@ impl Tool for EnterWorktreeTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             })
             .await?;
 
@@ -114,7 +114,7 @@ impl Tool for EnterWorktreeTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             })
             .await?;
 
@@ -221,7 +221,7 @@ impl Tool for ExitWorktreeTool {
                             stdin_data: None,
                             clear_env: false,
                             kill_grace_period: None,
-                            sandbox_policy: None,
+                            prepared: None,
                         })
                         .await?;
 
@@ -250,7 +250,7 @@ impl Tool for ExitWorktreeTool {
                         stdin_data: None,
                         clear_env: false,
                         kill_grace_period: None,
-                        sandbox_policy: None,
+                        prepared: None,
                     })
                     .await?;
 

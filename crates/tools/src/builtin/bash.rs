@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolDisplayResult, ToolDisplayStyle, ToolOutput};
-use crab_sandbox::spawn::{SpawnOptions, run};
+use crab_utils::spawn::{SpawnOptions, run};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing;
@@ -160,6 +160,29 @@ pub(crate) fn command_sandbox_policy(ctx: &ToolContext) -> Option<crab_sandbox::
     crab_sandbox::SandboxPolicy::for_mode(ctx.permission_mode, &ctx.working_dir)
 }
 
+/// Confine `(prog, args)` under `policy`, producing the pre-built command that
+/// `SpawnOptions::prepared` expects. `None` policy means no confinement, so the
+/// spawner derives the command itself.
+///
+/// This is the glue that keeps `crab-utils` free of any sandbox dependency:
+/// spawning and confining are separate concerns, joined only here in the tool
+/// layer where a command is actually untrusted.
+///
+/// # Errors
+///
+/// Propagates the backend error when a fail-closed platform (Linux/macOS) is
+/// asked to enforce a policy it cannot provide.
+pub(crate) fn prepare_sandboxed(
+    policy: Option<&crab_sandbox::SandboxPolicy>,
+    prog: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+) -> Result<Option<tokio::process::Command>> {
+    policy
+        .map(|p| crab_sandbox::prepare_command(p, prog, args, cwd).map(|pc| pc.command))
+        .transpose()
+}
+
 /// Whether the current platform actually enforces the sandbox. Used to avoid
 /// attributing a failure to the sandbox on Windows (fail-open) where a
 /// "permission denied" is never a sandbox denial.
@@ -194,7 +217,7 @@ pub(crate) fn append_denial_hint(mut text: String, sandboxed: bool, exit_code: i
 }
 
 /// Combine stdout and stderr from a process output into a single string.
-fn format_output(output: &crab_sandbox::spawn::SpawnOutput) -> String {
+fn format_output(output: &crab_utils::spawn::SpawnOutput) -> String {
     let mut combined = String::new();
     if !output.stdout.is_empty() {
         combined.push_str(&output.stdout);
@@ -359,6 +382,12 @@ impl Tool for BashTool {
                     })
                     .set_output_path(&task_id, output_path_str);
 
+                // Confine before detaching: a fail-closed backend must be
+                // able to report the error to the caller, not into a task
+                // nobody awaits.
+                let prepared =
+                    prepare_sandboxed(sandbox_policy.as_ref(), &prog, &args, &working_dir)?;
+
                 // Spawn the command as a detached tokio task.
                 let task_id_spawn = task_id.clone();
                 let reg_spawn = Arc::clone(&reg);
@@ -372,7 +401,7 @@ impl Tool for BashTool {
                         stdin_data: None,
                         clear_env: false,
                         kill_grace_period: None,
-                        sandbox_policy,
+                        prepared,
                     };
 
                     reg_spawn
@@ -421,6 +450,7 @@ impl Tool for BashTool {
             }
 
             // ── Foreground mode (original behavior) ──────────────────
+            let prepared = prepare_sandboxed(sandbox_policy.as_ref(), &prog, &args, &working_dir)?;
             let opts = SpawnOptions {
                 command: prog,
                 args,
@@ -430,7 +460,7 @@ impl Tool for BashTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy,
+                prepared,
             };
 
             let output = run(opts).await?;
@@ -604,14 +634,15 @@ impl BashTool {
 
         // Transform the command through the sandbox before spawning. This path
         // keeps its own streaming/cancel loop, so it applies the sandbox in
-        // place rather than going through `crab_sandbox::spawn::run_streaming`.
-        let mut sandboxed_command = if let Some(policy) = &sandbox_policy {
-            crab_sandbox::prepare_command(policy, &prog, &args, &working_dir)?.command
-        } else {
-            let mut c = tokio::process::Command::new(&prog);
-            c.args(&args);
-            c
-        };
+        // place rather than going through `crab_utils::spawn::run_streaming`.
+        let mut sandboxed_command =
+            prepare_sandboxed(sandbox_policy.as_ref(), &prog, &args, &working_dir)?.unwrap_or_else(
+                || {
+                    let mut c = tokio::process::Command::new(&prog);
+                    c.args(&args);
+                    c
+                },
+            );
         sandboxed_command
             .current_dir(&working_dir)
             .stdout(std::process::Stdio::piped())

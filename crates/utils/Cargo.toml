@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Shared utilities for Crab Code"
 
 [dependencies]
+tokio.workspace = true
 unicode-width.workspace = true
 strip-ansi-escapes.workspace = true
 ulid.workspace = true

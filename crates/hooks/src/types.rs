@@ -167,13 +167,13 @@ impl HookResult {
 /// Execute a command hook.
 ///
 /// Runs the shell command with event context passed via environment variables,
-/// using `crab_sandbox::spawn::run`. The event JSON is passed as the
+/// using `crab_utils::spawn::run`. The event JSON is passed as the
 /// `CRAB_HOOK_EVENT` environment variable.
 pub async fn execute_command_hook(
     hook: &CommandHook,
     event_json: &serde_json::Value,
 ) -> crab_core::Result<HookResult> {
-    let mut opts = crab_sandbox::spawn::shell_command(&hook.command);
+    let mut opts = crab_utils::spawn::shell_command(&hook.command);
 
     // Pass event data via environment variable
     opts.env
@@ -192,7 +192,7 @@ pub async fn execute_command_hook(
         opts.timeout = Some(std::time::Duration::from_secs(hook.timeout_secs));
     }
 
-    let output = crab_sandbox::spawn::run(opts).await?;
+    let output = crab_utils::spawn::run(opts).await?;
 
     Ok(HookResult {
         exit_code: output.exit_code,
@@ -225,7 +225,7 @@ pub async fn execute_agent_hook(
 /// Validates the URL against the SSRF guard, then sends the HTTP POST
 /// request with the event JSON as the body.
 ///
-/// Uses `crab_sandbox::spawn::run` to delegate to `curl` as a subprocess,
+/// Uses `crab_utils::spawn::run` to delegate to `curl` as a subprocess,
 /// avoiding the need for an HTTP client dependency in this crate.
 pub async fn execute_http_hook(
     hook: &HttpHook,
@@ -246,10 +246,10 @@ pub async fn execute_http_hook(
     let escaped_body = body.replace('\'', "'\\''");
     let _ = write!(cmd_parts, " -d '{escaped_body}' \"{}\"", hook.url);
 
-    let mut opts = crab_sandbox::spawn::shell_command(&cmd_parts);
+    let mut opts = crab_utils::spawn::shell_command(&cmd_parts);
     opts.timeout = Some(std::time::Duration::from_secs(600)); // 10 min default
 
-    let output = crab_sandbox::spawn::run(opts).await?;
+    let output = crab_utils::spawn::run(opts).await?;
 
     Ok(HookResult {
         exit_code: output.exit_code,

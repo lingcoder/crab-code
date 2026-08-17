@@ -8,7 +8,6 @@ description = "Process sandbox — transform-style API with per-platform backend
 
 [dependencies]
 crab-core.workspace = true
-crab-utils.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

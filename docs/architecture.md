@@ -14,7 +14,7 @@
 |-------|-------|----------------|
 | **Layer 4** Entry Layer | `cli` | CLI entry point (clap) + composition root |
 | **Layer 3** Engine Layer | `agents` `engine` `tui` `remote` | Query loop, multi-agent orchestration, terminal UI, remote-control WebSocket server + client |
-| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `sandbox` `ide` `session` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file/sandbox (spawn + confinement), IDE client, session state + compaction, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
+| **Layer 2** Service Layer | `api` `tools` `commands` `hooks` `mcp` `acp` `fs` `sandbox` `ide` `session` `skills` `plugin` `memory` `team` `telemetry` `cron` | Tool system, slash command system, lifecycle hooks, MCP stack, ACP server, LLM clients, file ops, command confinement, IDE client, session state + compaction, skill system, plugins, persistent memory, multi-agent infrastructure, telemetry, unified job scheduling |
 | **Layer 1** Foundation Layer | `core` `utils` `config` `auth` | Domain model, utilities, layered config, authentication |
 
 > Dependency direction: upper layers depend on lower layers; reverse dependencies are prohibited. `core` defines the `Tool` trait to avoid circular dependencies between `tools` and `agents`. See §5.3 for inner-layer rules (aggregator vs leaf service; the Layer 3 orchestration chain).
@@ -202,7 +202,7 @@ crab-code/
 ├── crates/                            # 25 crates (details: §6.x)
 │   │
 │   │  # ── Layer 1: Foundation ──
-│   ├── utils/                         # shared utils (path/text/id/debug)
+│   ├── utils/                         # shared utils (path/text/id/debug/spawn)
 │   ├── core/                          # domain model, Tool trait, permission/, Event
 │   ├── config/                        # multi-layer config load/merge/write
 │   ├── auth/                          # OAuth + keychain + cloud credential chain
@@ -212,7 +212,7 @@ crab-code/
 │   ├── mcp/                           # MCP facade (client + server/ + transport/ + auth/)
 │   ├── acp/                           # ACP stdio server (Zed/Neovim/Helix)
 │   ├── fs/                            # glob, grep, diff, watch, lock, symlink
-│   ├── sandbox/                       # spawn::run + Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
+│   ├── sandbox/                       # Sandbox trait + backend/ (seatbelt/landlock/windows/noop)
 │   ├── ide/                           # IDE MCP client + quirks/ (vscode/jetbrains/wsl)
 │   ├── skills/                        # skill registry + builtin/ skills
 │   ├── memory/                        # persistent memory store + ranking + AGENTS.md
@@ -305,7 +305,7 @@ edge list is the manifest in §5.2.
 
 | # | Crate | Internal Dependencies | Notes |
 |---|-------|-----------------------|-------|
-| 1 | **utils** | — | Zero-dependency utilities |
+| 1 | **utils** | — | Zero-dependency utilities; also hosts `spawn::run` (subprocess execution, no sandbox coupling) |
 | 2 | **core** | — | Pure domain model |
 | 3 | **config** | utils, core | Layered merge |
 | 4 | **auth** | utils, core, config | Credential chain |
@@ -313,14 +313,14 @@ edge list is the manifest in §5.2.
 | 6 | **fs** | utils, core | File system ops |
 | 7 | **mcp** | utils, core | MCP client/server |
 | 8 | **telemetry** | utils, core | Sidecar, optional |
-| 9 | **sandbox** | utils, core | Subprocess spawn (`spawn::run`) + trait and platform backends (seatbelt/landlock/windows/noop) |
+| 9 | **sandbox** | core | Trait + platform backends (seatbelt/landlock/windows/noop) |
 | 10 | **remote** | utils, core, config, auth | crab-proto protocol + WS server + outbound client (inbound hinge for web/app/desktop entry points) |
 | 11 | **acp** | utils, core | Agent Client Protocol server (editor → crab, Zed/Neovim/Helix) |
 | 12 | **ide** | utils, core, mcp | Client to IDE-hosted MCP server (lockfile-based VSCode/JetBrains plugins) |
 | 13 | **cron** | core | Unified scheduler — one-shot / interval / cron |
 | 14 | **skills** | core | Skill discovery + built-in definitions |
 | 15 | **memory** | utils, core (+ api, optional) | Persistent memory store + ranking + AGENTS.md parsing; `api` only behind the `mem-ranker` feature |
-| 16 | **hooks** | core, sandbox | Lifecycle hook executor, registry, file watcher, built-in hooks |
+| 16 | **hooks** | core, utils | Lifecycle hook executor, registry, file watcher, built-in hooks |
 | 17 | **plugin** | core, config, mcp, skills | WASM sandbox + skill↔mcp bridge |
 | 18 | **tools** | utils, core, config, cron, fs, sandbox, mcp | Layer 2 aggregator; built-in tools |
 | 19 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
@@ -339,7 +339,7 @@ Rule 1: Upper layer -> lower layer. Reverse dependencies are prohibited.
 Rule 2: Layer 2 is sub-layered into aggregators and leaves.
   - Aggregators (tools, hooks, session) may depend on leaf services
     in the same layer (tools -> fs/sandbox/mcp/cron/hooks;
-    hooks -> sandbox; session -> memory).
+    session -> memory).
   - Leaf services (fs, mcp, acp, api, sandbox, cron, skills,
     memory, team, telemetry, commands, ide, plugin) must NOT depend on
     each other.
@@ -654,7 +654,7 @@ pub trait Tool: Send + Sync {
 //     fn execute(&self, input: Value, ctx: &ToolContext) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
 //         Box::pin(async move {
 //             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-//             let output = crab_sandbox::spawn::run(/* ... */).await?;
+//             let output = crab_utils::spawn::run(/* ... */).await?;
 //             Ok(ToolOutput::success(output.stdout))
 //         })
 //     }
@@ -3226,6 +3226,14 @@ The API is **transform-style**: a backend receives the raw invocation
 Rewriting argv (macOS wraps it with `sandbox-exec`) and installing a `pre_exec`
 hook (Linux Landlock) both have to happen before the `Command` exists, so this
 cannot be a "mutate an existing `Command`" API.
+
+**Spawning is not this crate's job.** Running a subprocess lives in
+`crab_utils::spawn`, which has no dependency on this crate — most subprocesses
+(hooks, `git worktree`, `curl` fetches) are trusted and want no confinement at
+all. The two are joined only in `tools/builtin/bash.rs::prepare_sandboxed`,
+which hands the transformed `Command` to `SpawnOptions::prepared`. That keeps
+`crab-hooks` off the sandbox entirely and leaves `tools` as the one crate that
+needs both.
 
 **Directory Structure**
 

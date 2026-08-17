@@ -5,5 +5,6 @@ pub mod debug;
 pub mod id;
 pub mod lock;
 pub mod path;
+pub mod spawn;
 pub mod text;
 pub mod time;

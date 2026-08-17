@@ -225,10 +225,10 @@ async fn fetch_url(url: &str, timeout_secs: u64, max_size: u64) -> crab_core::Re
         "curl -sS -L --max-time {timeout_secs} --max-filesize {max_size} \
          -A 'CrabCode/1.0' -w '\\n%{{http_code}}' '{url}'"
     );
-    let mut opts = crab_sandbox::spawn::shell_command(&cmd);
+    let mut opts = crab_utils::spawn::shell_command(&cmd);
     opts.timeout = Some(std::time::Duration::from_secs(timeout_secs + 5));
 
-    let output = crab_sandbox::spawn::run(opts).await?;
+    let output = crab_utils::spawn::run(opts).await?;
     if output.exit_code != 0 {
         return Err(crab_core::Error::Other(format!(
             "curl failed (exit {}): {}",

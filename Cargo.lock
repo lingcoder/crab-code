@@ -1279,7 +1279,7 @@ name = "crab-hooks"
 version = "0.1.0"
 dependencies = [
  "crab-core",
- "crab-sandbox",
+ "crab-utils",
  "futures",
  "regex",
  "serde",
@@ -1381,7 +1381,6 @@ name = "crab-sandbox"
 version = "0.1.0"
 dependencies = [
  "crab-core",
- "crab-utils",
  "landlock",
  "serde",
  "serde_json",
@@ -1523,6 +1522,7 @@ dependencies = [
  "infer",
  "strip-ansi-escapes",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

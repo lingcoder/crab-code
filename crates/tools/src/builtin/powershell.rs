@@ -4,10 +4,12 @@ use std::sync::OnceLock;
 
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
-use crab_sandbox::spawn::{SpawnOptions, run};
+use crab_utils::spawn::{SpawnOptions, run};
 use serde_json::Value;
 
-use crate::builtin::bash::{append_denial_hint, command_sandbox_policy, resolve_timeout};
+use crate::builtin::bash::{
+    append_denial_hint, command_sandbox_policy, prepare_sandboxed, resolve_timeout,
+};
 use crate::str_utils::truncate_chars;
 
 /// `PowerShell` command execution tool (Windows + cross-platform via `pwsh`).
@@ -87,6 +89,7 @@ impl Tool for PowerShellTool {
 
             let (prog, args) = resolve_powershell(&command);
 
+            let prepared = prepare_sandboxed(sandbox_policy.as_ref(), &prog, &args, &working_dir)?;
             let opts = SpawnOptions {
                 command: prog,
                 args,
@@ -96,7 +99,7 @@ impl Tool for PowerShellTool {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy,
+                prepared,
             };
 
             let output = run(opts).await?;

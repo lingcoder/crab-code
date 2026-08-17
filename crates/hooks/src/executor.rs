@@ -280,7 +280,7 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         ("CLAUDE_PROJECT_DIR".to_string(), project_dir),
     ];
 
-    let opts = crab_sandbox::spawn::SpawnOptions {
+    let opts = crab_utils::spawn::SpawnOptions {
         command: shell,
         args: vec![shell_flag, hook.command.clone()],
         working_dir: ctx.working_dir.clone(),
@@ -289,10 +289,10 @@ async fn run_one_hook(hook: &HookDef, ctx: &HookContext, payload: &str) -> HookO
         stdin_data: Some(payload.to_string()),
         clear_env: false,
         kill_grace_period: None,
-        sandbox_policy: None,
+        prepared: None,
     };
 
-    let output = match crab_sandbox::spawn::run(opts).await {
+    let output = match crab_utils::spawn::run(opts).await {
         Ok(output) => output,
         Err(e) => {
             tracing::warn!(

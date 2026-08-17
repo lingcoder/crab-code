@@ -24,12 +24,13 @@ pub struct SpawnOptions {
     /// Only meaningful on Unix; Windows always does a hard kill.
     /// Defaults to 3 seconds if `None`.
     pub kill_grace_period: Option<Duration>,
-    /// Sandbox policy to enforce on the spawned command. `None` runs the
-    /// command with full privileges (the right choice for trusted subprocesses
-    /// like hooks, MCP servers, and network fetches). `Some` transforms the
-    /// command through [`crate::prepare_command`] before spawning (argv wrap on macOS,
-    /// `pre_exec` ruleset on Linux).
-    pub sandbox_policy: Option<crate::SandboxPolicy>,
+    /// A pre-built command to run instead of deriving one from `command` and
+    /// `args`. This is the seam for confinement: a caller that wants the
+    /// process sandboxed runs it through `crab_sandbox::prepare_command` first
+    /// (argv wrap on macOS, `pre_exec` ruleset on Linux) and passes the result
+    /// here. `None` — the common case for trusted subprocesses like hooks, git,
+    /// and network fetches — spawns with full privileges.
+    pub prepared: Option<Command>,
 }
 
 /// Captured output from a completed child process.
@@ -40,25 +41,13 @@ pub struct SpawnOutput {
     pub timed_out: bool,
 }
 
-/// Build the `Command`, applying the sandbox policy (if any) before setting the
-/// working directory and environment.
-///
-/// # Errors
-///
-/// Returns an error when a fail-closed sandbox backend (Linux/macOS) is asked
-/// to enforce a policy it cannot provide.
-fn build_command(opts: &SpawnOptions) -> crab_core::Result<Command> {
-    let mut cmd = if let Some(policy) = &opts.sandbox_policy {
-        let cwd = opts
-            .working_dir
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        crate::prepare_command(policy, &opts.command, &opts.args, &cwd)?.command
-    } else {
+/// Build the `Command`, then apply the working directory and environment.
+fn build_command(opts: &mut SpawnOptions) -> Command {
+    let mut cmd = opts.prepared.take().unwrap_or_else(|| {
         let mut cmd = Command::new(&opts.command);
         cmd.args(&opts.args);
         cmd
-    };
+    });
     if let Some(ref cwd) = opts.working_dir {
         cmd.current_dir(cwd);
     }
@@ -68,7 +57,7 @@ fn build_command(opts: &SpawnOptions) -> crab_core::Result<Command> {
     for (k, v) in &opts.env {
         cmd.env(k, v);
     }
-    Ok(cmd)
+    cmd
 }
 
 /// Escape a string for use as a `cmd.exe /C` argument on Windows.
@@ -106,7 +95,7 @@ pub fn shell_command(cmd_str: &str) -> SpawnOptions {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
-            sandbox_policy: None,
+            prepared: None,
         }
     } else {
         SpawnOptions {
@@ -118,7 +107,7 @@ pub fn shell_command(cmd_str: &str) -> SpawnOptions {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
-            sandbox_policy: None,
+            prepared: None,
         }
     }
 }
@@ -183,8 +172,8 @@ async fn join_drain(handle: JoinHandle<Vec<u8>>) -> String {
 /// # Errors
 ///
 /// Returns an error if the command cannot be spawned or output cannot be captured.
-pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
-    let mut cmd = build_command(&opts)?;
+pub async fn run(mut opts: SpawnOptions) -> std::io::Result<SpawnOutput> {
+    let mut cmd = build_command(&mut opts);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
@@ -252,11 +241,11 @@ pub async fn run(opts: SpawnOptions) -> crab_core::Result<SpawnOutput> {
 ///
 /// Returns an error if the command cannot be spawned.
 pub async fn run_streaming(
-    opts: SpawnOptions,
+    mut opts: SpawnOptions,
     on_stdout: impl Fn(&str) + Send + 'static,
     on_stderr: impl Fn(&str) + Send + 'static,
-) -> crab_core::Result<i32> {
-    let mut cmd = build_command(&opts)?;
+) -> std::io::Result<i32> {
+    let mut cmd = build_command(&mut opts);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::null());
@@ -308,7 +297,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -320,7 +309,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         }
     }
@@ -345,7 +334,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -357,7 +346,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -376,7 +365,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -388,7 +377,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -407,7 +396,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -419,7 +408,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -440,7 +429,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -452,7 +441,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -460,10 +449,10 @@ mod tests {
         // Both paths must be canonicalized to compare reliably on CI
         // (short vs long paths, symlinks, etc.)
         let actual_path = std::path::PathBuf::from(out.stdout.trim());
-        let actual_norm = crab_utils::path::normalize(&actual_path)
+        let actual_norm = crate::path::normalize(&actual_path)
             .to_string_lossy()
             .to_lowercase();
-        let expected_norm = crab_utils::path::normalize(&tmp)
+        let expected_norm = crate::path::normalize(&tmp)
             .to_string_lossy()
             .to_lowercase();
         assert!(
@@ -484,7 +473,7 @@ mod tests {
                 stdin_data: Some("hello from stdin\n".into()),
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -496,7 +485,7 @@ mod tests {
                 stdin_data: Some("hello from stdin\n".into()),
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -540,7 +529,7 @@ mod tests {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
-            sandbox_policy: None,
+            prepared: None,
         };
         let result = run(opts).await;
         assert!(result.is_err());
@@ -559,7 +548,7 @@ mod tests {
             stdin_data: None,
             clear_env: false,
             kill_grace_period: None,
-            sandbox_policy: None,
+            prepared: None,
         };
         let result = run(opts).await;
         assert!(result.is_err());
@@ -581,7 +570,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -596,7 +585,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -619,7 +608,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -631,7 +620,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -652,7 +641,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -664,7 +653,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -675,7 +664,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_timeout_with_partial_output() {
-        // Process produces some output, then hangs; timeout should capture partial output
+        // Process produces some output, then hangs; timeout should capture
+        // partial output. The timeout is generous because the window has to
+        // cover child startup — a tight one just races `cmd`/`sh` launching.
         let opts = if cfg!(windows) {
             SpawnOptions {
                 command: "cmd".into(),
@@ -685,11 +676,11 @@ mod tests {
                 ],
                 working_dir: None,
                 env: vec![],
-                timeout: Some(Duration::from_millis(500)),
+                timeout: Some(Duration::from_secs(3)),
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -697,11 +688,11 @@ mod tests {
                 args: vec!["-c".into(), "echo partial_data; sleep 10".into()],
                 working_dir: None,
                 env: vec![],
-                timeout: Some(Duration::from_millis(500)),
+                timeout: Some(Duration::from_secs(3)),
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -722,7 +713,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -734,7 +725,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -760,7 +751,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -772,7 +763,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: true,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -794,7 +785,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -806,7 +797,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let exit_code = run_streaming(
@@ -881,7 +872,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -893,7 +884,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -915,7 +906,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -930,7 +921,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -968,7 +959,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -983,7 +974,7 @@ mod tests {
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -1023,7 +1014,7 @@ mod tests {
                 stdin_data: Some(payload),
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -1035,7 +1026,7 @@ mod tests {
                 stdin_data: Some(payload),
                 clear_env: false,
                 kill_grace_period: None,
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
@@ -1053,7 +1044,8 @@ mod tests {
     #[tokio::test]
     async fn run_timeout_preserves_partial_output_after_buffer_fill() {
         // A child that emits a marker, then hangs, must surface the partial
-        // output captured before the real timeout fired.
+        // output captured before the real timeout fired. Timeout is generous so
+        // the deadline cannot fire before the child has started and printed.
         let opts = if cfg!(windows) {
             SpawnOptions {
                 command: "cmd".into(),
@@ -1063,11 +1055,11 @@ mod tests {
                 ],
                 working_dir: None,
                 env: vec![],
-                timeout: Some(Duration::from_millis(400)),
+                timeout: Some(Duration::from_secs(3)),
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         } else {
             SpawnOptions {
@@ -1075,11 +1067,11 @@ mod tests {
                 args: vec!["-c".into(), "echo PARTIAL_MARKER; sleep 30".into()],
                 working_dir: None,
                 env: vec![],
-                timeout: Some(Duration::from_millis(400)),
+                timeout: Some(Duration::from_secs(3)),
                 stdin_data: None,
                 clear_env: false,
                 kill_grace_period: Some(Duration::from_millis(50)),
-                sandbox_policy: None,
+                prepared: None,
             }
         };
         let out = run(opts).await.unwrap();
