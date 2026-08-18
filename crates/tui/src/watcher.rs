@@ -79,9 +79,13 @@ impl FileWatcher {
     }
 }
 
-/// Debounce watch events — collapses rapid-fire changes into a single event.
+/// Debounce watch events — collapses rapid-fire changes into at most one event
+/// **per kind** per `debounce` window.
 ///
-/// Returns a receiver that emits at most one event per `debounce` window.
+/// Collapsing is per-kind rather than global on purpose. Settings and skills
+/// reload through different paths, so a window that saw both has to emit both;
+/// folding them into whichever arrived first would silently drop the other's
+/// reload.
 pub fn debounced_watch(
     mut raw_rx: mpsc::UnboundedReceiver<WatchEvent>,
     debounce: Duration,
@@ -90,13 +94,29 @@ pub fn debounced_watch(
 
     tokio::spawn(async move {
         loop {
-            let Some(event) = raw_rx.recv().await else {
+            let Some(first) = raw_rx.recv().await else {
                 break;
             };
-            // Drain any additional events within the debounce window
+
+            let (mut settings, mut skills) = (false, false);
+            let mut mark = |event: &WatchEvent| match event {
+                WatchEvent::SettingsChanged => settings = true,
+                WatchEvent::SkillsChanged => skills = true,
+            };
+            mark(&first);
+
+            // Let the burst land, then fold everything it carried.
             tokio::time::sleep(debounce).await;
-            while raw_rx.try_recv().is_ok() {}
-            let _ = tx.send(event);
+            while let Ok(event) = raw_rx.try_recv() {
+                mark(&event);
+            }
+
+            if settings {
+                let _ = tx.send(WatchEvent::SettingsChanged);
+            }
+            if skills {
+                let _ = tx.send(WatchEvent::SkillsChanged);
+            }
         }
     });
 
@@ -148,5 +168,32 @@ mod tests {
         // No more events pending
         let no_event = tokio::time::timeout(Duration::from_millis(100), debounced_rx.recv()).await;
         assert!(no_event.is_err());
+    }
+
+    #[tokio::test]
+    async fn debounced_watch_keeps_both_kinds_in_one_window() {
+        // Settings and skills reload through different paths. A window that saw
+        // both must emit both — collapsing to whichever arrived first loses a
+        // reload entirely.
+        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let mut debounced_rx = debounced_watch(raw_rx, Duration::from_millis(50));
+
+        raw_tx.send(WatchEvent::SettingsChanged).unwrap();
+        raw_tx.send(WatchEvent::SkillsChanged).unwrap();
+        raw_tx.send(WatchEvent::SettingsChanged).unwrap();
+
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let event = tokio::time::timeout(Duration::from_millis(300), debounced_rx.recv())
+                .await
+                .expect("debounce window should have emitted both kinds")
+                .expect("channel stays open");
+            seen.push(std::mem::discriminant(&event));
+        }
+        assert_ne!(seen[0], seen[1], "both kinds must survive the window");
+
+        // The duplicate SettingsChanged collapsed rather than emitting a third.
+        let extra = tokio::time::timeout(Duration::from_millis(150), debounced_rx.recv()).await;
+        assert!(extra.is_err());
     }
 }
