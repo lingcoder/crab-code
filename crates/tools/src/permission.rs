@@ -429,23 +429,26 @@ fn is_path_in_project(tool_name: &str, input: &serde_json::Value, project_dir: &
 
     let target = Path::new(path_str);
 
-    // Try to canonicalize both paths for symlink-safe comparison
-    let canonical_project = project_dir
-        .canonicalize()
-        .unwrap_or_else(|_| project_dir.to_path_buf());
+    // Canonicalization is the whole of the symlink safety here: a link sitting
+    // inside the project can resolve anywhere, and only resolving it reveals
+    // that. So an unresolvable path is not compared raw — falling back to the
+    // literal string would let `<project>/link -> /etc/shadow` match the prefix
+    // and auto-allow. `false` routes to a confirmation prompt instead.
+    let Ok(canonical_project) = project_dir.canonicalize() else {
+        return false;
+    };
     let canonical_target = if target.exists() {
-        target
-            .canonicalize()
-            .unwrap_or_else(|_| target.to_path_buf())
+        let Ok(resolved) = target.canonicalize() else {
+            return false;
+        };
+        resolved
     } else {
-        // For non-existent paths, canonicalize the parent
-        target
-            .parent()
-            .and_then(|p| p.canonicalize().ok())
-            .map_or_else(
-                || target.to_path_buf(),
-                |p| p.join(target.file_name().unwrap_or_default()),
-            )
+        // A path that does not exist yet (Write creating a new file): resolve
+        // the parent, which does exist, and re-attach the file name.
+        let Some(resolved_parent) = target.parent().and_then(|p| p.canonicalize().ok()) else {
+            return false;
+        };
+        resolved_parent.join(target.file_name().unwrap_or_default())
     };
 
     canonical_target.starts_with(&canonical_project)
@@ -710,6 +713,64 @@ mod tests {
             cwd(),
         );
         assert!(matches!(result, PermissionDecision::AskUser(_)));
+    }
+
+    // ─── Project-boundary / symlink tests ───
+
+    /// A symlink inside the project that resolves outside it must not be
+    /// auto-allowed — resolving the link is the entire point of the check.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escaping_project_is_not_auto_allowed() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "x").unwrap();
+
+        let link = project.path().join("innocent.txt");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        assert!(!is_path_in_project(
+            "Edit",
+            &json!({ "file_path": link.to_str().unwrap() }),
+            project.path(),
+        ));
+    }
+
+    #[test]
+    fn real_file_inside_project_is_in_project() {
+        let project = tempfile::tempdir().unwrap();
+        let file = project.path().join("a.rs");
+        std::fs::write(&file, "x").unwrap();
+
+        assert!(is_path_in_project(
+            "Edit",
+            &json!({ "file_path": file.to_str().unwrap() }),
+            project.path(),
+        ));
+    }
+
+    #[test]
+    fn not_yet_created_file_resolves_through_its_parent() {
+        let project = tempfile::tempdir().unwrap();
+        let new_file = project.path().join("new.rs");
+
+        assert!(is_path_in_project(
+            "Write",
+            &json!({ "file_path": new_file.to_str().unwrap() }),
+            project.path(),
+        ));
+    }
+
+    #[test]
+    fn unresolvable_project_dir_is_not_auto_allowed() {
+        // Fail closed: without canonicalization there is no symlink safety, so
+        // the answer must be "ask", not "allow".
+        assert!(!is_path_in_project(
+            "Edit",
+            &json!({ "file_path": "/nonexistent/project/a.rs" }),
+            Path::new("/nonexistent/project"),
+        ));
     }
 
     // ─── TrustProject mode tests ───
