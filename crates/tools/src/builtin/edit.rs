@@ -537,7 +537,13 @@ mod tests {
         let mtime = std::fs::metadata(&file)
             .ok()
             .and_then(|m| m.modified().ok());
-        record(&file, crab_core::tool::ReadRecord { mtime });
+        record(
+            &file,
+            crab_core::tool::ReadRecord {
+                mtime,
+                content: None,
+            },
+        );
 
         let input = json!({
             "file_path": file.to_str().unwrap(),

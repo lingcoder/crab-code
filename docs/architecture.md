@@ -250,7 +250,7 @@ crab-code/
 | Helper crate | 1 | `xtask` (build tooling, not shipped) |
 | **Total** | **25 + 1** | 25 product crates + xtask |
 | Total source files | ~570 | `.rs` files across `crates/*` |
-| Total tests | ~4916 | `cargo nextest run --workspace` |
+| Total tests | ~4922 | `cargo nextest run --workspace` |
 
 
 ---

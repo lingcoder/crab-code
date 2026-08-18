@@ -318,6 +318,17 @@ pub struct ReadRecord {
     /// File modification time at read time, if it could be stat'd. Used to
     /// detect a change between the read and a subsequent edit.
     pub mtime: Option<std::time::SystemTime>,
+    /// Whole-file contents as of the read, when the read covered the entire
+    /// file and it was small enough to retain (see `MAX_TRACKED_READ_BYTES` in
+    /// `crab_tools::builtin::read_gate`).
+    ///
+    /// A bumped mtime alone does not prove the bytes changed — a formatter that
+    /// rewrites a file byte-for-byte moves the mtime without touching content.
+    /// Keeping the text lets the read-before-edit gate tell those apart. `None`
+    /// for ranged reads (the slice is not authoritative for the whole file) and
+    /// for files past the size cap, in which case the gate falls back to
+    /// comparing mtime alone.
+    pub content: Option<String>,
 }
 
 /// Records that a file was read (Read tool, and after a successful Write/Edit).

@@ -190,6 +190,9 @@ impl Tool for ReadTool {
         let record_read = ctx.ext.record_read.clone();
         let nested_triggers = ctx.nested_memory_triggers.clone();
         let file_path = input["file_path"].as_str().unwrap_or("").to_owned();
+        // A read is only authoritative for the whole file when the caller asked
+        // for no range at all — check key presence, not the defaulted values.
+        let full_file_read = input["offset"].is_null() && input["limit"].is_null();
         // offset is 1-based line number; default 1
         #[allow(clippy::cast_possible_truncation)]
         let offset = input["offset"].as_u64().map_or(1, |v| v as usize);
@@ -272,7 +275,14 @@ impl Tool for ReadTool {
                 let mtime = std::fs::metadata(&path)
                     .ok()
                     .and_then(|m| m.modified().ok());
-                record_read(&path, crab_core::tool::ReadRecord { mtime });
+                let tracked = super::read_gate::trackable_content(&content, full_file_read);
+                record_read(
+                    &path,
+                    crab_core::tool::ReadRecord {
+                        mtime,
+                        content: tracked,
+                    },
+                );
             }
 
             // Trigger nested AGENTS.md discovery for this file's directory.
