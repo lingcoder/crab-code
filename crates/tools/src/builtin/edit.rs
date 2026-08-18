@@ -541,7 +541,7 @@ mod tests {
             &file,
             crab_core::tool::ReadRecord {
                 mtime,
-                content: None,
+                content_hash: None,
             },
         );
 

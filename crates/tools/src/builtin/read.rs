@@ -275,12 +275,12 @@ impl Tool for ReadTool {
                 let mtime = std::fs::metadata(&path)
                     .ok()
                     .and_then(|m| m.modified().ok());
-                let tracked = super::read_gate::trackable_content(&content, full_file_read);
+                let content_hash = super::read_gate::content_hash(&content, full_file_read);
                 record_read(
                     &path,
                     crab_core::tool::ReadRecord {
                         mtime,
-                        content: tracked,
+                        content_hash,
                     },
                 );
             }
