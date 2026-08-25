@@ -1,10 +1,9 @@
 use crab_core::Result;
 use crab_core::tool::{Tool, ToolContext, ToolOutput, ToolOutputContent};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing;
 
 use crate::str_utils::truncate_chars;
@@ -13,199 +12,27 @@ pub const TASK_CREATE_TOOL_NAME: &str = "TaskCreate";
 pub const TASK_LIST_TOOL_NAME: &str = "TaskList";
 pub const TASK_GET_TOOL_NAME: &str = "TaskGet";
 pub const TASK_UPDATE_TOOL_NAME: &str = "TaskUpdate";
+pub const TASK_CLAIM_TOOL_NAME: &str = "TaskClaim";
 pub const TASK_STOP_TOOL_NAME: &str = "TaskStop";
 pub const TASK_OUTPUT_TOOL_NAME: &str = "TaskOutput";
 
-// ── Task data model (self-contained within tools crate) ─────────────────
+// ── Task data model ────────────────────────────────────────────────────
+//
+// The work-queue model lives in `crab_core::task` so these tools and the
+// teammate execution side share one definition.
 
-/// Status of a task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Deleted,
-}
-
-impl std::fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Completed => write!(f, "completed"),
-            Self::Deleted => write!(f, "deleted"),
-        }
-    }
-}
-
-/// A single task item.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskItem {
-    pub id: String,
-    pub subject: String,
-    pub description: String,
-    pub status: TaskStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_by: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocks: Vec<String>,
-}
-
-/// In-memory task store with auto-incrementing IDs.
-pub struct TaskStore {
-    tasks: Vec<TaskItem>,
-    next_id: u64,
-}
-
-impl TaskStore {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            tasks: Vec::new(),
-            next_id: 1,
-        }
-    }
-
-    pub fn create(&mut self, subject: String, description: String) -> TaskItem {
-        let id = self.next_id.to_string();
-        self.next_id += 1;
-        self.tasks.push(TaskItem {
-            id,
-            subject,
-            description,
-            status: TaskStatus::Pending,
-            owner: None,
-            blocked_by: Vec::new(),
-            blocks: Vec::new(),
-        });
-        self.tasks.last().unwrap().clone()
-    }
-
-    #[must_use]
-    pub fn get(&self, id: &str) -> Option<&TaskItem> {
-        self.tasks
-            .iter()
-            .find(|t| t.id == id && t.status != TaskStatus::Deleted)
-    }
-
-    fn get_mut(&mut self, id: &str) -> Option<&mut TaskItem> {
-        self.tasks
-            .iter_mut()
-            .find(|t| t.id == id && t.status != TaskStatus::Deleted)
-    }
-
-    #[must_use]
-    pub fn list(&self) -> Vec<TaskItem> {
-        self.tasks
-            .iter()
-            .filter(|t| t.status != TaskStatus::Deleted)
-            .cloned()
-            .collect()
-    }
-
-    /// Update task fields. Returns the updated task summary or None.
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-    pub fn update(
-        &mut self,
-        id: &str,
-        status: Option<TaskStatus>,
-        subject: Option<String>,
-        description: Option<String>,
-        owner: Option<String>,
-        add_blocked_by: Option<Vec<String>>,
-        add_blocks: Option<Vec<String>>,
-    ) -> Option<String> {
-        // Handle deletion
-        if status == Some(TaskStatus::Deleted) {
-            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                task.status = TaskStatus::Deleted;
-                return Some(format!("Task #{id} deleted."));
-            }
-            return None;
-        }
-
-        let task = self.get_mut(id)?;
-        if let Some(s) = status {
-            task.status = s;
-        }
-        if let Some(s) = subject {
-            task.subject = s;
-        }
-        if let Some(d) = description {
-            task.description = d;
-        }
-        if owner.is_some() {
-            task.owner = owner;
-        }
-        if let Some(deps) = &add_blocked_by {
-            for dep in deps {
-                if !task.blocked_by.contains(dep) {
-                    task.blocked_by.push(dep.clone());
-                }
-            }
-        }
-        let task_id_owned = task.id.clone();
-        let summary = format!("Updated task #{}", task.id);
-
-        // Handle add_blocks: add reverse deps
-        if let Some(blocked_ids) = &add_blocks {
-            for blocked_id in blocked_ids {
-                if let Some(t) = self.get_mut(&task_id_owned)
-                    && !t.blocks.contains(blocked_id)
-                {
-                    t.blocks.push(blocked_id.clone());
-                }
-                if let Some(blocked) = self.get_mut(blocked_id)
-                    && !blocked.blocked_by.contains(&task_id_owned)
-                {
-                    blocked.blocked_by.push(task_id_owned.clone());
-                }
-            }
-        }
-        // Handle add_blocked_by reverse: add to blocker's blocks list
-        if let Some(blocker_ids) = &add_blocked_by {
-            for blocker_id in blocker_ids {
-                if let Some(blocker) = self.get_mut(blocker_id)
-                    && !blocker.blocks.contains(&task_id_owned)
-                {
-                    blocker.blocks.push(task_id_owned.clone());
-                }
-            }
-        }
-
-        Some(summary)
-    }
-}
-
-impl Default for TaskStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Thread-safe shared handle to a `TaskStore`.
-pub type SharedTaskStore = Arc<Mutex<TaskStore>>;
-
-/// Create a new shared task store.
-#[must_use]
-pub fn shared_task_store() -> SharedTaskStore {
-    Arc::new(Mutex::new(TaskStore::new()))
-}
+pub use crab_core::task::{SharedTaskList, Task, TaskList, TaskStatus, shared_task_list};
 
 // ── Tool implementations ────────────────────────────────────────────────
 
 /// Task creation tool.
 pub struct TaskCreateTool {
-    store: SharedTaskStore,
+    store: SharedTaskList,
 }
 
 impl TaskCreateTool {
     #[must_use]
-    pub fn new(store: SharedTaskStore) -> Self {
+    pub fn new(store: SharedTaskList) -> Self {
         Self { store }
     }
 }
@@ -246,10 +73,10 @@ impl Tool for TaskCreateTool {
                     tracing::warn!("task store mutex poisoned: {e}");
                     e.into_inner()
                 });
-                let task = list.create(subject, description);
+                let id = list.create(subject.clone(), description);
                 serde_json::json!({
-                    "id": task.id,
-                    "subject": task.subject,
+                    "id": id,
+                    "subject": subject,
                     "status": "pending"
                 })
             };
@@ -268,12 +95,12 @@ impl Tool for TaskCreateTool {
 
 /// Task listing tool.
 pub struct TaskListTool {
-    store: SharedTaskStore,
+    store: SharedTaskList,
 }
 
 impl TaskListTool {
     #[must_use]
-    pub fn new(store: SharedTaskStore) -> Self {
+    pub fn new(store: SharedTaskList) -> Self {
         Self { store }
     }
 }
@@ -336,12 +163,12 @@ impl Tool for TaskListTool {
 
 /// Task retrieval tool.
 pub struct TaskGetTool {
-    store: SharedTaskStore,
+    store: SharedTaskList,
 }
 
 impl TaskGetTool {
     #[must_use]
-    pub fn new(store: SharedTaskStore) -> Self {
+    pub fn new(store: SharedTaskList) -> Self {
         Self { store }
     }
 }
@@ -403,12 +230,12 @@ impl Tool for TaskGetTool {
 
 /// Task update tool.
 pub struct TaskUpdateTool {
-    store: SharedTaskStore,
+    store: SharedTaskList,
 }
 
 impl TaskUpdateTool {
     #[must_use]
-    pub fn new(store: SharedTaskStore) -> Self {
+    pub fn new(store: SharedTaskList) -> Self {
         Self { store }
     }
 }
@@ -465,24 +292,27 @@ impl Tool for TaskUpdateTool {
                     .collect()
             });
 
-            #[allow(clippy::significant_drop_tightening)]
-            let mut list = store.lock().unwrap_or_else(|e| {
-                tracing::warn!("task store mutex poisoned: {e}");
-                e.into_inner()
-            });
-            list.update(
-                task_id,
-                status,
-                subject,
-                description,
-                owner,
-                add_blocked_by,
-                add_blocks,
-            )
-            .map_or_else(
-                || Ok(ToolOutput::success(format!("Task #{task_id} not found."))),
-                |msg| Ok(ToolOutput::success(msg)),
-            )
+            let deleted = status == Some(TaskStatus::Deleted);
+            let found = {
+                let mut list = store.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task store mutex poisoned: {e}");
+                    e.into_inner()
+                });
+                list.update(
+                    task_id,
+                    status,
+                    subject,
+                    description,
+                    owner,
+                    add_blocked_by,
+                    add_blocks,
+                )
+            };
+            Ok(ToolOutput::success(match (found, deleted) {
+                (false, _) => format!("Task #{task_id} not found."),
+                (true, true) => format!("Task #{task_id} deleted."),
+                (true, false) => format!("Updated task #{task_id}"),
+            }))
         })
     }
 
@@ -497,6 +327,98 @@ impl Tool for TaskUpdateTool {
         } else {
             Some(format!("TaskUpdate (#{id} → {status})"))
         }
+    }
+}
+
+/// Task claim tool — takes ownership of the next available task.
+///
+/// This is what makes a shared queue safe for several agents at once: the
+/// check for "is this task free" and the write that takes it happen under one
+/// lock, so two agents racing for the same task cannot both win.
+pub struct TaskClaimTool {
+    store: SharedTaskList,
+}
+
+impl TaskClaimTool {
+    #[must_use]
+    pub fn new(store: SharedTaskList) -> Self {
+        Self { store }
+    }
+}
+
+impl Tool for TaskClaimTool {
+    fn name(&self) -> &'static str {
+        TASK_CLAIM_TOOL_NAME
+    }
+
+    fn description(&self) -> &'static str {
+        "Claim a task from the shared queue so no other agent picks it up. \
+         Pass task_id to claim a specific task, or omit it to take the next \
+         available one. Returns the claimed task, or reports that nothing was \
+         available."
+    }
+
+    fn input_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Name to record as the task owner (your agent name)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Specific task to claim; omit to take the next available one"
+                }
+            },
+            "required": ["owner"]
+        })
+    }
+
+    fn execute(
+        &self,
+        input: Value,
+        _ctx: &ToolContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
+        let store = Arc::clone(&self.store);
+        Box::pin(async move {
+            let owner = input["owner"].as_str().unwrap_or("").to_string();
+            if owner.trim().is_empty() {
+                return Ok(ToolOutput::error("owner is required to claim a task"));
+            }
+            let task_id = input["task_id"].as_str().map(String::from);
+
+            let claimed = {
+                let mut list = store.lock().unwrap_or_else(|e| {
+                    tracing::warn!("task store mutex poisoned: {e}");
+                    e.into_inner()
+                });
+                match &task_id {
+                    Some(id) => list
+                        .claim(id, &owner)
+                        .then(|| list.get(id).cloned())
+                        .flatten(),
+                    None => list.claim_next(&owner),
+                }
+            };
+
+            Ok(match claimed {
+                Some(task) => ToolOutput::success(
+                    serde_json::to_string_pretty(&task).unwrap_or_else(|_| "{}".into()),
+                ),
+                None => ToolOutput::success(match &task_id {
+                    Some(id) => format!("Task #{id} is not available to claim."),
+                    None => "No tasks are available to claim.".to_string(),
+                }),
+            })
+        })
+    }
+
+    fn format_use_summary(&self, input: &Value) -> Option<String> {
+        Some(match input["task_id"].as_str() {
+            Some(id) => format!("TaskClaim (#{id})"),
+            None => "TaskClaim (next)".to_string(),
+        })
     }
 }
 
@@ -533,7 +455,7 @@ impl Tool for TaskStopTool {
         input: Value,
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
-        let task_registry = ctx.task_registry.clone();
+        let job_registry = ctx.job_registry.clone();
         Box::pin(async move {
             let task_id = input
                 .get("task_id")
@@ -546,7 +468,7 @@ impl Tool for TaskStopTool {
                 return Ok(ToolOutput::error("task_id must not be empty"));
             }
 
-            let Some(reg) = task_registry else {
+            let Some(reg) = job_registry else {
                 return Ok(ToolOutput::error(
                     "no task registry available in this context",
                 ));
@@ -570,7 +492,7 @@ impl Tool for TaskStopTool {
                     )));
                 }
 
-                reg.set_status(task_id, crab_core::task::TaskStatus::Killed);
+                reg.set_status(task_id, crab_core::job::JobStatus::Killed);
             }
             Ok(ToolOutput::success(format!(
                 "successfully stopped task: {task_id}"
@@ -625,7 +547,7 @@ impl Tool for TaskOutputTool {
         input: Value,
         ctx: &ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + '_>> {
-        let task_registry = ctx.task_registry.clone();
+        let job_registry = ctx.job_registry.clone();
         Box::pin(async move {
             let task_id = input
                 .get("task_id")
@@ -648,7 +570,7 @@ impl Tool for TaskOutputTool {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(30_000);
 
-            let Some(reg) = task_registry else {
+            let Some(reg) = job_registry else {
                 return Ok(ToolOutput::error(
                     "no task registry available in this context",
                 ));
@@ -708,10 +630,10 @@ impl Tool for TaskOutputTool {
 }
 
 /// Format a task registry entry as a `ToolOutput` for the LLM.
-fn format_task_output(entry: &crab_core::task::TaskEntry, task_id: &str) -> Result<ToolOutput> {
+fn format_task_output(entry: &crab_core::job::BackgroundJob, task_id: &str) -> Result<ToolOutput> {
     let mut result = serde_json::json!({
         "task_id": task_id,
-        "task_type": entry.task_type,
+        "task_type": entry.job_type,
         "status": entry.status,
         "description": entry.description,
     });
@@ -743,8 +665,8 @@ mod tests {
 
     #[test]
     fn task_store_create_and_get() {
-        let mut store = TaskStore::new();
-        let id = store.create("Test".into(), "desc".into()).id;
+        let mut store = TaskList::new();
+        let id = store.create("Test".into(), "desc".into());
         let task = store.get(&id).unwrap();
         assert_eq!(task.subject, "Test");
         assert_eq!(task.status, TaskStatus::Pending);
@@ -752,9 +674,9 @@ mod tests {
 
     #[test]
     fn task_store_list_excludes_deleted() {
-        let mut store = TaskStore::new();
+        let mut store = TaskList::new();
         store.create("Keep".into(), String::new());
-        let id2 = store.create("Delete".into(), String::new()).id;
+        let id2 = store.create("Delete".into(), String::new());
         store.update(
             &id2,
             Some(TaskStatus::Deleted),
@@ -769,8 +691,8 @@ mod tests {
 
     #[test]
     fn task_store_update_status() {
-        let mut store = TaskStore::new();
-        let id = store.create("Task".into(), String::new()).id;
+        let mut store = TaskList::new();
+        let id = store.create("Task".into(), String::new());
         store.update(
             &id,
             Some(TaskStatus::InProgress),
@@ -787,9 +709,9 @@ mod tests {
 
     #[test]
     fn task_store_dependencies() {
-        let mut store = TaskStore::new();
-        let id1 = store.create("Blocker".into(), String::new()).id;
-        let id2 = store.create("Blocked".into(), String::new()).id;
+        let mut store = TaskList::new();
+        let id1 = store.create("Blocker".into(), String::new());
+        let id2 = store.create("Blocked".into(), String::new());
         store.update(&id2, None, None, None, None, Some(vec![id1.clone()]), None);
 
         let downstream = store.get(&id2).unwrap();
@@ -809,7 +731,7 @@ mod tests {
 
     #[test]
     fn shared_store_thread_safe() {
-        let store = shared_task_store();
+        let store = shared_task_list();
         let store2 = Arc::clone(&store);
         let handle = std::thread::spawn(move || {
             let mut list = store2.lock().unwrap();
@@ -822,7 +744,7 @@ mod tests {
 
     #[test]
     fn task_item_serde_roundtrip() {
-        let item = TaskItem {
+        let item = Task {
             id: "1".into(),
             subject: "Test task".into(),
             description: "Do something".into(),
@@ -832,7 +754,7 @@ mod tests {
             blocks: vec![],
         };
         let json = serde_json::to_string(&item).unwrap();
-        let back: TaskItem = serde_json::from_str(&json).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "1");
         assert_eq!(back.subject, "Test task");
     }
@@ -847,11 +769,136 @@ mod tests {
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: crab_core::permission::PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
         }
+    }
+
+    // ─── TaskClaim ───
+
+    fn claim_input(owner: &str, task_id: Option<&str>) -> Value {
+        let mut v = serde_json::json!({ "owner": owner });
+        if let Some(id) = task_id {
+            v["task_id"] = Value::String(id.into());
+        }
+        v
+    }
+
+    #[tokio::test]
+    async fn task_claim_takes_the_next_available_task() {
+        let store = shared_task_list();
+        let id = store
+            .lock()
+            .unwrap()
+            .create("Write docs".into(), "docs".into());
+        let tool = TaskClaimTool::new(Arc::clone(&store));
+
+        let out = tool
+            .execute(claim_input("alice", None), &test_ctx())
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        assert!(out.text().contains("Write docs"), "{}", out.text());
+
+        let task = store.lock().unwrap().get(&id).cloned().unwrap();
+        let (owner, status) = (task.owner, task.status);
+        assert_eq!(owner.as_deref(), Some("alice"));
+        assert_eq!(status, TaskStatus::InProgress);
+    }
+
+    #[tokio::test]
+    async fn two_agents_cannot_claim_the_same_task() {
+        let store = shared_task_list();
+        store
+            .lock()
+            .unwrap()
+            .create("Only one".into(), String::new());
+        let tool = TaskClaimTool::new(Arc::clone(&store));
+
+        let first = tool
+            .execute(claim_input("alice", None), &test_ctx())
+            .await
+            .unwrap();
+        let second = tool
+            .execute(claim_input("bob", None), &test_ctx())
+            .await
+            .unwrap();
+
+        assert!(first.text().contains("Only one"));
+        assert!(
+            second.text().contains("No tasks are available"),
+            "the second agent must come away empty: {}",
+            second.text()
+        );
+    }
+
+    #[tokio::test]
+    async fn task_claim_can_target_a_specific_task() {
+        let store = shared_task_list();
+        let (first, second) = {
+            let mut list = store.lock().unwrap();
+            (
+                list.create("First".into(), String::new()),
+                list.create("Second".into(), String::new()),
+            )
+        };
+        let tool = TaskClaimTool::new(Arc::clone(&store));
+
+        tool.execute(claim_input("alice", Some(&second)), &test_ctx())
+            .await
+            .unwrap();
+
+        let second_owner = store.lock().unwrap().get(&second).unwrap().owner.clone();
+        let first_owner = store.lock().unwrap().get(&first).unwrap().owner.clone();
+        assert_eq!(second_owner.as_deref(), Some("alice"));
+        assert!(first_owner.is_none());
+    }
+
+    #[tokio::test]
+    async fn claiming_an_unavailable_task_reports_it() {
+        let store = shared_task_list();
+        let id = store.lock().unwrap().create("Taken".into(), String::new());
+        let tool = TaskClaimTool::new(Arc::clone(&store));
+
+        tool.execute(claim_input("alice", Some(&id)), &test_ctx())
+            .await
+            .unwrap();
+        let out = tool
+            .execute(claim_input("bob", Some(&id)), &test_ctx())
+            .await
+            .unwrap();
+
+        assert!(!out.is_error);
+        assert!(out.text().contains("not available"), "{}", out.text());
+    }
+
+    #[tokio::test]
+    async fn task_claim_requires_an_owner() {
+        let tool = TaskClaimTool::new(shared_task_list());
+        let out = tool
+            .execute(serde_json::json!({"owner": "  "}), &test_ctx())
+            .await
+            .unwrap();
+        assert!(out.is_error);
+    }
+
+    #[test]
+    fn task_claim_metadata() {
+        let tool = TaskClaimTool::new(shared_task_list());
+        assert_eq!(tool.name(), "TaskClaim");
+        assert!(!tool.is_read_only());
+        assert_eq!(
+            tool.format_use_summary(&claim_input("alice", Some("7")))
+                .as_deref(),
+            Some("TaskClaim (#7)")
+        );
+        assert_eq!(
+            tool.format_use_summary(&claim_input("alice", None))
+                .as_deref(),
+            Some("TaskClaim (next)")
+        );
     }
 
     #[test]
@@ -870,22 +917,22 @@ mod tests {
 
     #[tokio::test]
     async fn task_stop_basic() {
-        use crab_core::task::{TaskEntry, TaskRegistry, TaskStatus, TaskType};
+        use crab_core::job::{BackgroundJob, JobRegistry, JobStatus, JobType};
         use std::sync::{Arc, Mutex};
 
-        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
-        registry.lock().unwrap().register(TaskEntry::new(
+        let registry = Arc::new(Mutex::new(JobRegistry::new()));
+        registry.lock().unwrap().register(BackgroundJob::new(
             "task_42".into(),
-            TaskType::LocalBash,
+            JobType::LocalBash,
             "test cmd".into(),
         ));
         registry
             .lock()
             .unwrap()
-            .set_status("task_42", TaskStatus::Running);
+            .set_status("task_42", JobStatus::Running);
 
         let mut ctx = test_ctx();
-        ctx.task_registry = Some(Arc::clone(&registry));
+        ctx.job_registry = Some(Arc::clone(&registry));
 
         let input = serde_json::json!({"task_id": "task_42"});
         let output = TaskStopTool.execute(input, &ctx).await.unwrap();
@@ -893,7 +940,7 @@ mod tests {
         assert!(output.text().contains("successfully stopped"));
 
         let entry = registry.lock().unwrap().get("task_42").unwrap().status;
-        assert_eq!(entry, TaskStatus::Killed);
+        assert_eq!(entry, JobStatus::Killed);
     }
 
     #[tokio::test]
@@ -934,18 +981,18 @@ mod tests {
 
     #[tokio::test]
     async fn task_output_basic() {
-        use crab_core::task::{TaskEntry, TaskRegistry, TaskType};
+        use crab_core::job::{BackgroundJob, JobRegistry, JobType};
         use std::sync::{Arc, Mutex};
 
-        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
-        registry.lock().unwrap().register(TaskEntry::new(
+        let registry = Arc::new(Mutex::new(JobRegistry::new()));
+        registry.lock().unwrap().register(BackgroundJob::new(
             "task_42".into(),
-            TaskType::LocalBash,
+            JobType::LocalBash,
             "test".into(),
         ));
 
         let mut ctx = test_ctx();
-        ctx.task_registry = Some(Arc::clone(&registry));
+        ctx.job_registry = Some(Arc::clone(&registry));
 
         let input = serde_json::json!({"task_id": "task_42", "block": false});
         let output = TaskOutputTool.execute(input, &ctx).await.unwrap();
@@ -954,18 +1001,18 @@ mod tests {
 
     #[tokio::test]
     async fn task_output_custom_params() {
-        use crab_core::task::{TaskEntry, TaskRegistry, TaskType};
+        use crab_core::job::{BackgroundJob, JobRegistry, JobType};
         use std::sync::{Arc, Mutex};
 
-        let registry = Arc::new(Mutex::new(TaskRegistry::new()));
-        registry.lock().unwrap().register(TaskEntry::new(
+        let registry = Arc::new(Mutex::new(JobRegistry::new()));
+        registry.lock().unwrap().register(BackgroundJob::new(
             "task_7".into(),
-            TaskType::LocalBash,
+            JobType::LocalBash,
             "test".into(),
         ));
 
         let mut ctx = test_ctx();
-        ctx.task_registry = Some(Arc::clone(&registry));
+        ctx.job_registry = Some(Arc::clone(&registry));
 
         let input = serde_json::json!({
             "task_id": "task_7",

@@ -322,7 +322,7 @@ edge list is the manifest in §5.2.
 | 15 | **memory** | utils, core (+ api, optional) | Persistent memory store + ranking + AGENTS.md parsing; `api` only behind the `mem-ranker` feature |
 | 16 | **hooks** | core, utils | Lifecycle hook executor, registry, file watcher, built-in hooks |
 | 17 | **plugin** | core, config, mcp, skills | WASM sandbox + skill↔mcp bridge |
-| 18 | **tools** | utils, core, config, cron, fs, sandbox, mcp | Layer 2 aggregator; built-in tools |
+| 18 | **tools** | utils, core, config, cron, fs, sandbox, mcp, hooks | Layer 2 aggregator; built-in tools |
 | 19 | **commands** | core | Layer 2 aggregator; 34 built-in slash commands |
 | 20 | **team** | utils, core | Multi-agent infrastructure: message bus, roster, task list, retry, backends |
 | 21 | **session** | utils, core, memory | Session + context compaction |
@@ -2149,26 +2149,38 @@ impl MemoryStore {
 
 ### 6.10 `crates/team/` -- Multi-Agent Infrastructure
 
-**Responsibility**: domain-pure building blocks for all multi-agent execution modes. Extracted from `agent/src/teams/` so that team primitives have zero engine/api/session coupling. Only depends on `core`.
+**Responsibility**: domain-pure building blocks for all multi-agent execution modes, with zero engine/api/session coupling. Depends only on `core` and `utils`.
 
 **Directory Structure**
 
 ```
 src/
 ├── lib.rs            // re-exports all public types
+├── roster.rs         // Teammate / Team / Lifetime / TeammateState / Capability / TeamMode
 ├── bus.rs            // MessageBus + AgentMessage / Envelope / event_channel
-├── mailbox.rs        // MessageRouter (inter-agent message routing)
-├── roster.rs         // Team / TeamMember / Capability / TeamMode
-├── task_list.rs      // TaskList / Task / TaskStatus / SharedTaskList
-├── task_lock.rs      // fd-lock file-locked claim_task / with_locked
+├── mailbox.rs        // MessageRouter (per-teammate mailboxes, keyed by id)
+├── task_lock.rs      // fd-lock claim_task / with_locked over crab_core::task::TaskList
 ├── retry.rs          // RetryPolicy / RetryTracker / BackoffStrategy
 └── backend/          // Spawner backends
-    ├── mod.rs        //   TeammateBackend trait + InProcessBackend
-    ├── spawner.rs    //   SpawnerBackend trait
-    └── teammate.rs   //   Teammate / TeammateConfig / TeammateState
+    ├── mod.rs        //   re-exports
+    ├── spawner.rs    //   TeammateBackend trait + InProcessBackend (owns roster + router)
+    └── teammate.rs   //   TeammateConfig spawn parameters
 ```
 
-`agent/src/teams/mod.rs` does `pub use crab_team::*;` to preserve the existing facade for higher layers.
+**The one actor abstraction.** [`Teammate`] is a spawned agent instance; [`Lifetime`] decides how its run ends, not what it is:
+
+- `Lifetime::Ephemeral { max_turns, max_duration }` — runs one task, reports a
+  `WorkerResult`, leaves the roster. Spawned by an `Agent` call with no `name`.
+- `Lifetime::Resident` — lives until session end, stays addressable by name,
+  keeps its conversation across messages. Spawned by an `Agent` call with a `name`.
+
+Both run the same agent loop with the same registry filter, model override, permission posture, and cancellation semantics.
+
+**One roster, one router.** `InProcessBackend` owns the `Team` and a `MessageRouter`. Every spawn joins the roster and gets a mailbox keyed by its id; the main agent is seated as the team leader so `Team::can_communicate` covers parent/teammate traffic with the same rule as teammate/teammate traffic. That is what makes `TeamMode` load-bearing rather than decorative.
+
+Ids, not names, key both the mailboxes and the routing rules: a name can repeat across a respawn, an id never does. `TeamRunner` resolves `@name` to ids before routing.
+
+**Work queue lives in `core`.** `crab_core::task::TaskList` is shared with `crates/tools` (which owns the `Task*` tools). It sits in `core` rather than here because `tools` and `team` are both Layer 2 and may not depend on each other (§5.3) — the same reason `core` defines the `Tool` trait.
 
 **Feature Flags**: None
 
@@ -2196,19 +2208,19 @@ src/
 │   ├── plan.rs              //   Read-only architecture planning agent
 │   └── general_purpose.rs   //   General-purpose full-tool agent
 │
-├── teams/                   // Layer 1 orchestration (re-exports crab_team::*)
-│   ├── mod.rs               //   pub use crab_team::*; + local re-exports
-│   ├── coordinator.rs       //   TeamCoordinator (implicit session team: named spawns + routing)
-│   ├── spawn.rs             //   spawn-marker scan + worker/teammate runner builders
-│   ├── worker.rs            //   AgentWorker (sub-agent runner, depends on engine)
-│   └── worker_pool.rs       //   WorkerPool (spawn / collect / cancel / retry)
+├── teams/                   // Layer 1 orchestration (engine-coupled half)
+│   ├── mod.rs
+│   ├── runner.rs            //   TeamRunner — the single owner of the session's team
+│   ├── spawn.rs             //   marker → TeammateConfig + the one teammate runner
+│   ├── worker.rs            //   AgentWorker (the agent loop a teammate runs)
+│   └── permission.rs        //   TeamPermissionHandler (teammate → session prompt)
 │
 ├── coordinator/             // Layer 2b Coordinator Mode (gated on CRAB_COORDINATOR_MODE)
-│   ├── mod.rs               //   Coordinator struct: apply(ToolRegistry, &mut prompt)
+│   ├── mod.rs               //   CoordinatorMode: apply(ToolRegistry, &mut prompt)
 │   ├── gating.rs            //   env + config gate
 │   ├── tool_acl.rs          //   COORDINATOR_TOOLS + WORKER_DENIED_TOOLS constants
 │   ├── prompt.rs            //   Anti-pattern prompt overlay ("understand before delegating")
-│   └── permission_sync.rs   //   Cross-teammate permission sync
+│   └── permission_sync.rs   //   PermissionSyncManager (coalesce + broadcast decisions)
 │
 ├── session/                 // Layer 3 session runtime
 │   ├── mod.rs
@@ -2729,8 +2741,7 @@ src/
 │   ├── sticky_header.rs       // Pinned user prompt on scroll-up
 │   ├── syntax.rs              // syntect-backed code highlight
 │   ├── tab_bar.rs             // Tab strip
-│   ├── task_list.rs           // Task panel
-│   ├── team_browser.rs        // Team browser panel
+│   ├── team_browser.rs        // Team browser (roster + shared work queue)
 │   ├── text_utils.rs          // Text helpers
 │   ├── toast_queue.rs         // Timed notification toasts (3 max visible)
 │   ├── token_warning.rs       // Context budget alerts (80%/90%)
@@ -3427,15 +3438,15 @@ crab models multi-agent collaboration in **three conceptually distinct layers**,
 
 | Layer | Purpose | crab location |
 |-------|---------|---------------|
-| **L1 — Teams (infrastructure)** | Mailbox, shared task list with `claimTask()`, spawner backends, worker pool, roster (team/member) | `crates/agents/src/teams/` ** |
-| **L2a — Swarm (flat topology)** | Peer-to-peer, competitive task claiming; default usage when Teams is on and Coordinator Mode is off | `TeamMode::PeerToPeer` enum variant — no separate module |
+| **L1 — Teams (infrastructure)** | Roster, per-teammate mailboxes, spawner backend, retry, and the agent loop a teammate runs | `crates/team/` (domain-pure) + `crates/agents/src/teams/` (engine-coupled) |
+| **L2a — Swarm (flat topology)** | Peer-to-peer messaging plus competitive claiming off the shared queue | `TeamMode::PeerToPeer` + `TaskClaim` — no separate module |
 | **L2b — Coordinator Mode (star overlay)** | Coordinator agent stripped of hands-on tools, workers run with allow-list, anti-pattern prompt ("understand before delegating") | `crates/agents/src/coordinator/` ** |
 | **L3 — Session runtime** | `AgentSession` ties conversation + backend + executor + topology choice | `crates/agents/src/session/` ** |
 
 ### Gating
 
 - **L1 (Teams infrastructure)** is **unconditional** — it's crab's base multi-agent plumbing and ships enabled by default. No env/settings flag.
-- **L2a (Swarm)** is the natural usage pattern whenever multiple agents exist and no overlay is active. Not a feature — just a topology choice via `TeamMode::PeerToPeer`.
+- **L2a (Swarm)** is the natural usage pattern whenever multiple agents exist and no overlay is active. Not a feature — a topology choice via `TeamRunner::set_mode(TeamMode::PeerToPeer)`, which `Team::can_communicate` enforces on every routed message.
 - **L2b (Coordinator Mode)** is gated on `CRAB_COORDINATOR_MODE=1` env only (no CLI flag — keeps the surface hidden from `--help`). Helper: `crates/cli/src/main.rs::coordinator_mode_enabled()`.
 
 ### Design Choices
@@ -3451,13 +3462,30 @@ crab models multi-agent collaboration in **three conceptually distinct layers**,
 ### Current state
 
 - `SessionConfig.coordinator_mode: bool` is propagated from env (`CRAB_COORDINATOR_MODE=1`).
-- Every session has one implicit team — there is no team lifecycle to manage. `Agent` tool calls carrying a `name` spawn long-lived teammates through `teams/coordinator.rs::TeamCoordinator` (the facades intercept `spawn_agent` markers post-turn); unnamed calls run one-shot `WorkerPool` workers. `SendMessage` routes to teammates by bare name within the single team (qualified `name@team` addresses are rejected); a repeat named spawn replaces the existing teammate. Teammates are torn down at session end (`shutdown_teams` / `AgentSession::shutdown`).
-- `crates/agents/src/teams/worker_pool.rs::WorkerPool` is the Layer 1 worker pool.
-- `crates/agents/src/coordinator/` holds the Layer 2b overlay: `Coordinator::from_flag(true).apply(&mut registry, &mut prompt)` retains the registry to `{Agent, SendMessage, TaskStop}` and appends the anti-pattern prompt overlay.
+- Every session has one implicit team and one `teams/runner.rs::TeamRunner` driving it. There is no team lifecycle to manage.
+- **One spawn path for both lifetimes.** `spawn_agent` markers become a `TeammateConfig`: a marker with a `name` yields `Lifetime::Resident`, one without yields `Lifetime::Ephemeral`. Both go through the same runner, so an agent definition's registry filter, the model override, the parent permission restriction, and the turn/duration limits apply identically. Ephemeral teammates are awaited inline and folded back into the parent conversation as `<agent-result>`; resident teammates keep running and their finished output is folded in on a later turn.
+- A teammate that exits without publishing a result (a panicking runner, a cancellation) yields a synthesized failure. A turn can never block forever on a teammate that will not report.
+- `SendMessage` routes through the team's `MessageRouter`. `TeamRunner` resolves `@name` to teammate ids, then `Team::can_communicate` decides whether the pair may talk under the current `TeamMode`. A repeat named spawn replaces the existing teammate; teammates are torn down at session end (`shutdown_teams` / `AgentSession::shutdown`).
+- **Permission posture.** A teammate has no terminal, so it asks through the *session's* permission handler rather than auto-approving: the card appears in the main session, and the frontend's existing session grants cover every agent. `PermissionSyncManager::resolve` coalesces concurrent requests, so two teammates reaching for the same tool at once raise one card rather than two, and broadcasts the outcome. A teammate's permission mode is capped at its parent's (`restrict_to`), so a spawned agent is never more privileged than the session that spawned it.
+- **Shared work queue.** `crab_core::task::TaskList` backs the `TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskClaim` tools. The runtime owns one instance and hands it to every registry it builds, including the Coordinator Mode worker registry — a worker built over a fresh queue could not see the tasks its coordinator created. `TaskClaim` performs the availability check and the ownership write under one lock, so two agents racing for the same task cannot both win.
+- `crates/agents/src/coordinator/` holds the Layer 2b overlay: `CoordinatorMode::from_flag(true).apply(&mut registry, &mut prompt)` reduces the registry to `COORDINATOR_TOOLS` (delegation plus queue bookkeeping — no hands-on execution) and appends the anti-pattern prompt overlay.
 - `session/runtime.rs::AgentSession::new` invokes the coordinator if `coordinator_mode` is set; otherwise no-op.
 - `crates/agents/src/coordinator/tool_acl.rs` hosts the `COORDINATOR_TOOLS` / `WORKER_DENIED_TOOLS` constants; `ToolRegistry::retain_names` / `remove_names` in `crates/tools/src/registry.rs` implement the filter.
-- Workers spawned via `Agent` from a Coordinator session now get a fresh registry built by `Coordinator::build_worker_registry` (default registry minus `WORKER_DENIED_TOOLS`) and an overlay-free prompt snapshotted into `CoordinatorContext::worker_base_prompt`. Non-coordinator sessions inherit as before.
-- File-locked `TaskList` (`crates/team/src/task_lock.rs`) provides `with_locked` and `claim_task` over `fd-lock`, serialising cross-process task claims through an OS exclusive lock on `<path>.lock`. Used when teammates live in separate processes (tmux panes, remote agents); single-process use keeps the existing `Arc<Mutex<TaskList>>`.
+- File-locked claiming (`crates/team/src/task_lock.rs`) provides `with_locked` and `claim_task` over `fd-lock`, serialising cross-process claims through an OS exclusive lock on `<path>.lock`. **Not on the in-process path**: every teammate today is a tokio task in one process, so the live path uses `Arc<Mutex<TaskList>>` and `TaskClaim`. The file lock is kept for teammates that will live in separate processes (tmux panes, remote agents).
+
+### Naming
+
+One concept, one name. The pairs below used to collide:
+
+| Concept | Name |
+|---------|------|
+| A spawned agent instance | `Teammate` (was also `AgentWorker` / `AgentHandle` / `TeamMember`) |
+| The owner that drives the session's team | `TeamRunner` (was `TeamCoordinator`) |
+| The Layer 2b tool-ACL + prompt overlay | `CoordinatorMode` (was `Coordinator`) |
+| The work queue agents create and claim from | `crab_core::task::{Task, TaskList, TaskStatus}` (was duplicated in `crates/team` and `crates/tools`) |
+| Background job tracking behind `TaskStop` / `TaskOutput` | `crab_core::job::{BackgroundJob, JobRegistry, JobStatus, JobType}` (was `Task*`, colliding with the work queue) |
+
+Each type has one path: `crab_agents::teams` no longer glob-forwards `crab_team::*`, and `crab_agents`'s root no longer re-exports the domain primitives a second time.
 
 ---
 

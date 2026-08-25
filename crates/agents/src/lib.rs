@@ -26,12 +26,7 @@ pub use session::{AgentSession, SessionConfig};
 pub use summarizer::{
     ConversationSummary, SummarizerConfig, SummaryItem, SummaryItemKind, summarize_conversation,
 };
-pub use teams::{
-    AgentHandle, AgentMessage, AgentStatus, AgentWorker, Capability, Envelope, InProcessBackend,
-    MessageRouter, RetryDecision, RetryPolicy, RetryTracker, SharedTaskList, Task, TaskList,
-    TaskStatus, Team, TeamMember, TeamMode, Teammate, TeammateBackend, TeammateConfig,
-    TeammateState, WorkerConfig, WorkerPool, WorkerResult, event_channel, shared_task_list,
-};
+pub use teams::{AgentWorker, TeamRunner, WorkerConfig, WorkerResult};
 
 // Re-exports: allow tui to depend only on crab-agents instead of individual L2 crates.
 pub use crab_api::LlmBackend;

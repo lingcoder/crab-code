@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod event;
 pub mod hook;
 pub mod ide;
+pub mod job;
 pub mod message;
 pub mod model;
 pub mod permission;

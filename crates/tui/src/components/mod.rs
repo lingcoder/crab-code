@@ -44,7 +44,6 @@ pub mod status_line;
 pub mod sticky_header;
 pub mod syntax;
 pub mod tab_bar;
-pub mod task_list;
 pub mod team_browser;
 pub mod text_utils;
 pub mod toast_queue;

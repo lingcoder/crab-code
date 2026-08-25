@@ -504,7 +504,7 @@ mod tests {
                 denied_tools: vec![BASH_TOOL_NAME.into()],
             },
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
@@ -564,7 +564,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
@@ -620,7 +620,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
@@ -717,7 +717,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),

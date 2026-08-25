@@ -2,10 +2,9 @@
 //!
 //! Two tabs: `Members` and `Tasks`, switchable with `Tab`.
 //!
-//! Triggered by `Action::OpenTeamBrowser` (default: Ctrl+K Ctrl+E). The
-//! snapshot is currently sourced lazily from the active runtime; before the
-//! model spawns any named teammate via the `Agent` tool, the overlay renders
-//! an empty state.
+//! Triggered by `Action::OpenTeamBrowser` (default: Ctrl+K Ctrl+E). Rows come
+//! straight from the runtime's roster snapshot and the shared work queue, so
+//! this overlay defines no member or task model of its own.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -19,51 +18,49 @@ use crate::overlay::{Overlay, OverlayAction};
 use crate::traits::Renderable;
 
 // Data model
+//
+// Members are the runtime's roster rows and tasks are the shared work-queue
+// items; this overlay only decides how to draw them.
 
-#[derive(Debug, Clone)]
-pub struct MemberInfo {
-    pub name: String,
-    pub model: String,
-    pub is_leader: bool,
-    pub capabilities: Vec<String>,
-}
+pub use crab_agents::TeamMemberSnapshot as MemberInfo;
+pub use crab_core::task::{Task as TaskInfo, TaskStatus};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Completed,
-}
-
-impl TaskStatus {
-    #[must_use]
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Self::Pending => "[ ]",
-            Self::InProgress => "[~]",
-            Self::Completed => "[x]",
-        }
-    }
-
-    #[must_use]
-    pub fn color(self) -> Color {
-        match self {
-            Self::Pending => Color::DarkGray,
-            Self::InProgress => Color::Yellow,
-            Self::Completed => Color::Green,
-        }
+/// Glyph for a work-queue status.
+#[must_use]
+fn task_glyph(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "[ ]",
+        TaskStatus::InProgress => "[~]",
+        TaskStatus::Completed => "[x]",
+        TaskStatus::Deleted => "[-]",
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TaskInfo {
-    pub subject: String,
-    pub status: TaskStatus,
-    pub owner: Option<String>,
-    pub blockers: Vec<String>,
+/// Colour for a teammate's lifecycle state, matching `TeammateState`'s
+/// `Display` output.
+#[must_use]
+fn state_color(state: &str) -> Color {
+    match state {
+        "running" => Color::Cyan,
+        "done" => Color::Green,
+        "failed" => Color::Red,
+        "stopped" => Color::DarkGray,
+        _ => Color::Yellow,
+    }
 }
 
-#[derive(Debug, Clone)]
+/// Colour for a work-queue status.
+#[must_use]
+fn task_color(status: TaskStatus) -> Color {
+    match status {
+        TaskStatus::Pending => Color::DarkGray,
+        TaskStatus::InProgress => Color::Yellow,
+        TaskStatus::Completed => Color::Green,
+        TaskStatus::Deleted => Color::Red,
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct TeamSnapshot {
     pub members: Vec<MemberInfo>,
     pub tasks: Vec<TaskInfo>,
@@ -273,9 +270,19 @@ impl TeamBrowserOverlay {
             }
 
             spans.push(Span::styled(
-                format!("  ({})", member.model),
-                Style::default().fg(Color::DarkGray),
+                format!("  {}", member.state),
+                Style::default().fg(state_color(&member.state)),
             ));
+
+            let mut parts = vec![member.lifetime.clone()];
+            if !member.role.is_empty() {
+                parts.push(member.role.clone());
+            }
+            if let Some(model) = &member.model {
+                parts.push(model.clone());
+            }
+            let detail = format!("  ({})", parts.join(", "));
+            spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
 
             Widget::render(
                 Line::from(spans),
@@ -324,8 +331,8 @@ impl TeamBrowserOverlay {
                 Style::default().fg(Color::White)
             };
 
-            let glyph = task.status.glyph();
-            let glyph_color = task.status.color();
+            let glyph = task_glyph(task.status);
+            let glyph_color = task_color(task.status);
 
             let mut spans = vec![
                 Span::styled(prefix, name_style),
@@ -340,9 +347,9 @@ impl TeamBrowserOverlay {
                 ));
             }
 
-            if !task.blockers.is_empty() {
+            if !task.blocked_by.is_empty() {
                 spans.push(Span::styled(
-                    format!("  blocked by: {}", task.blockers.join(", ")),
+                    format!("  blocked by: {}", task.blocked_by.join(", ")),
                     Style::default().fg(Color::Red),
                 ));
             }
@@ -407,41 +414,47 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn member(name: &str, model: &str, leader: bool, caps: &[&str]) -> MemberInfo {
+        MemberInfo {
+            name: name.into(),
+            role: "reviewer".into(),
+            model: Some(model.into()),
+            state: "running".into(),
+            lifetime: "resident".into(),
+            is_leader: leader,
+            capabilities: caps.iter().map(|c| (*c).to_string()).collect(),
+        }
+    }
+
+    fn task(id: &str, subject: &str, status: TaskStatus, owner: Option<&str>) -> TaskInfo {
+        TaskInfo {
+            id: id.into(),
+            subject: subject.into(),
+            description: String::new(),
+            status,
+            owner: owner.map(str::to_owned),
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+
     fn sample_snapshot() -> TeamSnapshot {
+        let mut blocked = task("3", "Write tests", TaskStatus::Pending, None);
+        blocked.blocked_by = vec!["2".into()];
         TeamSnapshot {
             members: vec![
-                MemberInfo {
-                    name: "team-lead".into(),
-                    model: "opus".into(),
-                    is_leader: true,
-                    capabilities: vec!["all".into()],
-                },
-                MemberInfo {
-                    name: "researcher".into(),
-                    model: "sonnet".into(),
-                    is_leader: false,
-                    capabilities: vec!["read".into(), "search".into()],
-                },
+                member("team-lead", "opus", true, &["all"]),
+                member("researcher", "sonnet", false, &["read", "search"]),
             ],
             tasks: vec![
-                TaskInfo {
-                    subject: "Design API".into(),
-                    status: TaskStatus::Completed,
-                    owner: Some("team-lead".into()),
-                    blockers: vec![],
-                },
-                TaskInfo {
-                    subject: "Implement endpoints".into(),
-                    status: TaskStatus::InProgress,
-                    owner: Some("researcher".into()),
-                    blockers: vec![],
-                },
-                TaskInfo {
-                    subject: "Write tests".into(),
-                    status: TaskStatus::Pending,
-                    owner: None,
-                    blockers: vec!["#2".into()],
-                },
+                task("1", "Design API", TaskStatus::Completed, Some("team-lead")),
+                task(
+                    "2",
+                    "Implement endpoints",
+                    TaskStatus::InProgress,
+                    Some("researcher"),
+                ),
+                blocked,
             ],
         }
     }
@@ -522,22 +535,34 @@ mod tests {
         ));
     }
 
-    // --- TaskStatus ---
+    // --- Status and state rendering ---
 
     #[test]
     fn task_status_glyphs() {
-        assert_eq!(TaskStatus::Pending.glyph(), "[ ]");
-        assert_eq!(TaskStatus::InProgress.glyph(), "[~]");
-        assert_eq!(TaskStatus::Completed.glyph(), "[x]");
+        assert_eq!(task_glyph(TaskStatus::Pending), "[ ]");
+        assert_eq!(task_glyph(TaskStatus::InProgress), "[~]");
+        assert_eq!(task_glyph(TaskStatus::Completed), "[x]");
+        assert_eq!(task_glyph(TaskStatus::Deleted), "[-]");
     }
 
     #[test]
     fn task_status_colors_distinct() {
-        assert_ne!(TaskStatus::Pending.color(), TaskStatus::InProgress.color());
         assert_ne!(
-            TaskStatus::InProgress.color(),
-            TaskStatus::Completed.color()
+            task_color(TaskStatus::Pending),
+            task_color(TaskStatus::InProgress)
         );
+        assert_ne!(
+            task_color(TaskStatus::InProgress),
+            task_color(TaskStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn teammate_state_colors_distinct() {
+        // The strings match `TeammateState`'s Display output.
+        assert_ne!(state_color("running"), state_color("done"));
+        assert_ne!(state_color("done"), state_color("failed"));
+        assert_eq!(state_color("idle"), state_color("something-new"));
     }
 
     // --- Empty ---

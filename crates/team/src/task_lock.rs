@@ -1,6 +1,6 @@
 //! File-backed [`TaskList`] with OS-level exclusive locking.
 //!
-//! `Arc<Mutex<TaskList>>` (from [`super::task_list::shared_task_list`]) is
+//! `Arc<Mutex<TaskList>>` (from [`crab_core::task::shared_task_list`]) is
 //! fine for single-process teammates. Once teammates run in separate
 //! processes — tmux panes, remote agents, background workers — two
 //! teammates could race on `claim_task` and each believe they own the same
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crab_utils::lock::RwLock;
 
-use super::task_list::{Task, TaskList};
+use crab_core::task::{Task, TaskList};
 
 /// Load a [`TaskList`] from `path`, returning an empty list when the file
 /// does not exist. Never takes the lock — intended for tests and snapshots.
@@ -87,7 +87,15 @@ pub fn with_locked<R>(path: &Path, f: impl FnOnce(&mut TaskList) -> R) -> std::i
 pub fn claim_task(path: &Path, agent_id: &str) -> std::io::Result<Option<Task>> {
     with_locked(path, |list| {
         let target_id = list.available_tasks().first().map(|t| t.id.clone())?;
-        list.update(&target_id, None, None, None, Some(agent_id.to_string()));
+        list.update(
+            &target_id,
+            None,
+            None,
+            None,
+            Some(agent_id.to_string()),
+            None,
+            None,
+        );
         list.get(&target_id).cloned()
     })
 }
@@ -103,7 +111,7 @@ fn lock_path_for(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task_list::TaskStatus;
+    use crab_core::task::TaskStatus;
     use std::sync::Arc;
     use std::sync::Barrier;
     use std::thread;
@@ -226,7 +234,15 @@ mod tests {
         let id = with_locked(&path, |list| list.create("T".into(), String::new())).unwrap();
 
         with_locked(&path, |list| {
-            list.update(&id, Some(TaskStatus::Completed), None, None, None);
+            list.update(
+                &id,
+                Some(TaskStatus::Completed),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
         })
         .unwrap();
 

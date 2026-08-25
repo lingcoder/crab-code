@@ -330,7 +330,7 @@ impl Tool for BashTool {
         let timeout_ms = input["timeout"].as_u64();
         let working_dir = ctx.working_dir.clone();
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
-        let task_registry = ctx.task_registry.clone();
+        let job_registry = ctx.job_registry.clone();
         let sandbox_policy = command_sandbox_policy(ctx);
         let sandboxed = sandbox_policy.is_some();
 
@@ -347,16 +347,16 @@ impl Tool for BashTool {
 
             // ── Background mode ──────────────────────────────────────
             if run_in_background {
-                let Some(reg) = task_registry else {
+                let Some(reg) = job_registry else {
                     return Ok(ToolOutput::error(
                         "run_in_background requires a task registry (not available in this context)",
                     ));
                 };
 
-                let task_id = crab_core::task::generate_task_id('b');
-                let entry = crab_core::task::TaskEntry::new(
+                let task_id = crab_core::job::generate_job_id('b');
+                let entry = crab_core::job::BackgroundJob::new(
                     task_id.clone(),
-                    crab_core::task::TaskType::LocalBash,
+                    crab_core::job::JobType::LocalBash,
                     command.clone(),
                 );
 
@@ -410,7 +410,7 @@ impl Tool for BashTool {
                             tracing::warn!("task registry mutex poisoned: {e}");
                             e.into_inner()
                         })
-                        .set_status(&task_id_spawn, crab_core::task::TaskStatus::Running);
+                        .set_status(&task_id_spawn, crab_core::job::JobStatus::Running);
 
                     let result = run(opts).await;
 
@@ -905,7 +905,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
@@ -1030,11 +1030,11 @@ mod tests {
 
     #[tokio::test]
     async fn bash_background_registers_task() {
-        use crab_core::task::{TaskRegistry, TaskStatus};
+        use crab_core::job::{JobRegistry, JobStatus};
 
-        let registry = Arc::new(std::sync::Mutex::new(TaskRegistry::new()));
+        let registry = Arc::new(std::sync::Mutex::new(JobRegistry::new()));
         let mut ctx = make_ctx();
-        ctx.task_registry = Some(Arc::clone(&registry));
+        ctx.job_registry = Some(Arc::clone(&registry));
 
         let tool = BashTool;
         let input = serde_json::json!({
@@ -1059,14 +1059,14 @@ mod tests {
 
         let status = registry.lock().unwrap().get(task_id).unwrap().status;
         assert!(
-            status == TaskStatus::Completed || status == TaskStatus::Running,
+            status == JobStatus::Completed || status == JobStatus::Running,
             "unexpected status: {status:?}",
         );
     }
 
     #[tokio::test]
     async fn bash_background_no_registry_is_error() {
-        let ctx = make_ctx(); // task_registry is None
+        let ctx = make_ctx(); // job_registry is None
         let tool = BashTool;
         let input = serde_json::json!({
             "command": "echo hello",

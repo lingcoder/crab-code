@@ -1,9 +1,13 @@
-//! Sub-agent worker with independent conversation context.
+//! The agent loop a spawned teammate runs.
 //!
-//! An `AgentWorker` runs a `query_loop` in a spawned tokio task, inheriting
-//! the parent's tool registry and backend but with a fresh conversation.
-//! It supports timeout limits (max turns, max duration) and graceful
-//! cancellation via `CancellationToken`.
+//! [`AgentWorker`] drives `query_loop` against a conversation, inheriting the
+//! parent's tool registry and backend. It supports timeout limits (max turns,
+//! max duration) and graceful cancellation via `CancellationToken`.
+//!
+//! One worker serves both lifetimes: [`AgentWorker::run_turn`] takes `&self`
+//! and an existing conversation, so a resident teammate reuses it across
+//! messages and keeps its context, while an ephemeral teammate calls it once
+//! on a fresh conversation via [`AgentWorker::run_once`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,10 +24,9 @@ use tokio_util::sync::CancellationToken;
 
 use crab_engine::{QueryConfig, query_loop};
 
-/// Configuration for spawning a sub-agent worker.
 /// Fire a subagent lifecycle hook in the background (fire-and-forget).
 fn fire_subagent_hook(
-    hook_executor: Option<&std::sync::Arc<crab_hooks::HookExecutor>>,
+    hook_executor: Option<&Arc<crab_hooks::HookExecutor>>,
     worker_id: &str,
     trigger: crab_hooks::HookTrigger,
 ) {
@@ -41,9 +44,30 @@ fn fire_subagent_hook(
     });
 }
 
+/// Fire a task lifecycle hook in the background (fire-and-forget).
+pub(crate) fn fire_task_hook(
+    hook_executor: Option<&Arc<crab_hooks::HookExecutor>>,
+    task_id: &str,
+    trigger: crab_hooks::HookTrigger,
+) {
+    let Some(hooks) = hook_executor.cloned() else {
+        return;
+    };
+    let ctx = crab_hooks::HookContext {
+        tool_input: task_id.to_string(),
+        ..crab_hooks::HookContext::default()
+    };
+    tokio::spawn(async move {
+        if let Err(e) = hooks.run(trigger, &ctx).await {
+            tracing::warn!(event = trigger.event_name(), error = %e, "task hook failed");
+        }
+    });
+}
+
+/// Configuration for a spawned teammate's agent loop.
 #[derive(Clone)]
 pub struct WorkerConfig {
-    /// Unique worker identifier.
+    /// Unique worker identifier (the teammate's backend id).
     pub worker_id: String,
     /// System prompt for the worker's conversation.
     pub system_prompt: String,
@@ -55,10 +79,15 @@ pub struct WorkerConfig {
     pub context_window: u64,
 }
 
-/// Result returned when a worker completes.
-#[derive(Debug)]
+/// Result of one completed task.
+///
+/// The conversation stays with the teammate rather than travelling in the
+/// result: a resident teammate keeps accumulating into it across messages.
+#[derive(Debug, Clone)]
 pub struct WorkerResult {
     pub worker_id: String,
+    /// Addressable teammate name, for rendering the result back to the parent.
+    pub name: String,
     /// The final assistant text output, if any.
     pub output: Option<String>,
     /// Whether the worker completed without errors.
@@ -68,35 +97,16 @@ pub struct WorkerResult {
     pub error: Option<String>,
     /// Cumulative token usage during the worker's run.
     pub usage: TokenUsage,
-    /// The worker's conversation history (for inspection or merging).
-    pub conversation: Conversation,
 }
 
-impl WorkerResult {
-    /// Create a lightweight summary (clones everything except conversation).
-    ///
-    /// Used by the coordinator to keep a record of completed workers
-    /// without retaining the full conversation history in memory.
-    #[must_use]
-    pub fn clone_summary(&self) -> Self {
-        Self {
-            worker_id: self.worker_id.clone(),
-            output: self.output.clone(),
-            success: self.success,
-            error: self.error.clone(),
-            usage: self.usage.clone(),
-            conversation: Conversation::new(self.worker_id.clone(), String::new(), 0),
-        }
-    }
-}
-
-/// Sub-agent worker that runs an independent query loop.
+/// Runs a spawned teammate's independent query loop.
 ///
-/// Workers inherit the parent's `LlmBackend`, `ToolExecutor`, and `ToolContext`
-/// but get a fresh `Conversation` with their own system prompt. Events are
-/// forwarded to the parent's event channel, prefixed with the worker ID.
+/// Workers inherit the parent's `LlmBackend`, `ToolExecutor`, and
+/// `ToolContext` but get their own `Conversation` and system prompt. Events
+/// are forwarded to the parent's event channel, tagged with the worker ID.
 pub struct AgentWorker {
     config: WorkerConfig,
+    name: String,
     backend: Arc<LlmBackend>,
     executor: Arc<ToolExecutor>,
     tool_ctx: ToolContext,
@@ -106,13 +116,13 @@ pub struct AgentWorker {
 }
 
 impl AgentWorker {
-    /// Create a new sub-agent worker.
-    ///
-    /// The worker shares the parent's backend, executor, and tool context.
-    /// It creates a fresh conversation with the provided system prompt.
+    /// Create a worker. `name` is the addressable teammate name; for an
+    /// ephemeral spawn it is the same as the worker id.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: WorkerConfig,
+        name: String,
         backend: Arc<LlmBackend>,
         executor: Arc<ToolExecutor>,
         tool_ctx: ToolContext,
@@ -122,6 +132,7 @@ impl AgentWorker {
     ) -> Self {
         Self {
             config,
+            name,
             backend,
             executor,
             tool_ctx,
@@ -131,24 +142,27 @@ impl AgentWorker {
         }
     }
 
-    /// Spawn the worker as a background tokio task.
-    ///
-    /// The worker will:
-    /// 1. Create a fresh conversation with its system prompt
-    /// 2. Push the task prompt as the first user message
-    /// 3. Run the query loop until completion, cancellation, or timeout
-    /// 4. Emit `AgentWorkerCompleted` event with the result
-    ///
-    /// Returns a `JoinHandle` that resolves to the `WorkerResult`.
-    pub fn spawn(self, task_prompt: String) -> tokio::task::JoinHandle<WorkerResult> {
-        tokio::spawn(self.run(task_prompt))
+    /// Build a fresh conversation matching this worker's prompt and window.
+    #[must_use]
+    pub fn new_conversation(&self) -> Conversation {
+        Conversation::new(
+            self.config.worker_id.clone(),
+            self.config.system_prompt.clone(),
+            self.config.context_window,
+        )
     }
 
-    /// Run the worker to completion (call directly or via `spawn`).
-    pub async fn run(self, task_prompt: String) -> WorkerResult {
+    /// Run one task against `conversation`, appending to it.
+    ///
+    /// Resident teammates call this repeatedly on the same conversation, so
+    /// context accumulates across messages. Ephemeral teammates call it once.
+    pub async fn run_turn(
+        &self,
+        conversation: &mut Conversation,
+        task_prompt: String,
+    ) -> WorkerResult {
         let worker_id = self.config.worker_id.clone();
 
-        // Emit start event
         let _ = self
             .event_tx
             .send(Event::AgentWorkerStarted {
@@ -162,15 +176,9 @@ impl AgentWorker {
             crab_hooks::HookTrigger::SubagentStart,
         );
 
-        // Create fresh conversation
-        let mut conversation = Conversation::new(
-            worker_id.clone(),
-            self.config.system_prompt.clone(),
-            self.config.context_window,
-        );
         conversation.push(Message::user(&task_prompt));
 
-        // Set up timeout cancellation
+        // Set up timeout cancellation.
         let timeout_cancel = CancellationToken::new();
         let combined_cancel = self.cancel.child_token();
         if let Some(max_duration) = self.config.max_duration {
@@ -181,25 +189,23 @@ impl AgentWorker {
             });
         }
 
-        // Run the query loop with turn limiting
         let mut cost_tracker = crab_session::CostAccumulator::default();
         let result = if let Some(max_turns) = self.config.max_turns {
             run_with_turn_limit(
-                &mut conversation,
+                conversation,
                 &self.backend,
                 &self.executor,
                 &self.tool_ctx,
                 &self.loop_config,
                 &mut cost_tracker,
                 self.event_tx.clone(),
-                combined_cancel.clone(),
+                combined_cancel,
                 timeout_cancel,
                 max_turns,
             )
             .await
         } else {
             let cancel_token = if self.config.max_duration.is_some() {
-                // Merge parent cancel with timeout cancel
                 let merged = combined_cancel.clone();
                 let tc = timeout_cancel;
                 tokio::spawn(async move {
@@ -212,7 +218,7 @@ impl AgentWorker {
             };
 
             query_loop::query_loop(
-                &mut conversation,
+                conversation,
                 &self.backend,
                 &self.executor,
                 &self.tool_ctx,
@@ -227,11 +233,8 @@ impl AgentWorker {
         let error = result.err().map(|e| e.to_string());
         let success = error.is_none();
         let usage = conversation.total_usage.clone();
+        let output = extract_last_assistant_text(conversation);
 
-        // Extract final assistant text from conversation
-        let output = extract_last_assistant_text(&conversation);
-
-        // Emit completion event
         let _ = self
             .event_tx
             .send(Event::AgentWorkerCompleted {
@@ -246,7 +249,7 @@ impl AgentWorker {
             &worker_id,
             crab_hooks::HookTrigger::SubagentStop,
         );
-        crate::teams::worker_pool::fire_task_hook(
+        fire_task_hook(
             self.loop_config.hook_executor.as_ref(),
             &worker_id,
             crab_hooks::HookTrigger::TaskCompleted,
@@ -254,19 +257,25 @@ impl AgentWorker {
 
         WorkerResult {
             worker_id,
+            name: self.name.clone(),
             output,
             success,
             error,
             usage,
-            conversation,
         }
+    }
+
+    /// Run a single task on a fresh conversation — the ephemeral path.
+    pub async fn run_once(&self, task_prompt: String) -> WorkerResult {
+        let mut conversation = self.new_conversation();
+        self.run_turn(&mut conversation, task_prompt).await
     }
 }
 
 /// Run the query loop with a maximum turn count.
 ///
-/// Each turn consists of one LLM call + tool execution round. When `max_turns`
-/// is reached, the cancellation token is triggered to stop the loop gracefully.
+/// Each turn is one LLM call + tool execution round. When `max_turns` is
+/// reached, the cancellation token is triggered to stop the loop gracefully.
 #[allow(clippy::too_many_arguments)]
 async fn run_with_turn_limit(
     conversation: &mut Conversation,
@@ -280,9 +289,8 @@ async fn run_with_turn_limit(
     timeout_cancel: CancellationToken,
     max_turns: usize,
 ) -> crab_core::Result<()> {
-    // We implement turn limiting by counting TurnStart events.
-    // Since query_loop emits TurnStart at each turn, we wrap the event_tx
-    // with a counting forwarder that cancels after max_turns.
+    // Turn limiting counts TurnStart events: wrap event_tx with a counting
+    // forwarder that cancels once the budget is spent.
     let (counting_tx, mut counting_rx) = mpsc::channel::<Event>(256);
     let turn_cancel = cancel.clone();
 
@@ -300,13 +308,11 @@ async fn run_with_turn_limit(
                 break;
             }
         }
-        // Drain remaining events
         while let Some(event) = counting_rx.recv().await {
             let _ = event_tx.send(event).await;
         }
     });
 
-    // Merge timeout cancel into the main cancel
     if timeout_cancel.is_cancelled() {
         cancel.cancel();
     } else {
@@ -355,6 +361,17 @@ mod tests {
     use crab_core::message::{ContentBlock, Message, Role};
     use crab_core::model::TokenUsage;
 
+    fn sample_result(worker_id: &str, success: bool) -> WorkerResult {
+        WorkerResult {
+            worker_id: worker_id.into(),
+            name: worker_id.into(),
+            output: success.then(|| "done".to_string()),
+            success,
+            error: (!success).then(|| "query aborted".to_string()),
+            usage: TokenUsage::default(),
+        }
+    }
+
     #[test]
     fn worker_config_construction() {
         let config = WorkerConfig {
@@ -367,64 +384,33 @@ mod tests {
         assert_eq!(config.worker_id, "w1");
         assert_eq!(config.max_turns, Some(5));
         assert_eq!(config.max_duration, Some(Duration::from_secs(30)));
+
+        let cloned = config.clone();
+        assert_eq!(cloned.worker_id, config.worker_id);
+        assert_eq!(cloned.context_window, config.context_window);
+        assert_eq!(cloned.max_turns, config.max_turns);
     }
 
     #[test]
-    fn worker_config_no_limits() {
-        let config = WorkerConfig {
-            worker_id: "w2".into(),
-            system_prompt: "test".into(),
-            max_turns: None,
-            max_duration: None,
-            context_window: 200_000,
-        };
-        assert!(config.max_turns.is_none());
-        assert!(config.max_duration.is_none());
+    fn worker_result_success_and_failure() {
+        let ok = sample_result("w1", true);
+        assert!(ok.success);
+        assert_eq!(ok.output.as_deref(), Some("done"));
+
+        let failed = sample_result("w2", false);
+        assert!(!failed.success);
+        assert!(failed.output.is_none());
+        assert_eq!(failed.error.as_deref(), Some("query aborted"));
     }
 
     #[test]
-    fn worker_config_clone() {
-        let config = WorkerConfig {
-            worker_id: "w1".into(),
-            system_prompt: "test".into(),
-            max_turns: Some(10),
-            max_duration: None,
-            context_window: 200_000,
-        };
-        let cloned = config;
-        assert_eq!(cloned.worker_id, "w1");
-        assert_eq!(cloned.max_turns, Some(10));
-    }
-
-    #[test]
-    fn worker_result_success() {
-        let conv = Conversation::new("test".into(), "prompt".into(), 200_000);
-        let result = WorkerResult {
-            worker_id: "w1".into(),
-            output: Some("done".into()),
-            success: true,
-            error: None,
-            usage: TokenUsage::default(),
-            conversation: conv,
-        };
-        assert!(result.success);
-        assert_eq!(result.output.as_deref(), Some("done"));
-    }
-
-    #[test]
-    fn worker_result_failure() {
-        let conv = Conversation::new("test".into(), "prompt".into(), 200_000);
-        let result = WorkerResult {
-            worker_id: "w1".into(),
-            output: None,
-            success: false,
-            error: Some("query aborted".into()),
-            usage: TokenUsage::default(),
-            conversation: conv,
-        };
-        assert!(!result.success);
-        assert!(result.output.is_none());
-        assert_eq!(result.error.as_deref(), Some("query aborted"));
+    fn worker_result_is_cloneable() {
+        let original = sample_result("w1", true);
+        let cloned = original.clone();
+        assert_eq!(cloned.worker_id, original.worker_id);
+        assert_eq!(cloned.name, original.name);
+        assert_eq!(cloned.output, original.output);
+        assert_eq!(cloned.success, original.success);
     }
 
     #[test]
@@ -470,7 +456,6 @@ mod tests {
                 ContentBlock::text("result text"),
             ],
         ));
-        // Should find the text block
         assert_eq!(
             extract_last_assistant_text(&conv),
             Some("result text".into())
@@ -478,27 +463,17 @@ mod tests {
     }
 
     #[test]
-    fn agent_worker_event_variants() {
-        // Verify the new Event variants compile and serialize
+    fn agent_worker_event_serde_roundtrip() {
         let start = Event::AgentWorkerStarted {
             worker_id: "w1".into(),
             task_prompt: "do stuff".into(),
         };
-        let json = serde_json::to_string(&start).unwrap();
-        assert!(json.contains("AgentWorkerStarted"));
+        assert!(
+            serde_json::to_string(&start)
+                .unwrap()
+                .contains("AgentWorkerStarted")
+        );
 
-        let completed = Event::AgentWorkerCompleted {
-            worker_id: "w1".into(),
-            result: Some("done".into()),
-            success: true,
-            usage: TokenUsage::default(),
-        };
-        let json = serde_json::to_string(&completed).unwrap();
-        assert!(json.contains("AgentWorkerCompleted"));
-    }
-
-    #[test]
-    fn agent_worker_event_serde_roundtrip() {
         let event = Event::AgentWorkerCompleted {
             worker_id: "w1".into(),
             result: None,
@@ -512,7 +487,6 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: Event = serde_json::from_str(&json).unwrap();
-        let json2 = serde_json::to_string(&parsed).unwrap();
-        assert_eq!(json, json2);
+        assert_eq!(json, serde_json::to_string(&parsed).unwrap());
     }
 }

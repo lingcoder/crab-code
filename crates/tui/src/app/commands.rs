@@ -79,26 +79,7 @@ impl App {
                 self.overlay_stack.push(Box::new(overlay));
             }
             OverlayKind::Team => {
-                // Pull the latest snapshot the runner stashed on App
-                // after the last query. Converting the runtime-side
-                // struct to the overlay's view-model keeps the overlay
-                // decoupled from crab_agents types.
-                let members = self
-                    .team_snapshot
-                    .members
-                    .iter()
-                    .map(|m| crate::components::team_browser::MemberInfo {
-                        name: m.name.clone(),
-                        model: m.state.clone(),
-                        is_leader: m.role == "lead",
-                        capabilities: vec![m.role.clone()],
-                    })
-                    .collect();
-                let snapshot = crate::components::team_browser::TeamSnapshot {
-                    members,
-                    tasks: Vec::new(),
-                };
-                let overlay = crate::components::team_browser::TeamBrowserOverlay::new(snapshot);
+                let overlay = self.build_team_browser();
                 self.overlay_stack.push(Box::new(overlay));
             }
             OverlayKind::Diff => {

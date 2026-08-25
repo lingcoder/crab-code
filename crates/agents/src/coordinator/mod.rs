@@ -10,7 +10,7 @@
 //! `SessionConfig::coordinator_mode`). The Layer 1 pool ([`crate::teams::WorkerPool`])
 //! runs unconditional base infrastructure; Coordinator Mode is additive.
 //!
-//! Wiring: [`crate::session::AgentSession::new`] calls [`Coordinator::from_config`];
+//! Wiring: [`crate::session::AgentSession::new`] calls [`CoordinatorMode::from_config`];
 //! if it returns `Some(c)`, `c.apply(&mut registry, &mut system_prompt)` is
 //! invoked before the session is handed out.
 //!
@@ -23,5 +23,5 @@ pub mod permission_sync;
 pub mod prompt;
 pub mod tool_acl;
 
-pub use coordinator::Coordinator;
+pub use coordinator::CoordinatorMode;
 pub use permission_sync::{PermissionDecisionEvent, PermissionSyncManager};

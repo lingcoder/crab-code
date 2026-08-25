@@ -1,13 +1,22 @@
 //! Cross-agent permission decision synchronization.
 //!
-//! When one teammate receives a permission decision (allow/deny) from the user,
-//! [`PermissionSyncManager`] broadcasts it to all other teammates so they can
-//! apply the same decision without re-prompting.
+//! Teammates have no terminal of their own, so a teammate that needs
+//! confirmation asks through the *session's* permission handler — the same one
+//! the main agent uses. That alone gives one prompt per decision and lets the
+//! frontend's existing session grants cover every agent.
+//!
+//! What only teams need is coalescing: teammates run concurrently, so two of
+//! them reaching for the same tool at the same moment would raise two cards for
+//! one question. [`PermissionSyncManager::resolve`] lets the first asker prompt
+//! and every concurrent asker await that answer, then broadcasts the decision
+//! so the rest of the session can observe it.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crab_core::permission::PermissionDecision;
-use tokio::sync::broadcast;
+use crab_tools::executor::PermissionResult;
+use tokio::sync::{Mutex, broadcast, watch};
 
 /// A permission decision event broadcast across teammates.
 #[derive(Debug, Clone)]
@@ -39,31 +48,36 @@ impl PermissionDecisionEvent {
     }
 }
 
-/// Broadcasts permission decisions across all teammates in a team.
+/// Coalesces concurrent permission requests and broadcasts their outcomes.
 ///
-/// Backed by a [`tokio::sync::broadcast`] channel so that every subscriber
-/// receives every event. Subscribers that fall behind will skip older events
-/// (lagged messages are silently dropped by the broadcast channel).
+/// The broadcast half is backed by [`tokio::sync::broadcast`], so every
+/// subscriber receives every event and slow subscribers silently skip older
+/// ones.
 pub struct PermissionSyncManager {
     tx: broadcast::Sender<PermissionDecisionEvent>,
+    /// Requests currently awaiting a user answer, keyed by request key. The
+    /// first asker owns the entry; concurrent askers clone its receiver.
+    inflight: Mutex<HashMap<String, watch::Receiver<Option<PermissionResult>>>>,
 }
 
 impl PermissionSyncManager {
-    /// Create a new manager with the given channel capacity.
+    /// Create a new manager with the given broadcast capacity.
     ///
-    /// `capacity` determines how many un-consumed events the broadcast
-    /// channel can buffer before older entries are dropped for slow
-    /// subscribers.
+    /// `capacity` determines how many un-consumed events the channel buffers
+    /// before older entries are dropped for slow subscribers.
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
+        Self {
+            tx,
+            inflight: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Subscribe to permission decision events.
     ///
-    /// Returns a receiver that will get all future events. Existing events
-    /// before the subscription are not replayed.
+    /// Returns a receiver for all future events; earlier events are not
+    /// replayed.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<PermissionDecisionEvent> {
         self.tx.subscribe()
@@ -71,15 +85,10 @@ impl PermissionSyncManager {
 
     /// Broadcast a permission decision to all subscribers.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if there are no active subscribers (the event is
-    /// still lost in that case).
-    pub fn broadcast(&self, event: PermissionDecisionEvent) -> crab_core::Result<()> {
-        self.tx
-            .send(event)
-            .map_err(|e| crab_core::Error::Other(format!("permission broadcast failed: {e}")))?;
-        Ok(())
+    /// A decision with no subscribers is simply not observed; that is not an
+    /// error, because the decision itself still stands.
+    pub fn broadcast(&self, event: PermissionDecisionEvent) {
+        let _ = self.tx.send(event);
     }
 
     /// Number of active subscribers.
@@ -87,19 +96,97 @@ impl PermissionSyncManager {
     pub fn subscriber_count(&self) -> usize {
         self.tx.receiver_count()
     }
+
+    /// Number of requests currently awaiting an answer.
+    pub async fn inflight_count(&self) -> usize {
+        self.inflight.lock().await.len()
+    }
+
+    /// Resolve a permission request for `key`, prompting at most once across
+    /// all concurrent askers.
+    ///
+    /// The first caller for a key runs `ask` and publishes the answer; callers
+    /// that arrive while that prompt is outstanding await it instead of raising
+    /// a second one. If the asking task dies without answering, waiters fall
+    /// back to a denial rather than hanging.
+    pub async fn resolve<F, Fut>(&self, key: &str, agent_id: &str, ask: F) -> PermissionResult
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = PermissionResult>,
+    {
+        let mut leader_tx = None;
+        let waiting = {
+            let mut inflight = self.inflight.lock().await;
+            let existing = inflight.get(key).cloned();
+            if existing.is_none() {
+                let (tx, rx) = watch::channel(None);
+                inflight.insert(key.to_owned(), rx);
+                leader_tx = Some(tx);
+            }
+            drop(inflight);
+            existing
+        };
+
+        if let Some(mut rx) = waiting {
+            // Another agent is already asking; take whatever it is told.
+            while rx.changed().await.is_ok() {
+                let answer = rx.borrow().clone();
+                if let Some(result) = answer {
+                    return result;
+                }
+            }
+            // The asking task vanished without answering; fail closed.
+            tracing::warn!(
+                key,
+                agent_id,
+                "permission request holder dropped before answering"
+            );
+            return PermissionResult::deny();
+        }
+        let leader_tx = leader_tx.expect("the first asker owns the request");
+
+        let result = ask().await;
+
+        // Publish before clearing so a waiter cloning the receiver in between
+        // still observes the answer.
+        let _ = leader_tx.send(Some(result.clone()));
+        self.inflight.lock().await.remove(key);
+
+        self.broadcast(PermissionDecisionEvent::new(
+            key,
+            if result.allowed {
+                PermissionDecision::Allow
+            } else {
+                PermissionDecision::Deny(
+                    result
+                        .feedback
+                        .clone()
+                        .unwrap_or_else(|| "denied by user".to_string()),
+                )
+            },
+            agent_id,
+        ));
+
+        result
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn broadcast_and_receive() {
         let mgr = PermissionSyncManager::new(16);
         let mut rx = mgr.subscribe();
 
-        let event = PermissionDecisionEvent::new("Bash", PermissionDecision::Allow, "agent-1");
-        mgr.broadcast(event).unwrap();
+        mgr.broadcast(PermissionDecisionEvent::new(
+            "Bash",
+            PermissionDecision::Allow,
+            "agent-1",
+        ));
 
         let received = rx.recv().await.unwrap();
         assert_eq!(received.tool_name, "Bash");
@@ -108,24 +195,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multiple_subscribers() {
+    async fn multiple_subscribers_all_see_the_event() {
         let mgr = PermissionSyncManager::new(16);
         let mut rx1 = mgr.subscribe();
         let mut rx2 = mgr.subscribe();
 
-        let event = PermissionDecisionEvent::new(
+        mgr.broadcast(PermissionDecisionEvent::new(
             "Edit",
             PermissionDecision::Deny("not allowed".into()),
             "agent-2",
-        );
-        mgr.broadcast(event).unwrap();
+        ));
 
-        let e1 = rx1.recv().await.unwrap();
-        let e2 = rx2.recv().await.unwrap();
-        assert_eq!(e1.tool_name, "Edit");
-        assert_eq!(e2.tool_name, "Edit");
-        assert_eq!(e1.agent_id, "agent-2");
-        assert_eq!(e2.agent_id, "agent-2");
+        assert_eq!(rx1.recv().await.unwrap().tool_name, "Edit");
+        assert_eq!(rx2.recv().await.unwrap().agent_id, "agent-2");
     }
 
     #[test]
@@ -143,11 +225,140 @@ mod tests {
         assert_eq!(mgr.subscriber_count(), 1);
     }
 
-    #[test]
-    fn broadcast_with_no_subscribers_fails() {
+    #[tokio::test]
+    async fn broadcast_without_subscribers_is_not_an_error() {
         let mgr = PermissionSyncManager::new(16);
-        let event = PermissionDecisionEvent::new("Bash", PermissionDecision::Allow, "agent-1");
-        assert!(mgr.broadcast(event).is_err());
+        // Nothing to assert beyond "this does not panic or report failure":
+        // a decision with no observers still stands.
+        mgr.broadcast(PermissionDecisionEvent::new(
+            "Bash",
+            PermissionDecision::Allow,
+            "agent-1",
+        ));
+    }
+
+    #[tokio::test]
+    async fn resolve_prompts_once_and_returns_the_answer() {
+        let mgr = PermissionSyncManager::new(16);
+        let asked = AtomicUsize::new(0);
+
+        let result = mgr
+            .resolve("Bash", "alice", || async {
+                asked.fetch_add(1, Ordering::SeqCst);
+                PermissionResult::allow()
+            })
+            .await;
+
+        assert!(result.allowed);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        assert_eq!(mgr.inflight_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_askers_share_one_prompt() {
+        let mgr = Arc::new(PermissionSyncManager::new(16));
+        let asked = Arc::new(AtomicUsize::new(0));
+        // Gate the prompt so the second asker is guaranteed to arrive while
+        // the first is still outstanding.
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let leader = {
+            let mgr = Arc::clone(&mgr);
+            let asked = Arc::clone(&asked);
+            tokio::spawn(async move {
+                mgr.resolve("Bash", "alice", || async {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                    let _ = release_rx.await;
+                    PermissionResult::allow()
+                })
+                .await
+            })
+        };
+
+        // Wait until the leader is registered as in-flight.
+        while mgr.inflight_count().await == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        let follower = {
+            let mgr = Arc::clone(&mgr);
+            let asked = Arc::clone(&asked);
+            tokio::spawn(async move {
+                mgr.resolve("Bash", "bob", || async {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                    PermissionResult::deny()
+                })
+                .await
+            })
+        };
+
+        let _ = release_tx.send(());
+        let leader_result = leader.await.unwrap();
+        let follower_result = follower.await.unwrap();
+
+        assert!(leader_result.allowed);
+        assert!(
+            follower_result.allowed,
+            "the follower must inherit the leader's answer, not ask again"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "only one prompt should reach the user"
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_keys_prompt_separately() {
+        let mgr = PermissionSyncManager::new(16);
+        let asked = AtomicUsize::new(0);
+
+        for key in ["Bash", "Edit"] {
+            mgr.resolve(key, "alice", || async {
+                asked.fetch_add(1, Ordering::SeqCst);
+                PermissionResult::allow()
+            })
+            .await;
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_denial_is_broadcast_with_its_feedback() {
+        let mgr = PermissionSyncManager::new(16);
+        let mut rx = mgr.subscribe();
+
+        let result = mgr
+            .resolve("Bash", "alice", || async {
+                PermissionResult::deny_with_feedback("use Read instead")
+            })
+            .await;
+        assert!(!result.allowed);
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.tool_name, "Bash");
+        assert_eq!(
+            event.decision,
+            PermissionDecision::Deny("use Read instead".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_holder_denies_rather_than_hangs() {
+        let mgr = Arc::new(PermissionSyncManager::new(16));
+
+        // Register an in-flight entry whose sender is then dropped, standing in
+        // for an asking task that died mid-prompt.
+        {
+            let (tx, rx) = watch::channel(None);
+            mgr.inflight.lock().await.insert("Bash".into(), rx);
+            drop(tx);
+        }
+
+        let result = mgr
+            .resolve("Bash", "bob", || async { PermissionResult::allow() })
+            .await;
+        assert!(!result.allowed, "a lost prompt must fail closed");
     }
 
     #[test]

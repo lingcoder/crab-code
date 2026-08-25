@@ -1,19 +1,18 @@
 //! M7b E2E integration tests.
 //!
-//! Tests the full integration of `WorkerPool`, `AgentSession`, `AgentTool`,
+//! Tests the full integration of `TeamRunner`, `AgentSession`, `AgentTool`,
 //! `TaskTools`, `SkillRegistry`, and Worker together.
 
 use std::sync::Arc;
 
-use crab_agents::{
-    AgentSession, SessionConfig, TaskList, TaskStatus, WorkerPool, WorkerResult, shared_task_list,
-};
+use crab_agents::{AgentSession, SessionConfig, TeamRunner, WorkerResult};
 use crab_api::LlmBackend;
 use crab_core::message::{ContentBlock, Message, Role};
 use crab_core::model::{ModelId, TokenUsage};
 use crab_core::permission::{PermissionMode, PermissionPolicy};
+use crab_core::task::{TaskList, TaskStatus, shared_task_list};
 use crab_core::tool::{ToolContext, ToolOutput, ToolOutputContent};
-use crab_session::{Conversation, MemoryStore, SessionHistory};
+use crab_session::{MemoryStore, SessionHistory};
 use crab_tools::builtin::agent::AGENT_TOOL_NAME;
 use crab_tools::builtin::bash::BASH_TOOL_NAME;
 use crab_tools::builtin::create_default_registry;
@@ -80,33 +79,46 @@ fn test_session_config() -> SessionConfig {
     }
 }
 
-// ─── WorkerPool multi-worker tests ───
+// ─── TeamRunner tests ───
 
 #[test]
-fn coordinator_starts_empty() {
-    let coord = WorkerPool::new("main".into(), "Main".into());
-    assert_eq!(coord.running_count(), 0);
-    assert!(coord.completed_results().is_empty());
+fn team_runner_starts_with_only_the_main_agent() {
+    let runner = TeamRunner::new();
+    assert_eq!(runner.teammate_count(), 0);
+    // The roster always seats the main agent as leader.
+    assert_eq!(runner.team().len(), 1);
+    assert!(runner.team().leader().is_some());
 }
 
 #[tokio::test]
-async fn coordinator_collect_all_on_empty_returns_empty() {
-    let mut coord = WorkerPool::new("main".into(), "Main".into());
-    let results = coord.collect_all().await;
-    assert!(results.is_empty());
-}
+async fn team_runner_spawns_both_lifetimes_onto_one_roster() {
+    use crab_team::roster::Lifetime;
 
-#[tokio::test]
-async fn coordinator_collect_completed_on_empty_returns_empty() {
-    let mut coord = WorkerPool::new("main".into(), "Main".into());
-    let results = coord.collect_completed().await;
-    assert!(results.is_empty());
-}
+    let mut runner = TeamRunner::new();
+    let markers = vec![
+        serde_json::json!({"action": "spawn_agent", "task": "review", "name": "alice"}),
+        serde_json::json!({"action": "spawn_agent", "task": "one-shot"}),
+    ];
+    let folded = runner.process_turn(&markers, "BASE").await;
 
-#[test]
-fn coordinator_cancel_nonexistent_returns_false() {
-    let coord = WorkerPool::new("main".into(), "Main".into());
-    assert!(!coord.cancel_worker("w999"));
+    // The ephemeral spawn is awaited inline and folded back; with no agent
+    // loop attached it reports a failure rather than hanging the turn.
+    assert_eq!(folded.len(), 1);
+    assert!(folded[0].text().contains("<agent-result"));
+
+    // The resident teammate is still on the roster; the ephemeral one is not.
+    assert_eq!(runner.teammate_count(), 1);
+    let team = runner.team();
+    assert_eq!(
+        team.get_member("alice").unwrap().lifetime,
+        Lifetime::Resident
+    );
+    assert!(!team.members().iter().any(|m| m.lifetime.is_ephemeral()));
+
+    runner.shutdown_all().await;
+    assert_eq!(runner.teammate_count(), 0);
+    // The main agent is not a spawned teammate, so it survives shutdown.
+    assert_eq!(runner.team().len(), 1);
 }
 
 // ─── AgentSession + Memory + History integration ───
@@ -171,7 +183,7 @@ async fn agent_tool_produces_spawn_request() {
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
-        task_registry: None,
+        job_registry: None,
         nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
@@ -207,7 +219,15 @@ fn task_list_dependency_resolution() {
     // blocked task not available until blocker completes
     assert!(list.available_tasks().iter().all(|t| t.id != tests_id));
 
-    list.update(&setup_id, Some(TaskStatus::Completed), None, None, None);
+    list.update(
+        &setup_id,
+        Some(TaskStatus::Completed),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     // Now it's available
     assert!(list.available_tasks().iter().any(|t| t.id == tests_id));
@@ -227,6 +247,8 @@ fn shared_task_list_cross_thread() {
             None,
             None,
             Some("worker_1".into()),
+            None,
+            None,
         );
     });
     handle.join().unwrap();
@@ -293,7 +315,7 @@ async fn tool_chain_write_then_edit() {
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
-        task_registry: None,
+        job_registry: None,
         nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
@@ -342,7 +364,7 @@ async fn tool_chain_glob_then_read() {
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         permission_policy: PermissionPolicy::default(),
         ext: crab_core::tool::ToolContextExt::default(),
-        task_registry: None,
+        job_registry: None,
         nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
@@ -387,7 +409,7 @@ async fn permission_denied_tool_blocked() {
             denied_tools: vec![BASH_TOOL_NAME.into()],
         },
         ext: crab_core::tool::ToolContextExt::default(),
-        task_registry: None,
+        job_registry: None,
         nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
@@ -403,38 +425,29 @@ async fn permission_denied_tool_blocked() {
     assert!(output.text().contains("denied"));
 }
 
-// ─── WorkerResult clone_summary ───
+// ─── WorkerResult ───
 
 #[test]
-fn worker_result_clone_summary_preserves_fields() {
-    let mut conv = Conversation::new("w1".into(), "prompt".into(), 200_000);
-    conv.push(Message::user("hello"));
-    conv.push(Message::new(
-        Role::Assistant,
-        vec![ContentBlock::text("world")],
-    ));
-
+fn worker_result_is_cloneable_and_keeps_identity() {
     let result = WorkerResult {
-        worker_id: "w1".into(),
+        worker_id: "ip-0".into(),
+        name: "alice".into(),
         output: Some("done".into()),
         success: true,
         error: None,
         usage: TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
+            input_tokens: 10,
+            output_tokens: 20,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
         },
-        conversation: conv,
     };
-
-    let summary = result.clone_summary();
-    assert_eq!(summary.worker_id, "w1");
-    assert_eq!(summary.output.as_deref(), Some("done"));
-    assert!(summary.success);
-    assert_eq!(summary.usage.input_tokens, 100);
-    // Summary conversation is empty (lightweight)
-    assert!(summary.conversation.is_empty());
+    let cloned = result.clone();
+    assert_eq!(cloned.worker_id, result.worker_id);
+    assert_eq!(cloned.name, result.name);
+    assert_eq!(cloned.output, result.output);
+    assert_eq!(cloned.success, result.success);
+    assert_eq!(cloned.usage.input_tokens, result.usage.input_tokens);
 }
 
 // ─── Session event channel ───

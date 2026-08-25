@@ -49,6 +49,21 @@ impl App {
         }
     }
 
+    /// Build the team-browser overlay from the latest roster snapshot the
+    /// runner stashed on `App` after the last query.
+    ///
+    /// The overlay renders the runtime's rows directly — there is no view-model
+    /// translation step, so a teammate's role, model, and lifetime cannot drift
+    /// from what the runtime actually holds.
+    pub(super) fn build_team_browser(&self) -> crate::components::team_browser::TeamBrowserOverlay {
+        crate::components::team_browser::TeamBrowserOverlay::new(
+            crate::components::team_browser::TeamSnapshot {
+                members: self.team_snapshot.members.clone(),
+                tasks: self.team_snapshot.tasks.clone(),
+            },
+        )
+    }
+
     /// Scan recent messages for the most recent tool result whose output
     /// contains unified-diff markers (`--- ` / `+++ ` / `@@`). Returns the
     /// matching output text for `DiffViewerOverlay::from_unified_diff`.
@@ -508,27 +523,7 @@ impl App {
                     return AppAction::None;
                 }
                 Action::OpenTeamBrowser if self.state != AppState::Confirming => {
-                    // Same conversion as the /team command path: pull the
-                    // latest snapshot the runner stashed on App after the
-                    // last query (empty until the model spawns a named
-                    // teammate via the Agent tool).
-                    let members = self
-                        .team_snapshot
-                        .members
-                        .iter()
-                        .map(|m| crate::components::team_browser::MemberInfo {
-                            name: m.name.clone(),
-                            model: m.state.clone(),
-                            is_leader: m.role == "lead",
-                            capabilities: vec![m.role.clone()],
-                        })
-                        .collect();
-                    let snapshot = crate::components::team_browser::TeamSnapshot {
-                        members,
-                        tasks: Vec::new(),
-                    };
-                    let overlay =
-                        crate::components::team_browser::TeamBrowserOverlay::new(snapshot);
+                    let overlay = self.build_team_browser();
                     self.overlay_stack.push(Box::new(overlay));
                     return AppAction::None;
                 }

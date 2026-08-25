@@ -20,15 +20,13 @@ use tokio_util::sync::CancellationToken;
 
 use crab_engine::{QueryConfig, query_loop};
 
-use crate::teams::WorkerPool;
-
 use super::session_config::SessionConfig;
 
 /// Extra state carried only when Layer 2b Coordinator Mode is active on a
 /// session. Used by [`AgentSession::handle_spawn_request`] to give workers
 /// a filtered registry and an overlay-free prompt.
 pub struct CoordinatorContext {
-    pub coordinator: crate::coordinator::Coordinator,
+    pub coordinator: crate::coordinator::CoordinatorMode,
     /// The session's system prompt *before* the Coordinator overlay was
     /// appended. Workers must not see the overlay; they use this as their
     /// base prompt instead.
@@ -58,7 +56,7 @@ pub struct AgentSession {
     pub coordinator_ctx: Option<CoordinatorContext>,
     /// Spawns named teammates from the Agent tool's spawn markers and routes
     /// `SendMessage` traffic through the in-process backend.
-    pub team_coordinator: crate::teams::coordinator::TeamCoordinator,
+    pub team_runner: crate::teams::TeamRunner,
     /// Session-scoped file-edit snapshot store backing `/rewind`.
     pub file_history: Arc<std::sync::Mutex<FileHistory>>,
 }
@@ -166,7 +164,7 @@ impl AgentSession {
         // The `worker_base_prompt` is snapshotted BEFORE the overlay is
         // applied so workers spawned later can be given a clean prompt.
         let coordinator_ctx = if coordinator_mode
-            && let Some(coordinator) = crate::coordinator::Coordinator::from_flag(true)
+            && let Some(coordinator) = crate::coordinator::CoordinatorMode::from_flag(true)
         {
             let worker_base_prompt = conversation.system_prompt.clone();
             coordinator.apply(&mut registry, &mut conversation.system_prompt);
@@ -212,7 +210,7 @@ impl AgentSession {
                 read_state: Some(read_state),
                 ..Default::default()
             },
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(Mutex::new(HashSet::new())),
         };
 
@@ -246,15 +244,33 @@ impl AgentSession {
 
         let (event_tx, event_rx) = mpsc::channel(256);
 
-        // Named teammates spawned via the Agent tool run a real agent loop
-        // driven by this runner (built from the session's shared handles).
-        let team_runner = crate::teams::spawn::teammate_runner(
-            Arc::clone(&backend),
-            executor.registry_arc(),
-            tool_ctx.clone(),
-            config.clone(),
-            event_tx.clone(),
-        );
+        // Teammates spawned via the Agent tool — of either lifetime — run a
+        // real agent loop driven by this runner, built from the session's
+        // shared handles.
+        let runner_backend = Arc::clone(&backend);
+        let runner_registry = match &coordinator_ctx {
+            Some(ctx) => Arc::new(
+                ctx.coordinator
+                    .build_worker_registry(crab_core::task::shared_task_list()),
+            ),
+            None => executor.registry_arc(),
+        };
+        let runner_ctx = tool_ctx.clone();
+        let runner_config = config.clone();
+        let runner_tx = event_tx.clone();
+        // Teammates ask through the session's handler so one answer covers the
+        // whole team; a session with no handler has no user to ask.
+        let permission = executor.permission_handler();
+        let team_runner = crate::teams::TeamRunner::with_runner(permission, move |handles| {
+            crate::teams::spawn::teammate_runner(
+                runner_backend,
+                runner_registry,
+                runner_ctx,
+                runner_config,
+                runner_tx,
+                handles,
+            )
+        });
 
         Self {
             conversation,
@@ -270,7 +286,7 @@ impl AgentSession {
             cost: CostAccumulator::default(),
             engine: None,
             coordinator_ctx,
-            team_coordinator: crate::teams::coordinator::TeamCoordinator::with_runner(team_runner),
+            team_runner,
             file_history,
         }
     }
@@ -339,15 +355,9 @@ impl AgentSession {
         )
         .await;
 
-        // Intercept team markers (named teammate spawns, message routing) in
-        // freshly appended tool results so the teammate backend is up to date
-        // before the next turn needs it.
+        // Handle every team marker the turn emitted: spawn teammates of
+        // either lifetime, route messages, and fold finished output back in.
         self.process_team_markers(starting_len).await;
-
-        // Intercept unnamed `spawn_agent` markers: run each requested one-shot
-        // sub-agent to completion and fold its result back into the
-        // conversation.
-        self.process_spawn_requests(starting_len).await;
 
         // Auto-save session after each interaction
         self.auto_save_session().await;
@@ -396,32 +406,28 @@ impl AgentSession {
         }
     }
 
-    /// Walk conversation messages appended during the last turn, looking for
-    /// tool-result text that carries team markers (named `spawn_agent`
-    /// requests, `message_sent` routing), and hand each hit to
-    /// [`crate::teams::coordinator::TeamCoordinator::process_tool_result`].
+    /// Handle every team marker the last turn emitted — `spawn_agent`
+    /// requests (of either lifetime) and `message_sent` routing — and fold
+    /// finished teammate output back into the conversation as
+    /// `<agent-result>` messages.
+    ///
+    /// Ephemeral spawns are awaited inline: the turn does not finish until
+    /// they do, which matches a Task-style "return the final text" model.
     async fn process_team_markers(&mut self, starting_len: usize) {
-        use crab_core::message::ContentBlock;
-        let base_prompt = self.conversation.system_prompt.clone();
-        let tail: Vec<String> = self
-            .conversation
-            .messages()
-            .iter()
-            .skip(starting_len)
-            .flat_map(|m| m.content.iter())
-            .filter_map(|block| match block {
-                ContentBlock::ToolResult { content, .. } => Some(content.clone()),
-                _ => None,
-            })
-            .collect();
-        for payload in tail {
-            if let Err(e) = self
-                .team_coordinator
-                .process_tool_result(&payload, &base_prompt)
-                .await
-            {
-                tracing::warn!(error = %e, "team coordinator failed to spawn teammate");
-            }
+        // Coordinator Mode teammates inherit the pre-overlay prompt: they must
+        // not see the leader's "you do not execute code" guardrail.
+        let base_prompt = match &self.coordinator_ctx {
+            Some(ctx) => ctx.worker_base_prompt.clone(),
+            None => self.conversation.system_prompt.clone(),
+        };
+        let markers = crate::teams::spawn::scan_team_markers(&self.conversation, starting_len);
+        let folded = if markers.is_empty() {
+            self.team_runner.drain_results()
+        } else {
+            self.team_runner.process_turn(&markers, &base_prompt).await
+        };
+        for message in folded {
+            self.conversation.push(message);
         }
     }
 
@@ -429,37 +435,7 @@ impl AgentSession {
     /// session ends — teammates live for the session's lifetime and have no
     /// other teardown path.
     pub async fn shutdown(&mut self) {
-        self.team_coordinator.shutdown_all().await;
-    }
-
-    /// Run any `spawn_agent` requests emitted during the last turn to
-    /// completion, then fold each worker's output back into the conversation
-    /// as an `<agent-result>` user message so the model sees it next turn.
-    ///
-    /// Workers are spawned into a turn-local [`WorkerPool`] and collected
-    /// synchronously (the turn does not finish until they do), which keeps the
-    /// borrow simple and matches a Task-style "return the final text" model.
-    async fn process_spawn_requests(&mut self, starting_len: usize) {
-        let markers = crate::teams::spawn::scan_spawn_markers(&self.conversation, starting_len);
-        if markers.is_empty() {
-            return;
-        }
-
-        let mut pool = WorkerPool::new(self.conversation.id.clone(), "main".into());
-        let mut spawned = false;
-        for marker in &markers {
-            if self.handle_spawn_request(&mut pool, marker).is_some() {
-                spawned = true;
-            }
-        }
-        if !spawned {
-            return;
-        }
-
-        for result in pool.collect_all().await {
-            self.conversation
-                .push(crate::teams::spawn::agent_result_message(&result));
-        }
+        self.team_runner.shutdown_all().await;
     }
 
     /// Replace the conversation message history with a single summary
@@ -524,46 +500,6 @@ impl AgentSession {
             store.save(filename, content)?;
         }
         Ok(())
-    }
-
-    /// Handle a spawn request from `AgentTool` output.
-    ///
-    /// Parses the structured JSON from `AgentTool` (with `"action": "spawn_agent"`)
-    /// and spawns a worker via the provided coordinator. Returns the worker ID.
-    pub fn handle_spawn_request(
-        &self,
-        coordinator: &mut WorkerPool,
-        spawn_request: &serde_json::Value,
-    ) -> Option<String> {
-        // Coordinator Mode splits the worker's inputs from the parent session:
-        //  - prompt:   use the pre-overlay base (workers must not see the
-        //              "You do not execute code" coordinator guardrail).
-        //  - registry: build a fresh default registry minus WORKER_DENIED_TOOLS
-        //              so workers can Bash/Edit/Read but cannot spawn nested
-        //              teams or message peers directly.
-        // Regular sessions inherit both from the parent unchanged.
-        let (parent_prompt, worker_registry) = if let Some(ctx) = &self.coordinator_ctx {
-            (
-                ctx.worker_base_prompt.clone(),
-                Arc::new(ctx.coordinator.build_worker_registry()),
-            )
-        } else {
-            (
-                self.conversation.system_prompt.clone(),
-                self.executor.registry_arc(),
-            )
-        };
-
-        crate::teams::spawn::spawn_worker_from_marker(
-            coordinator,
-            spawn_request,
-            &self.backend,
-            worker_registry,
-            &parent_prompt,
-            &self.tool_ctx,
-            &self.config,
-            &self.event_tx,
-        )
     }
 
     /// Auto-save the current session transcript to disk.
@@ -697,39 +633,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_spawn_request_spawns_worker_into_pool() {
-        let session = AgentSession::new(base_config("spawn1"), test_backend(), ToolRegistry::new());
-        let mut pool = WorkerPool::new("main".into(), "main".into());
-        let req = serde_json::json!({
-            "action": "spawn_agent",
-            "task": "do something",
-            "max_turns": 1,
-        });
-        let id = session.handle_spawn_request(&mut pool, &req);
-        assert!(id.is_some(), "spawn_agent marker should spawn a worker");
-        assert_eq!(pool.running_count(), 1);
-        // Cancel so the worker does not linger on the unreachable test backend.
-        pool.cancel_all();
+    async fn team_markers_spawn_a_teammate_of_each_lifetime() {
+        let mut session =
+            AgentSession::new(base_config("spawn1"), test_backend(), ToolRegistry::new());
+        let start = session.conversation.messages().len();
+        session.conversation.push(Message::tool_result(
+            "tu_1",
+            r#"{"action":"spawn_agent","task":"do something","name":"alice"}"#,
+            false,
+        ));
+        session.process_team_markers(start).await;
+        assert_eq!(session.team_runner.teammate_count(), 1);
+        assert_eq!(
+            session
+                .team_runner
+                .team()
+                .get_member("alice")
+                .unwrap()
+                .lifetime,
+            crab_team::roster::Lifetime::Resident
+        );
+        session.shutdown().await;
     }
 
     #[tokio::test]
-    async fn handle_spawn_request_ignores_non_spawn_action() {
-        let session = AgentSession::new(base_config("spawn2"), test_backend(), ToolRegistry::new());
-        let mut pool = WorkerPool::new("main".into(), "main".into());
-        let req = serde_json::json!({"action": "message_sent", "to": "x", "message": "hi"});
-        assert!(session.handle_spawn_request(&mut pool, &req).is_none());
-        assert_eq!(pool.running_count(), 0);
+    async fn non_spawn_markers_create_no_teammate() {
+        let mut session =
+            AgentSession::new(base_config("spawn2"), test_backend(), ToolRegistry::new());
+        let start = session.conversation.messages().len();
+        session.conversation.push(Message::tool_result(
+            "tu_1",
+            r#"{"action":"message_sent","to":"x","message":"hi"}"#,
+            false,
+        ));
+        session.process_team_markers(start).await;
+        assert_eq!(session.team_runner.teammate_count(), 0);
     }
 
     #[tokio::test]
-    async fn process_spawn_requests_noop_without_marker() {
+    async fn team_markers_noop_without_marker() {
         let mut session =
             AgentSession::new(base_config("nospawn"), test_backend(), ToolRegistry::new());
         let start = session.conversation.messages().len();
         session
             .conversation
             .push(Message::assistant("plain text, no spawn"));
-        session.process_spawn_requests(start).await;
+        session.process_team_markers(start).await;
         // No <agent-result> message is injected when there is no marker.
         assert!(
             !session

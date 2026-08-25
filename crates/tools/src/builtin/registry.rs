@@ -34,10 +34,10 @@ fn is_powershell_tool_enabled() -> bool {
 /// runtime's fired-prompt drain share the same store.
 pub fn register_all_builtins(
     registry: &mut ToolRegistry,
-    task_store: Option<task::SharedTaskStore>,
+    task_list: Option<task::SharedTaskList>,
     cron_store: Option<cron::SharedCronStore>,
 ) {
-    let store = task_store.unwrap_or_else(task::shared_task_store);
+    let store = task_list.unwrap_or_else(task::shared_task_list);
 
     bash::sweep_stale_task_outputs();
 
@@ -59,6 +59,7 @@ pub fn register_all_builtins(
     registry.register(Arc::new(task::TaskCreateTool::new(Arc::clone(&store))));
     registry.register(Arc::new(task::TaskListTool::new(Arc::clone(&store))));
     registry.register(Arc::new(task::TaskUpdateTool::new(Arc::clone(&store))));
+    registry.register(Arc::new(task::TaskClaimTool::new(Arc::clone(&store))));
     registry.register(Arc::new(task::TaskGetTool::new(store)));
     registry.register(Arc::new(worktree::EnterWorktreeTool));
     registry.register(Arc::new(worktree::ExitWorktreeTool));
@@ -160,7 +161,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 39 } else { 38 };
+        let expected = if ps_enabled { 40 } else { 39 };
         assert_eq!(registry.len(), expected);
     }
 
@@ -172,7 +173,7 @@ mod tests {
         let ps_enabled = cfg!(windows)
             && std::env::var("CRAB_USE_POWERSHELL_TOOL")
                 .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-        let expected = if ps_enabled { 39 } else { 38 };
+        let expected = if ps_enabled { 40 } else { 39 };
         assert_eq!(schemas.len(), expected);
         for schema in &schemas {
             assert!(schema.get("name").is_some());

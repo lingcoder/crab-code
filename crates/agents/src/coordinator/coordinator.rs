@@ -1,5 +1,6 @@
 //! Coordinator Mode activation marker, applying registry filter and prompt overlay.
 
+use crab_core::task::SharedTaskList;
 use crab_tools::registry::ToolRegistry;
 
 use super::gating;
@@ -11,14 +12,14 @@ use crate::session::SessionConfig;
 /// passed; callers can then [`Coordinator::apply`] the registry filter and
 /// prompt overlay to a session.
 #[derive(Debug, Clone, Copy)]
-pub struct Coordinator {
+pub struct CoordinatorMode {
     // Reserved for future per-Coordinator config (e.g. override allow-lists,
     // custom prompt fragments). Kept as a unit-like struct for now so the
     // public API stabilises early.
     _priv: (),
 }
 
-impl Coordinator {
+impl CoordinatorMode {
     /// Activate Coordinator Mode if gating allows. Returns `None` when the
     /// session is a plain (non-coordinator) session.
     #[must_use]
@@ -76,13 +77,17 @@ impl Coordinator {
     }
 
     /// Build a fresh worker tool registry: the default crab registry minus
-    /// [`tool_acl::WORKER_DENIED_TOOLS`]. Used by
-    /// [`crate::session::AgentSession::handle_spawn_request`] to give each
-    /// worker a clean toolset — workers inherit neither the coordinator's
-    /// stripped 3-tool registry nor its peer-messaging tool.
+    /// [`tool_acl::WORKER_DENIED_TOOLS`]. Gives each worker a clean toolset —
+    /// workers inherit neither the coordinator's stripped 3-tool registry nor
+    /// its peer-messaging tool.
+    ///
+    /// `task_list` must be the session's shared work queue. Building a worker
+    /// registry over a fresh one would hand workers a private queue, so the
+    /// tasks their coordinator created would be invisible to them.
     #[must_use]
-    pub fn build_worker_registry(&self) -> ToolRegistry {
-        let mut registry = crab_tools::builtin::create_default_registry();
+    pub fn build_worker_registry(&self, task_list: SharedTaskList) -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        crab_tools::builtin::register_all_builtins(&mut registry, Some(task_list), None);
         registry.remove_names(tool_acl::WORKER_DENIED_TOOLS);
         registry
     }
@@ -134,38 +139,44 @@ mod tests {
 
     #[test]
     fn from_config_returns_none_when_gate_closed() {
-        assert!(Coordinator::from_config(&config_with(false)).is_none());
+        assert!(CoordinatorMode::from_config(&config_with(false)).is_none());
     }
 
     #[test]
     fn from_config_activates_when_gate_open() {
-        assert!(Coordinator::from_config(&config_with(true)).is_some());
+        assert!(CoordinatorMode::from_config(&config_with(true)).is_some());
     }
 
     #[test]
     fn apply_shrinks_registry_to_allow_list() {
         let mut registry = create_default_registry();
         let original_len = registry.len();
-        assert!(original_len > 3, "default registry must have many tools");
+        assert!(
+            original_len > tool_acl::COORDINATOR_TOOLS.len(),
+            "default registry must have many tools"
+        );
 
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
         let mut prompt = String::from("Base.");
         coord.apply(&mut registry, &mut prompt);
 
-        assert_eq!(registry.len(), 3);
-        assert!(registry.get("Agent").is_some());
-        assert!(registry.get("SendMessage").is_some());
-        assert!(registry.get("TaskStop").is_some());
-        // A random non-coordinator tool should be gone.
+        for name in tool_acl::COORDINATOR_TOOLS {
+            assert!(registry.get(name).is_some(), "{name} must survive");
+        }
+        // Hands-on execution tools are gone.
         assert!(registry.get("Bash").is_none(), "Bash must be stripped");
         assert!(registry.get("Edit").is_none(), "Edit must be stripped");
+        assert!(
+            registry.get("TaskClaim").is_none(),
+            "a coordinator delegates rather than claiming work itself"
+        );
     }
 
     #[test]
     fn apply_appends_prompt_overlay() {
         let mut registry = create_default_registry();
         let mut prompt = String::from("Base prompt.");
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
         coord.apply(&mut registry, &mut prompt);
 
         assert!(prompt.contains("Base prompt."));
@@ -175,14 +186,14 @@ mod tests {
 
     #[test]
     fn allowed_tools_matches_acl_constant() {
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
         assert_eq!(coord.allowed_tools(), tool_acl::COORDINATOR_TOOLS);
         assert_eq!(coord.worker_denied_tools(), tool_acl::WORKER_DENIED_TOOLS);
     }
 
     #[test]
     fn apply_halves_match_combined_apply() {
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
 
         // Combined apply.
         let mut reg_a = create_default_registry();
@@ -205,8 +216,8 @@ mod tests {
 
     #[test]
     fn worker_registry_strips_denied_but_keeps_hands_on_tools() {
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
-        let worker_reg = coord.build_worker_registry();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
+        let worker_reg = coord.build_worker_registry(crab_core::task::shared_task_list());
 
         // Denied tools must be gone.
         for denied in tool_acl::WORKER_DENIED_TOOLS {
@@ -229,9 +240,9 @@ mod tests {
     fn worker_registry_is_fresh_not_inherited() {
         // Build two worker registries — they must be independent instances
         // (the filter is applied on a freshly-constructed registry each time).
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
-        let a = coord.build_worker_registry();
-        let b = coord.build_worker_registry();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
+        let a = coord.build_worker_registry(crab_core::task::shared_task_list());
+        let b = coord.build_worker_registry(crab_core::task::shared_task_list());
         assert_eq!(a.len(), b.len());
     }
 
@@ -240,9 +251,9 @@ mod tests {
     #[test]
     fn coordinator_is_copy() {
         fn assert_copy<T: Copy>() {}
-        assert_copy::<Coordinator>();
+        assert_copy::<CoordinatorMode>();
 
-        let coord = Coordinator::from_config(&config_with(true)).unwrap();
+        let coord = CoordinatorMode::from_config(&config_with(true)).unwrap();
         let arc = Arc::new(coord);
         assert!(arc.allowed_tools().contains(&"Agent"));
     }

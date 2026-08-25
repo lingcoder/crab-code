@@ -33,7 +33,7 @@ fn make_ctx(working_dir: &Path, mode: PermissionMode) -> ToolContext {
             denied_tools: vec![],
         },
         ext: crab_core::tool::ToolContextExt::default(),
-        task_registry: None,
+        job_registry: None,
         nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
     }
 }
@@ -549,7 +549,7 @@ fn expected_builtin_count() -> usize {
     let ps_enabled = cfg!(windows)
         && std::env::var("CRAB_USE_POWERSHELL_TOOL")
             .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false" | "no" | "off"));
-    if ps_enabled { 39 } else { 38 }
+    if ps_enabled { 40 } else { 39 }
 }
 
 #[test]
@@ -573,6 +573,7 @@ fn all_expected_tools_registered() {
         "TaskCreate",
         "TaskList",
         "TaskUpdate",
+        "TaskClaim",
         "TaskGet",
         "EnterWorktree",
         "ExitWorktree",

@@ -102,7 +102,7 @@ pub struct AgentRuntime {
     _mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
     cost: CostAccumulator,
     memory_dir: Option<PathBuf>,
-    team_coordinator: crate::teams::coordinator::TeamCoordinator,
+    team_runner: crate::teams::TeamRunner,
     /// LLM-backed compaction client. `None` when no backend was wired in
     /// at init time — `compact_now` then falls back to the heuristic
     /// summariser.
@@ -120,14 +120,17 @@ pub struct AgentRuntime {
     skill_dirs: Vec<PathBuf>,
     /// Coordinator Mode activation, `Some` only when `coordinator_mode` was set.
     /// Workers it spawns get a clean (overlay-free) registry/prompt.
-    coordinator: Option<crate::coordinator::Coordinator>,
+    coordinator: Option<crate::coordinator::CoordinatorMode>,
     /// The system prompt *before* the Coordinator overlay — workers use this so
     /// they don't inherit the "you do not execute code" guardrail.
     worker_base_prompt: String,
-    /// Background task registry — tracks running/completed background tasks
+    /// Background job registry — tracks running/completed background jobs
     /// (bash commands, sub-agents, teammates). Shared with tools that need
-    /// to read or modify task state (`TaskStopTool`, `TaskOutputTool`).
-    task_registry: Arc<std::sync::Mutex<crab_core::task::TaskRegistry>>,
+    /// to read or modify job state (`TaskStopTool`, `TaskOutputTool`).
+    job_registry: Arc<std::sync::Mutex<crab_core::job::JobRegistry>>,
+    /// The session's shared work queue, behind the `Task*` tools. Held here so
+    /// spawned teammates and the TUI read the same queue the main agent writes.
+    task_list: crab_core::task::SharedTaskList,
     /// Authoritative session-level "always allow" grants. Seeded from a
     /// resumed session and updated by interactive frontends as the user grants
     /// tools. Auto-save reads this instead of re-reading disk, so a concurrent
@@ -172,13 +175,15 @@ impl ConversationSnapshot {
 
 /// Snapshot of the current team state — rendered by the TUI team browser.
 ///
-/// The runtime owns the coordinator; the TUI reads a snapshot on demand
-/// each time the overlay opens (no live broadcast needed because team
-/// state changes only at tool-result boundaries).
+/// The runtime owns the team runner; the TUI reads a snapshot on demand each
+/// time the overlay opens (no live broadcast needed because team state
+/// changes only at tool-result boundaries).
 #[derive(Debug, Clone, Default)]
 pub struct TeamSnapshot {
-    /// All teammates currently tracked by the in-process backend.
+    /// Every teammate on the session's roster, of either lifetime.
     pub members: Vec<TeamMemberSnapshot>,
+    /// The shared work queue the team creates from and claims against.
+    pub tasks: Vec<crab_core::task::Task>,
 }
 
 /// Outcome of [`AgentRuntime::compact_now`], used by the TUI to render the
@@ -199,12 +204,21 @@ pub struct CompactNowResult {
 /// One row in [`TeamSnapshot::members`].
 #[derive(Debug, Clone)]
 pub struct TeamMemberSnapshot {
-    /// Human-readable teammate name.
+    /// Addressable teammate name.
     pub name: String,
-    /// Role / specialty.
+    /// Role / specialty (the `subagent_type` that defined it).
     pub role: String,
-    /// Lifecycle state rendered as a string (Idle / Running / Done / Failed).
+    /// Model override, or `None` when it inherits the session's model.
+    pub model: Option<String>,
+    /// Lifecycle state rendered as a string (idle / running / done / failed /
+    /// stopped).
     pub state: String,
+    /// Lifetime rendered as a string (ephemeral / resident).
+    pub lifetime: String,
+    /// Whether this teammate leads the team.
+    pub is_leader: bool,
+    /// Declared capabilities.
+    pub capabilities: Vec<String>,
 }
 
 impl AgentRuntime {
@@ -221,14 +235,19 @@ impl AgentRuntime {
         let cron_store = shared_cron_store().await;
         let cron_fired_queue = cron_store.lock().await.fired_queue();
         let mut registry = ToolRegistry::new();
-        register_all_builtins(&mut registry, None, Some(Arc::clone(&cron_store)));
+        let task_list = crab_core::task::shared_task_list();
+        register_all_builtins(
+            &mut registry,
+            Some(Arc::clone(&task_list)),
+            Some(Arc::clone(&cron_store)),
+        );
 
         // Coordinator Mode (Layer 2b): strip the leader's registry to the
         // coordinator allow-list and overlay its prompt. `None` for plain
         // sessions. Applied in two halves because the registry and system
         // prompt are finalized at different points below.
         let coordinator =
-            crate::coordinator::Coordinator::from_flag(config.session_config.coordinator_mode);
+            crate::coordinator::CoordinatorMode::from_flag(config.session_config.coordinator_mode);
 
         let mut mcp_failures = Vec::new();
         let mcp_manager = if let Some(ref mcp_value) = config.mcp_servers {
@@ -391,7 +410,7 @@ impl AgentRuntime {
         // can enforce read-before-edit and detect out-of-band changes.
         let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
 
-        let task_registry = Arc::new(std::sync::Mutex::new(crab_core::task::TaskRegistry::new()));
+        let job_registry = Arc::new(std::sync::Mutex::new(crab_core::job::JobRegistry::new()));
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
             permission_mode: config.session_config.permission_policy.mode,
@@ -404,7 +423,7 @@ impl AgentRuntime {
                 read_state: Some(read_state),
                 ..Default::default()
             },
-            task_registry: Some(Arc::clone(&task_registry)),
+            job_registry: Some(Arc::clone(&job_registry)),
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         };
 
@@ -455,7 +474,7 @@ impl AgentRuntime {
             cache_enabled: config.cache_enabled,
             budget_tokens: None,
             retry_policy: Some(crab_api::rate_limit::RetryPolicy::default()),
-            hook_executor,
+            hook_executor: hook_executor.clone(),
             session_id: Some(session_id),
             effort: None,
             fallback_model: config.session_config.fallback_model.map(ModelId::from),
@@ -506,7 +525,12 @@ impl AgentRuntime {
             _mcp_manager: mcp_manager,
             cost: resumed_cost,
             memory_dir,
-            team_coordinator: crate::teams::coordinator::TeamCoordinator::new(),
+            team_runner: {
+                let mut runner = crate::teams::TeamRunner::new();
+                runner.set_job_registry(Arc::clone(&job_registry));
+                runner.set_hook_executor(hook_executor);
+                runner
+            },
             compaction_client,
             compaction_config,
             file_history: Some(file_history),
@@ -514,7 +538,8 @@ impl AgentRuntime {
             skill_dirs,
             coordinator,
             worker_base_prompt,
-            task_registry,
+            job_registry,
+            task_list,
             session_grants: std::sync::Mutex::new(resumed_grants.clone()),
             cron_store,
             cron_fired_queue,
@@ -614,20 +639,29 @@ impl AgentRuntime {
     ) -> tokio::sync::oneshot::Receiver<QueryTaskResult> {
         // Teammates need a real agent loop, but the runtime only sees the LLM
         // backend here (it is passed per query), so install the teammate
-        // runner lazily before the first spawn can happen.
+        // runner lazily before the first spawn can happen. Coordinator Mode
+        // workers get the clean (overlay-free) registry and prompt.
         {
             let runner_backend = Arc::clone(backend);
-            let runner_registry = self.executor.registry_arc();
+            let runner_registry = match self.coordinator {
+                Some(coord) => Arc::new(coord.build_worker_registry(Arc::clone(&self.task_list))),
+                None => self.executor.registry_arc(),
+            };
             let runner_ctx = self.tool_ctx.clone();
             let runner_config = self.loop_config.clone();
             let runner_tx = event_tx.clone();
-            self.team_coordinator.ensure_runner(move || {
+            // Teammates ask for permission through the session's own handler,
+            // so the card appears in the main session and one answer covers
+            // the whole team.
+            let permission = self.executor.permission_handler();
+            self.team_runner.ensure_runner(permission, move |handles| {
                 crate::teams::spawn::teammate_runner(
                     runner_backend,
                     runner_registry,
                     runner_ctx,
                     runner_config,
                     runner_tx,
+                    handles,
                 )
             });
         }
@@ -637,11 +671,6 @@ impl AgentRuntime {
         let task_executor = Arc::clone(&self.executor);
         let task_ctx = self.tool_ctx.clone();
         let task_config = self.loop_config.clone();
-        // In Coordinator Mode, sub-agent workers get a clean (overlay-free)
-        // registry and prompt instead of the leader's stripped 3-tool registry.
-        let coordinator = self.coordinator;
-        let worker_base_prompt = self.worker_base_prompt.clone();
-        let task_registry = Arc::clone(&self.task_registry);
 
         // Persist the user turn to the crash log before running: the engine
         // loop persists assistant + tool-result messages, but never the user
@@ -657,7 +686,6 @@ impl AgentRuntime {
 
         tokio::spawn(async move {
             let mut task_cost = CostAccumulator::default();
-            let starting_len = task_conversation.messages().len();
             let result = crab_engine::query_loop(
                 &mut task_conversation,
                 &task_backend,
@@ -670,49 +698,9 @@ impl AgentRuntime {
             )
             .await;
 
-            // Run any sub-agents the turn requested via the Agent tool to
-            // completion, folding each result back into the conversation.
-            let markers = crate::teams::spawn::scan_spawn_markers(&task_conversation, starting_len);
-            if !markers.is_empty() {
-                let mut pool =
-                    crate::teams::WorkerPool::new(task_conversation.id.clone(), "main".into());
-                pool.set_task_registry(Arc::clone(&task_registry));
-                // Coordinator workers get the clean registry/prompt; plain
-                // sessions inherit the parent's.
-                let (worker_registry, parent_prompt) = match coordinator {
-                    Some(coord) => (
-                        Arc::new(coord.build_worker_registry()),
-                        worker_base_prompt.clone(),
-                    ),
-                    None => (
-                        task_executor.registry_arc(),
-                        task_conversation.system_prompt.clone(),
-                    ),
-                };
-                let mut spawned = false;
-                for marker in &markers {
-                    if crate::teams::spawn::spawn_worker_from_marker(
-                        &mut pool,
-                        marker,
-                        &task_backend,
-                        Arc::clone(&worker_registry),
-                        &parent_prompt,
-                        &task_ctx,
-                        &task_config,
-                        &event_tx,
-                    )
-                    .is_some()
-                    {
-                        spawned = true;
-                    }
-                }
-                if spawned {
-                    for worker_result in pool.collect_all().await {
-                        task_conversation
-                            .push(crate::teams::spawn::agent_result_message(&worker_result));
-                    }
-                }
-            }
+            // Spawn requests this turn emitted are handled by the caller via
+            // `process_team_markers`, which owns the session's single team
+            // runner — this task cannot borrow it.
 
             let _ = return_tx.send(QueryTaskResult {
                 conversation: task_conversation,
@@ -726,36 +714,30 @@ impl AgentRuntime {
 
     // ── Team coordinator ────────────────────────────────────────────────
 
-    /// Scan conversation tool results for team markers — named `spawn_agent`
-    /// requests (which spawn teammates) and `message_sent` routing. Call
-    /// after every completed query so the team browser reflects the latest
-    /// model decisions.
+    /// Handle every team marker the last turn emitted — `spawn_agent`
+    /// requests (which spawn teammates of either lifetime) and `message_sent`
+    /// routing — and fold any finished teammate output back into the
+    /// conversation as `<agent-result>` messages.
     ///
-    /// `starting_len` must be the conversation length *before* the query ran —
+    /// `starting_len` must be the conversation length *before* the query ran:
     /// only messages added during that query are inspected. Re-scanning older
     /// messages would respawn teammates and re-deliver messages.
     pub async fn process_team_markers(&mut self, starting_len: usize) {
-        use crab_core::message::ContentBlock;
-        let base_prompt = self.conversation.system_prompt.clone();
-        let tail: Vec<String> = self
-            .conversation
-            .messages()
-            .iter()
-            .skip(starting_len)
-            .flat_map(|m| m.content.iter())
-            .filter_map(|block| match block {
-                ContentBlock::ToolResult { content, .. } => Some(content.clone()),
-                _ => None,
-            })
-            .collect();
-        for payload in tail {
-            if let Err(e) = self
-                .team_coordinator
-                .process_tool_result(&payload, &base_prompt)
-                .await
-            {
-                tracing::warn!(error = %e, "team coordinator failed to spawn teammate");
-            }
+        // Coordinator Mode teammates inherit the pre-overlay prompt: they must
+        // not see the leader's "you do not execute code" guardrail.
+        let base_prompt = if self.coordinator.is_some() {
+            self.worker_base_prompt.clone()
+        } else {
+            self.conversation.system_prompt.clone()
+        };
+        let markers = crate::teams::spawn::scan_team_markers(&self.conversation, starting_len);
+        let folded = if markers.is_empty() {
+            self.team_runner.drain_results()
+        } else {
+            self.team_runner.process_turn(&markers, &base_prompt).await
+        };
+        for message in folded {
+            self.conversation.push(message);
         }
     }
 
@@ -763,29 +745,43 @@ impl AgentRuntime {
     /// the session ends — teammates live for the session's lifetime and have
     /// no other teardown path.
     pub async fn shutdown_teams(&mut self) {
-        self.team_coordinator.shutdown_all().await;
+        self.team_runner.shutdown_all().await;
     }
 
     /// Snapshot of the current team for the TUI team browser.
     ///
-    /// Reads from the in-process backend's live teammate list; this is a
-    /// pull-on-open design, so callers just call it when opening the
-    /// overlay.
+    /// Reads the live roster; this is a pull-on-open design, so callers just
+    /// call it when opening the overlay.
     #[must_use]
     pub fn team_snapshot(&self) -> TeamSnapshot {
-        use crab_team::TeammateBackend as _;
-        let members = self
-            .team_coordinator
-            .backend()
-            .list_teammates()
-            .into_iter()
-            .map(|t| TeamMemberSnapshot {
-                name: t.name.clone(),
-                role: t.role.clone(),
-                state: t.state.to_string(),
-            })
-            .collect();
-        TeamSnapshot { members }
+        let tasks = self
+            .task_list
+            .lock()
+            .map(|list| list.list().into_iter().cloned().collect())
+            .unwrap_or_default();
+        TeamSnapshot {
+            tasks,
+            members: self
+                .team_runner
+                .team()
+                .members()
+                .iter()
+                .map(|t| {
+                    let mut capabilities: Vec<String> =
+                        t.capabilities.iter().map(|c| c.name().to_owned()).collect();
+                    capabilities.sort();
+                    TeamMemberSnapshot {
+                        name: t.name.clone(),
+                        role: t.role.clone(),
+                        model: t.model.clone(),
+                        state: t.state.to_string(),
+                        lifetime: t.lifetime.to_string(),
+                        is_leader: t.is_leader,
+                        capabilities,
+                    }
+                })
+                .collect(),
+        }
     }
 
     // ── Manual compaction ───────────────────────────────────────────────
@@ -900,8 +896,8 @@ impl AgentRuntime {
     /// Shared background task registry. Tools use the copy in `tool_ctx`;
     /// the runtime uses this one for worker registration.
     #[must_use]
-    pub fn task_registry(&self) -> &Arc<std::sync::Mutex<crab_core::task::TaskRegistry>> {
-        &self.task_registry
+    pub fn job_registry(&self) -> &Arc<std::sync::Mutex<crab_core::job::JobRegistry>> {
+        &self.job_registry
     }
 
     pub fn executor(&self) -> &Arc<ToolExecutor> {

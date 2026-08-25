@@ -203,6 +203,15 @@ impl ToolExecutor {
         self.permission_handler = Some(handler);
     }
 
+    /// The installed permission handler, if any.
+    ///
+    /// Sub-agents wrap this so their prompts reach the same user rather than
+    /// being auto-approved in a context with no terminal.
+    #[must_use]
+    pub fn permission_handler(&self) -> Option<Arc<dyn PermissionHandler>> {
+        self.permission_handler.clone()
+    }
+
     /// Install `PermissionRequest` hooks, consulted before the interactive
     /// handler on `AskUser` decisions.
     pub fn set_permission_hooks(&mut self, hooks: Arc<crab_hooks::HookExecutor>) {
@@ -502,7 +511,7 @@ mod tests {
             cancellation_token: CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),

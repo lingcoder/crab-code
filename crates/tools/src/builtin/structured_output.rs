@@ -125,7 +125,7 @@ mod tests {
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             permission_policy: PermissionPolicy::default(),
             ext: crab_core::tool::ToolContextExt::default(),
-            task_registry: None,
+            job_registry: None,
             nested_memory_triggers: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
