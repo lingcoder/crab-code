@@ -52,6 +52,11 @@ impl Tool for AgentTool {
                 "subagent_type": {
                     "type": "string",
                     "description": "Optional named agent type whose system prompt and tool restrictions the sub-agent adopts (e.g. 'Explore', 'Plan', 'general-purpose')"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of things this agent can do (e.g. ['code_review', 'testing']). Recorded on the team roster so work can be assigned by capability"
                 }
             },
             "required": ["task"]
@@ -117,6 +122,16 @@ impl Tool for AgentTool {
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
+            let capabilities: Vec<&str> = input
+                .get("capabilities")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .collect();
+
             // Build the spawn request as structured JSON for the agent layer
             let spawn_request = serde_json::json!({
                 "action": "spawn_agent",
@@ -128,6 +143,7 @@ impl Tool for AgentTool {
                 "session_id": session_id,
                 "parent_permission_mode": parent_mode_str,
                 "subagent_type": subagent_type,
+                "capabilities": capabilities,
             });
 
             // Emit both a Json block (structured consumers) and a Text block
@@ -231,6 +247,36 @@ mod tests {
         assert!(props.contains_key("model"));
         assert!(props.contains_key("working_dir"));
         assert!(props.contains_key("max_turns"));
+        assert!(props.contains_key("subagent_type"));
+        assert!(props.contains_key("capabilities"));
+    }
+
+    #[tokio::test]
+    async fn capabilities_reach_the_spawn_marker() {
+        let ctx = test_ctx();
+        let input = json!({
+            "task": "review the auth module",
+            "name": "alice",
+            "capabilities": ["code_review", "  testing  ", "", 7],
+        });
+        let out = AgentTool.execute(input, &ctx).await.unwrap();
+        let ToolOutputContent::Json { value } = &out.content[0] else {
+            panic!("expected JSON output from AgentTool");
+        };
+        assert_eq!(value["capabilities"], json!(["code_review", "testing"]));
+    }
+
+    #[tokio::test]
+    async fn a_spawn_without_capabilities_carries_an_empty_list() {
+        let ctx = test_ctx();
+        let out = AgentTool
+            .execute(json!({"task": "do x"}), &ctx)
+            .await
+            .unwrap();
+        let ToolOutputContent::Json { value } = &out.content[0] else {
+            panic!("expected JSON output from AgentTool");
+        };
+        assert_eq!(value["capabilities"], json!([]));
     }
 
     #[tokio::test]

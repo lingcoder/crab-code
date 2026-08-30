@@ -121,6 +121,7 @@ impl CrabAgentHandler {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            team_mode: crab_agents::TeamMode::LeaderWorker,
             default_shell: "bash".into(),
         }
     }

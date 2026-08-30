@@ -6,8 +6,9 @@
 //!
 //! One worker serves both lifetimes: [`AgentWorker::run_turn`] takes `&self`
 //! and an existing conversation, so a resident teammate reuses it across
-//! messages and keeps its context, while an ephemeral teammate calls it once
-//! on a fresh conversation via [`AgentWorker::run_once`].
+//! messages and keeps its context while an ephemeral one runs a single turn.
+//! The caller owns the conversation either way, which is what lets it scan the
+//! teammate's own output for team markers after each turn.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -263,12 +264,6 @@ impl AgentWorker {
             error,
             usage,
         }
-    }
-
-    /// Run a single task on a fresh conversation — the ephemeral path.
-    pub async fn run_once(&self, task_prompt: String) -> WorkerResult {
-        let mut conversation = self.new_conversation();
-        self.run_turn(&mut conversation, task_prompt).await
     }
 }
 

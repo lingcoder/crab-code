@@ -410,6 +410,7 @@ impl AgentRuntime {
         // can enforce read-before-edit and detect out-of-band changes.
         let (record_read, read_state) = crab_core::tool::new_read_state_tracker();
 
+        let team_mode = config.session_config.team_mode;
         let job_registry = Arc::new(std::sync::Mutex::new(crab_core::job::JobRegistry::new()));
         let tool_ctx = ToolContext {
             working_dir: config.session_config.working_dir,
@@ -529,6 +530,7 @@ impl AgentRuntime {
                 let mut runner = crate::teams::TeamRunner::new();
                 runner.set_job_registry(Arc::clone(&job_registry));
                 runner.set_hook_executor(hook_executor);
+                runner.set_mode(team_mode);
                 runner
             },
             compaction_client,
@@ -732,7 +734,7 @@ impl AgentRuntime {
         };
         let markers = crate::teams::spawn::scan_team_markers(&self.conversation, starting_len);
         let folded = if markers.is_empty() {
-            self.team_runner.drain_results()
+            self.team_runner.drain_results().await
         } else {
             self.team_runner.process_turn(&markers, &base_prompt).await
         };
@@ -1408,6 +1410,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            team_mode: crab_team::TeamMode::LeaderWorker,
             default_shell: "bash".into(),
         }
     }

@@ -14,6 +14,7 @@ pub mod teams;
 
 pub use builtin::builtin_agents;
 pub use coordinator::{PermissionDecisionEvent, PermissionSyncManager};
+pub use crab_team::TeamMode;
 pub use definition::{AgentColor, AgentDefinition, AgentSource, ToolSet};
 pub use llm_compaction_client::LlmCompactionClient;
 pub use prompt::{build_system_prompt, build_system_prompt_with_memories};

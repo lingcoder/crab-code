@@ -30,6 +30,30 @@ fn coordinator_mode_from(lookup: impl Fn(&str) -> Option<String>) -> bool {
     lookup("CRAB_COORDINATOR_MODE").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
 }
 
+/// Read the team collaboration mode from env (no CLI flag, same reasoning as
+/// the Coordinator gate). `CRAB_TEAM_MODE=peer-to-peer` lets teammates address
+/// each other; anything else keeps the `LeaderWorker` default, where teammates
+/// answer the main agent only.
+pub fn team_mode_from_env() -> crab_agents::TeamMode {
+    team_mode_from(|k| std::env::var(k).ok())
+}
+
+fn team_mode_from(lookup: impl Fn(&str) -> Option<String>) -> crab_agents::TeamMode {
+    match lookup("CRAB_TEAM_MODE").as_deref().map(str::trim) {
+        Some("peer-to-peer" | "peer_to_peer" | "p2p" | "swarm") => {
+            crab_agents::TeamMode::PeerToPeer
+        }
+        Some(other) if !other.is_empty() && other != "leader-worker" => {
+            tracing::warn!(
+                value = other,
+                "unrecognised CRAB_TEAM_MODE; falling back to leader-worker"
+            );
+            crab_agents::TeamMode::LeaderWorker
+        }
+        _ => crab_agents::TeamMode::LeaderWorker,
+    }
+}
+
 /// How to launch when no positional prompt and no `-p` were given.
 ///
 /// The interactive TUI may only run when both stdout and stdin are real
@@ -423,6 +447,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
 
     // Coordinator Mode gate (env only; Teams infra is unconditional).
     let coordinator_mode = coordinator_mode_enabled();
+    let team_mode = team_mode_from_env();
 
     let session_config = SessionConfig {
         session_id,
@@ -458,6 +483,7 @@ pub async fn run(cli: &Cli, resume_session_id: Option<String>) -> anyhow::Result
         beta_headers: cli.betas.clone(),
         ide_connect: cli.ide,
         coordinator_mode,
+        team_mode,
         default_shell: settings.default_shell_kind().as_str().to_string(),
     };
 
@@ -763,6 +789,41 @@ mod tests {
     #[test]
     fn coordinator_gate_off_when_env_unset() {
         assert!(!coordinator_mode_from(|_| None));
+    }
+
+    #[test]
+    fn team_mode_defaults_to_leader_worker() {
+        use crab_agents::TeamMode;
+        assert_eq!(team_mode_from(|_| None), TeamMode::LeaderWorker);
+        assert_eq!(
+            team_mode_from(|k| (k == "CRAB_TEAM_MODE").then(String::new)),
+            TeamMode::LeaderWorker
+        );
+        assert_eq!(
+            team_mode_from(|k| (k == "CRAB_TEAM_MODE").then(|| "leader-worker".into())),
+            TeamMode::LeaderWorker
+        );
+    }
+
+    #[test]
+    fn team_mode_recognises_the_swarm_spellings() {
+        use crab_agents::TeamMode;
+        for v in ["peer-to-peer", "peer_to_peer", "p2p", "swarm", "  swarm  "] {
+            assert_eq!(
+                team_mode_from(|k| (k == "CRAB_TEAM_MODE").then(|| v.into())),
+                TeamMode::PeerToPeer,
+                "{v} should select peer-to-peer"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_team_mode_falls_back_rather_than_failing() {
+        use crab_agents::TeamMode;
+        assert_eq!(
+            team_mode_from(|k| (k == "CRAB_TEAM_MODE").then(|| "nonsense".into())),
+            TeamMode::LeaderWorker
+        );
     }
 
     #[test]

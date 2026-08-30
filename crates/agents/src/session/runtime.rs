@@ -75,6 +75,7 @@ impl AgentSession {
         // Snapshot the coordinator_mode flag before any partial-move of
         // session_config below. `bool: Copy`, so this is cheap.
         let coordinator_mode = session_config.coordinator_mode;
+        let team_mode = session_config.team_mode;
 
         // Register StructuredOutput tool when --json-schema is provided
         if let Some(ref schema_arg) = session_config.json_schema {
@@ -261,7 +262,7 @@ impl AgentSession {
         // Teammates ask through the session's handler so one answer covers the
         // whole team; a session with no handler has no user to ask.
         let permission = executor.permission_handler();
-        let team_runner = crate::teams::TeamRunner::with_runner(permission, move |handles| {
+        let mut team_runner = crate::teams::TeamRunner::with_runner(permission, move |handles| {
             crate::teams::spawn::teammate_runner(
                 runner_backend,
                 runner_registry,
@@ -271,6 +272,7 @@ impl AgentSession {
                 handles,
             )
         });
+        team_runner.set_mode(team_mode);
 
         Self {
             conversation,
@@ -422,7 +424,7 @@ impl AgentSession {
         };
         let markers = crate::teams::spawn::scan_team_markers(&self.conversation, starting_len);
         let folded = if markers.is_empty() {
-            self.team_runner.drain_results()
+            self.team_runner.drain_results().await
         } else {
             self.team_runner.process_turn(&markers, &base_prompt).await
         };
@@ -595,6 +597,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            team_mode: crab_team::TeamMode::LeaderWorker,
             default_shell: "bash".into(),
         }
     }

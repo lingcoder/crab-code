@@ -133,6 +133,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode,
+            team_mode: crab_team::TeamMode::LeaderWorker,
             default_shell: "bash".into(),
         }
     }

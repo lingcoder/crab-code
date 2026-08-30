@@ -25,14 +25,17 @@ use crab_tools::executor::PermissionHandler;
 use tokio::sync::mpsc;
 
 use super::spawn::{
-    MESSAGE_SENT_ACTION, SPAWN_AGENT_ACTION, TeamHandles, agent_result_message, marker_name,
-    teammate_config_from_marker,
+    MESSAGE_SENT_ACTION, SPAWN_AGENT_ACTION, TeamHandles, TeammateMarker, agent_result_message,
+    marker_name, teammate_config_from_marker,
 };
 use super::worker::{WorkerResult, fire_task_hook};
 use crate::coordinator::PermissionSyncManager;
 
 /// How many results may queue up before a teammate's send blocks.
 const RESULT_CHANNEL_CAPACITY: usize = 64;
+
+/// How many teammate-emitted markers may queue up before a teammate blocks.
+const MARKER_CHANNEL_CAPACITY: usize = 64;
 
 /// Owns the session's implicit team of teammates and drives them.
 pub struct TeamRunner {
@@ -43,6 +46,10 @@ pub struct TeamRunner {
     hook_executor: Option<Arc<crab_hooks::HookExecutor>>,
     results_tx: mpsc::Sender<WorkerResult>,
     results_rx: mpsc::Receiver<WorkerResult>,
+    /// Team markers teammates emitted from inside their own turns — the return
+    /// path that lets a teammate's `SendMessage` reach the router.
+    markers_tx: mpsc::Sender<TeammateMarker>,
+    markers_rx: mpsc::Receiver<TeammateMarker>,
     /// Results from resident teammates that arrived outside a turn, waiting to
     /// be folded into the parent conversation.
     pending: Vec<WorkerResult>,
@@ -60,6 +67,7 @@ impl TeamRunner {
     #[must_use]
     pub fn new() -> Self {
         let (results_tx, results_rx) = mpsc::channel(RESULT_CHANNEL_CAPACITY);
+        let (markers_tx, markers_rx) = mpsc::channel(MARKER_CHANNEL_CAPACITY);
         Self {
             backend: InProcessBackend::new(),
             permission_sync: Arc::new(PermissionSyncManager::new(32)),
@@ -68,6 +76,8 @@ impl TeamRunner {
             hook_executor: None,
             results_tx,
             results_rx,
+            markers_tx,
+            markers_rx,
             pending: Vec::new(),
         }
     }
@@ -105,6 +115,7 @@ impl TeamRunner {
     fn handles(&self, permission: Option<Arc<dyn PermissionHandler>>) -> TeamHandles {
         TeamHandles {
             results_tx: self.results_tx.clone(),
+            markers_tx: self.markers_tx.clone(),
             permission,
             permission_sync: Arc::clone(&self.permission_sync),
         }
@@ -175,26 +186,83 @@ impl TeamRunner {
                         awaiting.insert(id);
                     }
                 }
-                Some(MESSAGE_SENT_ACTION) => self.route_message(marker).await,
+                Some(MESSAGE_SENT_ACTION) => self.route_message(MAIN_AGENT, marker).await,
                 _ => {}
             }
         }
 
+        let mut folded = self.drain_teammate_markers().await;
         let mut results = std::mem::take(&mut self.pending);
         results.extend(self.await_results(awaiting).await);
-        results.iter().map(agent_result_message).collect()
+        // Awaiting an ephemeral teammate can surface markers it emitted while
+        // the turn was still running, so drain once more before returning.
+        folded.extend(self.drain_teammate_markers().await);
+        folded.extend(results.iter().map(agent_result_message));
+        folded
     }
 
-    /// Drain results that resident teammates finished since the last call.
-    pub fn drain_results(&mut self) -> Vec<crab_core::message::Message> {
+    /// Drain what teammates produced since the last call: finished results,
+    /// markers they emitted from their own turns, and anything they addressed
+    /// to the main agent.
+    pub async fn drain_results(&mut self) -> Vec<crab_core::message::Message> {
         while let Ok(result) = self.results_rx.try_recv() {
             self.finish_result(&result);
             self.pending.push(result);
         }
-        std::mem::take(&mut self.pending)
-            .iter()
-            .map(agent_result_message)
-            .collect()
+        let mut folded = self.drain_teammate_markers().await;
+        folded.extend(
+            std::mem::take(&mut self.pending)
+                .iter()
+                .map(agent_result_message),
+        );
+        folded
+    }
+
+    /// Act on every marker teammates emitted since the last call, and fold
+    /// anything they addressed to the main agent into the conversation.
+    ///
+    /// A teammate may message peers (subject to the team's mode) but may not
+    /// spawn: `Agent` is stripped from its registry, so a spawn marker here
+    /// means something bypassed that and is worth a warning rather than a
+    /// silent unbounded recursion.
+    async fn drain_teammate_markers(&mut self) -> Vec<crab_core::message::Message> {
+        let mut pending = Vec::new();
+        while let Ok(entry) = self.markers_rx.try_recv() {
+            pending.push(entry);
+        }
+        for TeammateMarker { from, marker } in pending {
+            match marker.get("action").and_then(Value::as_str) {
+                Some(MESSAGE_SENT_ACTION) => self.route_message(&from, &marker).await,
+                Some(SPAWN_AGENT_ACTION) => {
+                    tracing::warn!(
+                        teammate = %from,
+                        "ignoring a spawn request from a teammate; teammates may not spawn teammates"
+                    );
+                }
+                _ => {}
+            }
+        }
+        self.drain_main_inbox()
+    }
+
+    /// Take everything teammates addressed to the main agent and render it as
+    /// conversation messages.
+    fn drain_main_inbox(&mut self) -> Vec<crab_core::message::Message> {
+        let mut messages = Vec::new();
+        while let Some(envelope) = self.backend.try_recv_for_main() {
+            let AgentMessage::AssignTask { prompt, .. } = envelope.payload else {
+                continue;
+            };
+            let name = self
+                .backend
+                .team()
+                .by_id(&envelope.from)
+                .map_or_else(|| envelope.from.clone(), |t| t.name.clone());
+            messages.push(crab_core::message::Message::user(format!(
+                "<teammate-message from=\"{name}\">\n{prompt}\n</teammate-message>"
+            )));
+        }
+        messages
     }
 
     /// Await every ephemeral teammate in `awaiting`, buffering any resident
@@ -375,14 +443,17 @@ impl TeamRunner {
     /// decides who may reach whom: in `LeaderWorker` the main agent talks to
     /// anyone and workers only answer the leader; in `PeerToPeer` anyone may
     /// address anyone.
-    async fn route_message(&self, marker: &Value) {
+    ///
+    /// `from` is the sender's roster id — [`MAIN_AGENT`] for the main agent's
+    /// own markers, or a teammate's id for one it emitted itself.
+    async fn route_message(&self, from: &str, marker: &Value) {
         let Some(message) = marker.get("message").and_then(Value::as_str) else {
             return;
         };
         let to = marker.get("to").and_then(Value::as_str).unwrap_or_default();
 
         if to == "*" {
-            let envelope = Envelope::broadcast(MAIN_AGENT, assign(message));
+            let envelope = Envelope::broadcast(from, assign(message));
             match self.backend.route(&envelope).await {
                 Ok(0) => tracing::warn!("broadcast reached no teammate"),
                 Ok(_) => {}
@@ -400,7 +471,10 @@ impl TeamRunner {
             return;
         }
         for id in targets {
-            let envelope = Envelope::new(MAIN_AGENT, &id, assign(message));
+            if id == from {
+                continue;
+            }
+            let envelope = Envelope::new(from, &id, assign(message));
             match self.backend.route(&envelope).await {
                 Ok(0) => {
                     tracing::warn!(teammate = %id, "message routed to a teammate with no mailbox");
@@ -564,16 +638,25 @@ mod tests {
         // Passive teammates drain their mailbox; the assertion here is that
         // routing resolves a target and tolerates misses and empty bodies.
         runner
-            .route_message(&serde_json::json!({"to": "alice", "message": "hi"}))
+            .route_message(
+                MAIN_AGENT,
+                &serde_json::json!({"to": "alice", "message": "hi"}),
+            )
             .await;
         runner
-            .route_message(&serde_json::json!({"to": "nobody", "message": "hi"}))
+            .route_message(
+                MAIN_AGENT,
+                &serde_json::json!({"to": "nobody", "message": "hi"}),
+            )
             .await;
         runner
-            .route_message(&serde_json::json!({"to": "*", "message": "all hands"}))
+            .route_message(
+                MAIN_AGENT,
+                &serde_json::json!({"to": "*", "message": "all hands"}),
+            )
             .await;
         runner
-            .route_message(&serde_json::json!({"to": "alice"}))
+            .route_message(MAIN_AGENT, &serde_json::json!({"to": "alice"}))
             .await;
 
         runner.shutdown_all().await;
@@ -770,12 +853,12 @@ mod tests {
             .await
             .unwrap();
 
-        let folded = runner.drain_results();
+        let folded = runner.drain_results().await;
         assert_eq!(folded.len(), 1);
         assert!(folded[0].text().contains("finished the review"));
         assert!(folded[0].text().contains("name=\"alice\""));
         // Draining twice does not repeat the result.
-        assert!(runner.drain_results().is_empty());
+        assert!(runner.drain_results().await.is_empty());
 
         runner.shutdown_all().await;
     }
@@ -807,6 +890,152 @@ mod tests {
         // Nothing is awaited for a resident spawn, so the turn returns at once.
         assert!(folded.is_empty());
         assert_eq!(runner.teammate_count(), 1);
+        runner.shutdown_all().await;
+    }
+
+    // ─── Teammate-emitted markers ───
+
+    #[tokio::test]
+    async fn a_teammate_message_to_the_main_agent_is_folded_in() {
+        let mut runner = TeamRunner::new();
+        let alice = runner
+            .spawn_from_marker(&spawn_marker("t", Some("alice")), "BASE")
+            .await
+            .unwrap();
+
+        runner
+            .markers_tx
+            .send(TeammateMarker {
+                from: alice,
+                marker: serde_json::json!({
+                    "action": "message_sent",
+                    "to": MAIN_AGENT,
+                    "message": "found the bug in auth.rs",
+                }),
+            })
+            .await
+            .unwrap();
+
+        let folded = runner.drain_results().await;
+        assert_eq!(folded.len(), 1);
+        let text = folded[0].text();
+        assert!(text.contains("found the bug in auth.rs"), "{text}");
+        assert!(text.contains("from=\"alice\""), "{text}");
+
+        runner.shutdown_all().await;
+    }
+
+    #[tokio::test]
+    async fn leader_worker_mode_drops_a_teammate_message_to_a_peer() {
+        let mut runner = TeamRunner::new();
+        let alice = runner
+            .spawn_from_marker(&spawn_marker("t", Some("alice")), "BASE")
+            .await
+            .unwrap();
+        runner
+            .spawn_from_marker(&spawn_marker("t", Some("bob")), "BASE")
+            .await
+            .unwrap();
+
+        runner
+            .markers_tx
+            .send(TeammateMarker {
+                from: alice,
+                marker: serde_json::json!({
+                    "action": "message_sent",
+                    "to": "bob",
+                    "message": "psst",
+                }),
+            })
+            .await
+            .unwrap();
+
+        // The default mode routes teammates to the leader only, so nothing
+        // reaches bob and nothing lands in the main agent's inbox either.
+        assert!(runner.drain_results().await.is_empty());
+
+        runner.shutdown_all().await;
+    }
+
+    #[tokio::test]
+    async fn peer_to_peer_mode_lets_a_teammate_reach_a_peer() {
+        let mut runner = TeamRunner::new();
+        runner.set_mode(TeamMode::PeerToPeer);
+        let alice = runner
+            .spawn_from_marker(&spawn_marker("t", Some("alice")), "BASE")
+            .await
+            .unwrap();
+        let bob = runner.backend.team().ids_named("bob").first().cloned();
+        assert!(bob.is_none(), "bob is not on the roster yet");
+        runner
+            .spawn_from_marker(&spawn_marker("t", Some("bob")), "BASE")
+            .await
+            .unwrap();
+
+        runner
+            .markers_tx
+            .send(TeammateMarker {
+                from: alice.clone(),
+                marker: serde_json::json!({
+                    "action": "message_sent",
+                    "to": "bob",
+                    "message": "psst",
+                }),
+            })
+            .await
+            .unwrap();
+
+        // Delivered to bob, so nothing is folded into the parent conversation.
+        assert!(runner.drain_results().await.is_empty());
+
+        runner.shutdown_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_spawn_marker_from_a_teammate_is_refused() {
+        let mut runner = TeamRunner::new();
+        let alice = runner
+            .spawn_from_marker(&spawn_marker("t", Some("alice")), "BASE")
+            .await
+            .unwrap();
+        assert_eq!(runner.teammate_count(), 1);
+
+        runner
+            .markers_tx
+            .send(TeammateMarker {
+                from: alice,
+                marker: spawn_marker("nested work", Some("carol")),
+            })
+            .await
+            .unwrap();
+
+        assert!(runner.drain_results().await.is_empty());
+        assert_eq!(
+            runner.teammate_count(),
+            1,
+            "a teammate must not be able to spawn another"
+        );
+
+        runner.shutdown_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_teammate_does_not_message_itself_on_broadcast_by_name() {
+        let mut runner = TeamRunner::new();
+        let alice = runner
+            .spawn_from_marker(&spawn_marker("t", Some("alice")), "BASE")
+            .await
+            .unwrap();
+
+        // Addressing its own name is a no-op rather than a self-send loop.
+        runner
+            .route_message(
+                &alice,
+                &serde_json::json!({"to": "alice", "message": "hello me"}),
+            )
+            .await;
+        assert!(runner.drain_results().await.is_empty());
+
         runner.shutdown_all().await;
     }
 

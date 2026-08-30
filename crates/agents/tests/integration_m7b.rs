@@ -75,6 +75,7 @@ fn test_session_config() -> SessionConfig {
         beta_headers: Vec::new(),
         ide_connect: false,
         coordinator_mode: false,
+        team_mode: crab_team::TeamMode::LeaderWorker,
         default_shell: "bash".into(),
     }
 }

@@ -1,0 +1,205 @@
+def patch(path, edits):
+    s = open(path, encoding='utf-8').read()
+    for old, new in edits:
+        assert old in s, f'{path}: {old[:100]!r}'
+        s = s.replace(old, new, 1)
+    open(path, 'w', encoding='utf-8').write(s)
+
+
+patch('crates/agents/src/teams/spawn.rs', [
+    # ── TeamHandles gains the marker channel; document the loop ──
+    ("""/// Everything the team runner shares with each teammate it spawns.
+#[derive(Clone)]
+pub struct TeamHandles {
+    /// Where a teammate publishes the result of each completed task.
+    pub results_tx: mpsc::Sender<WorkerResult>,
+    /// The session's permission handler, or `None` for a non-interactive
+    /// session with no user to ask.
+    pub permission: Option<Arc<dyn PermissionHandler>>,
+    /// Coalesces concurrent permission requests across the team.
+    pub permission_sync: Arc<PermissionSyncManager>,
+}""",
+     """/// A team marker a teammate emitted during its own turn.
+///
+/// Teammates run in spawned tasks and cannot reach the [`TeamRunner`], so the
+/// markers their tools produce travel back over a channel the same way results
+/// do. Without this a teammate's `SendMessage` would land in its own
+/// conversation and be read by nobody.
+///
+/// [`TeamRunner`]: super::TeamRunner
+#[derive(Debug, Clone)]
+pub struct TeammateMarker {
+    /// The id of the teammate that emitted it — the `from` the routing rules
+    /// reason about.
+    pub from: String,
+    /// The parsed marker payload.
+    pub marker: serde_json::Value,
+}
+
+/// Everything the team runner shares with each teammate it spawns.
+#[derive(Clone)]
+pub struct TeamHandles {
+    /// Where a teammate publishes the result of each completed task.
+    pub results_tx: mpsc::Sender<WorkerResult>,
+    /// Where a teammate publishes the team markers its own tools emitted.
+    pub markers_tx: mpsc::Sender<TeammateMarker>,
+    /// The session's permission handler, or `None` for a non-interactive
+    /// session with no user to ask.
+    pub permission: Option<Arc<dyn PermissionHandler>>,
+    /// Coalesces concurrent permission requests across the team.
+    pub permission_sync: Arc<PermissionSyncManager>,
+}"""),
+
+    # ── capabilities from the spawn marker ──
+    ("""    if let Some(wd) = marker.get("working_dir").and_then(serde_json::Value::as_str) {
+        config = config.with_working_dir(std::path::PathBuf::from(wd));
+    }
+    Some(config)""",
+     """    if let Some(wd) = marker.get("working_dir").and_then(serde_json::Value::as_str) {
+        config = config.with_working_dir(std::path::PathBuf::from(wd));
+    }
+    for cap in marker
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
+        config = config.with_capability(Capability::new(cap));
+    }
+    Some(config)"""),
+
+    ("use crab_team::roster::Lifetime;",
+     "use crab_team::roster::{Capability, Lifetime};"),
+
+    # ── the runner: scan each turn's own output and report it back ──
+    ("""/// Build the runner that drives every spawned teammate, regardless of
+/// lifetime.
+///
+/// Ephemeral teammates take their seed task, run once, publish a
+/// [`WorkerResult`] on `results_tx`, and exit. Resident teammates keep their
+/// conversation and loop, running one turn per inbound message until
+/// cancelled — so `SendMessage` genuinely continues an agent rather than
+/// restarting it.""",
+     """/// Build the runner that drives every spawned teammate, regardless of
+/// lifetime.
+///
+/// Ephemeral teammates take their seed task, run once, publish a
+/// [`WorkerResult`], and exit. Resident teammates keep their conversation and
+/// loop, running one turn per inbound message until cancelled — so
+/// `SendMessage` genuinely continues an agent rather than restarting it.
+///
+/// Either way the teammate's own conversation is scanned after each turn and
+/// any team markers it produced are sent back, so a teammate's `SendMessage`
+/// reaches the router instead of dying in a conversation nobody reads."""),
+
+    ("""        let results_tx = handles.results_tx.clone();
+        let permission = handles.permission.clone();""",
+     """        let results_tx = handles.results_tx.clone();
+        let markers_tx = handles.markers_tx.clone();
+        let permission = handles.permission.clone();"""),
+
+    ("""            if config.lifetime.is_ephemeral() {
+                // The seed task was delivered at spawn time; take it and run.
+                let Some(task) = recv_or_cancel(&mut rx, &cancel).await else {
+                    return;
+                };
+                let result = worker.run_once(task).await;
+                let _ = results_tx.send(result).await;
+                return;
+            }
+
+            // Resident: one conversation, one turn per inbound message.
+            let mut conversation = worker.new_conversation();
+            while let Some(task) = recv_or_cancel(&mut rx, &cancel).await {
+                let result = worker.run_turn(&mut conversation, task).await;
+                let _ = results_tx.send(result).await;
+            }""",
+     """            // Both lifetimes run turns against a conversation the runner
+            // owns, so the post-turn marker scan is the same either way.
+            let mut conversation = worker.new_conversation();
+            let ephemeral = config.lifetime.is_ephemeral();
+
+            while let Some(task) = recv_or_cancel(&mut rx, &cancel).await {
+                let turn_start = conversation.messages().len();
+                let result = worker.run_turn(&mut conversation, task).await;
+
+                for marker in scan_team_markers(&conversation, turn_start) {
+                    let sent = markers_tx
+                        .send(TeammateMarker {
+                            from: id.clone(),
+                            marker,
+                        })
+                        .await;
+                    if sent.is_err() {
+                        break;
+                    }
+                }
+                let _ = results_tx.send(result).await;
+
+                if ephemeral {
+                    // One task, then the teammate is done.
+                    return;
+                }
+            }"""),
+
+    # ── teammates may not spawn teammates ──
+    ("""    let registry = match agent_definition(&config.role) {
+        Some(def) => Arc::new(build_def_registry(base_registry, &def)),
+        None => Arc::clone(base_registry),
+    };""",
+     """    let mut registry = match agent_definition(&config.role) {
+        Some(def) => build_def_registry(base_registry, &def),
+        None => clone_registry(base_registry),
+    };
+    // A teammate that could spawn teammates could do so without bound, and
+    // nothing in the roster or the job registry caps the depth. Delegation
+    // stays with the main agent.
+    registry.remove_names(TEAMMATE_DENIED_TOOLS);
+    let registry = Arc::new(registry);"""),
+
+    ("""/// Look up a built-in agent definition by `subagent_type`.""",
+     """/// Tools no spawned teammate may use, whatever its agent definition allows.
+///
+/// `Agent` is denied because a teammate spawning teammates recurses without a
+/// depth bound. Peer messaging is *not* denied here: `Team::can_communicate`
+/// already decides who may talk to whom, and Coordinator Mode removes
+/// `SendMessage` from its workers separately.
+pub(crate) const TEAMMATE_DENIED_TOOLS: &[&str] = &[crab_tools::builtin::agent::AGENT_TOOL_NAME];
+
+/// Copy a registry so the caller can filter it without touching the parent's.
+fn clone_registry(parent: &ToolRegistry) -> ToolRegistry {
+    let mut reg = ToolRegistry::new();
+    for name in parent.tool_names() {
+        if let Some(tool) = parent.get(name) {
+            reg.register(Arc::clone(tool));
+        }
+    }
+    reg
+}
+
+/// Look up a built-in agent definition by `subagent_type`."""),
+])
+
+# ── worker.rs: run_once folded into the runner ──
+patch('crates/agents/src/teams/worker.rs', [
+    ("""    /// Run a single task on a fresh conversation — the ephemeral path.
+    pub async fn run_once(&self, task_prompt: String) -> WorkerResult {
+        let mut conversation = self.new_conversation();
+        self.run_turn(&mut conversation, task_prompt).await
+    }
+
+""", ""),
+    ("""/// One worker serves both lifetimes: [`AgentWorker::run_turn`] takes `&self`
+/// and an existing conversation, so a resident teammate reuses it across
+/// messages and keeps its context, while an ephemeral teammate calls it once
+/// on a fresh conversation via [`AgentWorker::run_once`].""",
+     """/// One worker serves both lifetimes: [`AgentWorker::run_turn`] takes `&self`
+/// and an existing conversation, so a resident teammate reuses it across
+/// messages and keeps its context while an ephemeral one runs a single turn.
+/// The caller owns the conversation either way, which is what lets it scan the
+/// teammate's own output for team markers after each turn."""),
+])
+print('ok')

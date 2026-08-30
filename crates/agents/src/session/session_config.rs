@@ -66,6 +66,13 @@ pub struct SessionConfig {
     /// `Mailbox` are unconditional base infrastructure and do not need a flag.
     pub coordinator_mode: bool,
 
+    /// Collaboration mode for the session's implicit team.
+    ///
+    /// `LeaderWorker` (the default) keeps teammates answering the main agent
+    /// only; `PeerToPeer` lets them address each other, which is crab's L2a
+    /// Swarm topology. Read from `CRAB_TEAM_MODE`.
+    pub team_mode: crab_team::TeamMode,
+
     /// Which shell tool the TUI's `!` prefix should target. `"bash"` or
     /// `"powershell"`. Resolved from `Config::default_shell` /
     /// `CRAB_DEFAULT_SHELL` and surfaced here so the TUI doesn't have to
@@ -109,6 +116,7 @@ mod tests {
             beta_headers: Vec::new(),
             ide_connect: false,
             coordinator_mode: false,
+            team_mode: crab_team::TeamMode::LeaderWorker,
             default_shell: "bash".into(),
         };
         assert_eq!(config.session_id, "sess_1");
