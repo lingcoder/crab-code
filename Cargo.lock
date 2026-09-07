@@ -1541,9 +1541,9 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "croner"
-version = "3.0.1"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aa42bcd3d846ebf66e15bd528d1087f75d1c6c1c66ebff626178a106353c576"
+checksum = "a59ed87528b2ee2b6d2b14d6767f6dbe41867dfc581433fc23a7c0fae847467a"
 dependencies = [
  "chrono",
  "derive_builder",
