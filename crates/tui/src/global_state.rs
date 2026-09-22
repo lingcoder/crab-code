@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn needs_trust_agents_md_only() {
-        let dir = temp_dir("crab-md");
+        let dir = temp_dir("agents-md");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("AGENTS.md"), "# Instructions").unwrap();
         let state = GlobalState::default();

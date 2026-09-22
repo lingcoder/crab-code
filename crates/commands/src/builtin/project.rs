@@ -10,7 +10,7 @@ impl SlashCommand for InitCommand {
         "init"
     }
     fn description(&self) -> &'static str {
-        "Generate a AGENTS.md template in current directory"
+        "Generate an AGENTS.md template in current directory"
     }
     fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
         CommandResult::Effect(CommandEffect::Init)

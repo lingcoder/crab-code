@@ -16,14 +16,14 @@ use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSetBuilder};
 
-/// Parsed content from a AGENTS.md project instruction file.
+/// Parsed content from an AGENTS.md project instruction file.
 #[derive(Debug, Clone)]
 pub struct AgentsMd {
     pub content: String,
     pub source: AgentsMdSource,
 }
 
-/// Where a AGENTS.md file was loaded from.
+/// Where an AGENTS.md file was loaded from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentsMdSource {
     Global,
@@ -801,7 +801,7 @@ mod tests {
     fn rules_dir_appended_after_agents_md() {
         let dir = tempfile::tempdir().unwrap();
         let (_gd, global) = fake_global_dir();
-        fs::write(dir.path().join("AGENTS.md"), "Top-level CRAB").unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Top-level AGENTS").unwrap();
         let rules = dir.path().join(".crab").join("rules");
         fs::create_dir_all(&rules).unwrap();
         fs::write(rules.join("a.md"), "A rule").unwrap();
@@ -812,7 +812,7 @@ mod tests {
             .filter(|md| md.source == AgentsMdSource::Project)
             .collect();
         assert_eq!(project_mds.len(), 2);
-        assert!(project_mds[0].content.contains("Top-level CRAB"));
+        assert!(project_mds[0].content.contains("Top-level AGENTS"));
         assert!(project_mds[1].content.contains("A rule"));
     }
 

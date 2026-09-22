@@ -30,7 +30,7 @@ pub struct TrustContext {
     pub env_vars: Vec<String>,
     /// Whether a project-level `config.toml` file exists.
     pub has_settings: bool,
-    /// Whether a `AGENTS.md` instruction file exists.
+    /// Whether an `AGENTS.md` instruction file exists.
     pub has_agents_md: bool,
 }
 

@@ -92,7 +92,7 @@ impl HistoryCell for WelcomeCell {
         }
         if self.show_project_hint {
             out.push(Line::from(Span::styled(
-                "Found CLAUDE.md",
+                "No AGENTS.md yet \u{00b7} run /init to create one",
                 Style::default().fg(Color::DarkGray),
             )));
         }
@@ -172,7 +172,7 @@ mod tests {
         // 5 art rows + 1 title + 1 hint + 1 blank
         assert_eq!(lines.len(), 8);
         let text = flatten(&lines);
-        assert!(text.contains("Found CLAUDE.md"));
+        assert!(text.contains("No AGENTS.md yet"));
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
         let text = flatten(&lines);
         assert!(text.contains("Crab Code v0.1.0"));
         assert!(text.contains("release notes"));
-        assert!(text.contains("Found CLAUDE.md"));
+        assert!(text.contains("No AGENTS.md yet"));
     }
 
     #[test]

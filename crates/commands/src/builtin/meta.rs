@@ -86,7 +86,7 @@ impl SlashCommand for SkillsCommand {
     }
     fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
         CommandResult::Message(
-            "Skills:\n  No skills loaded.\n  Use /init to create a AGENTS.md with skill definitions."
+            "Skills:\n  No skills loaded.\n  Use /init to create an AGENTS.md with skill definitions."
                 .into(),
         )
     }
