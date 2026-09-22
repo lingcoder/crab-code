@@ -13,7 +13,7 @@ use crate::protocol::{
 };
 use crate::transport::Transport;
 
-type RmcpClientService = RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>;
+type RmcpClientService = RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>;
 
 enum ClientBackend {
     Legacy(Box<dyn Transport>),
@@ -125,7 +125,7 @@ impl McpClient {
             crab_core::Error::Other(format!("failed to spawn MCP child process: {e}"))
         })?;
 
-        let service = rmcp::serve_client(rmcp::model::ClientInfo::default(), transport)
+        let service = rmcp::serve_client(rmcp::model::ClientConfig::default(), transport)
             .await
             .map_err(map_rmcp_error)?;
 
@@ -135,7 +135,7 @@ impl McpClient {
     /// Connect to a remote MCP HTTP endpoint via the official `rmcp` SDK.
     pub async fn connect_streamable_http(url: &str, server_name: &str) -> crab_core::Result<Self> {
         let transport = StreamableHttpClientTransport::from_uri(url.to_string());
-        let service = rmcp::serve_client(rmcp::model::ClientInfo::default(), transport)
+        let service = rmcp::serve_client(rmcp::model::ClientConfig::default(), transport)
             .await
             .map_err(map_rmcp_error)?;
 

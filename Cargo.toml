@@ -113,7 +113,7 @@ unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
 textwrap = "0.16"
 url = "2"
-jsonschema = "0.51"
+jsonschema = "0.57"
 toml_edit = "0.25"
 schemars = "1"
 nucleo-matcher = "0.3"
@@ -134,7 +134,7 @@ urlencoding = "2"
 infer = "0.22"
 shellexpand = "3"
 axum = { version = "0.8", features = ["ws"] }
-croner = "3"
+croner = "4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # Linux-only process sandbox
 landlock = "0.4"
