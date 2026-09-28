@@ -85,7 +85,7 @@ tokio-tungstenite = "0.30"
 rmcp = { version = "3", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
-wasmtime = "48"
+wasmtime = "49"
 
 # ─── Process ───
 portable-pty = "0.9"
