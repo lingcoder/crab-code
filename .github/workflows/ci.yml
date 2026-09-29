@@ -28,7 +28,7 @@ jobs:
           # Pin a floor toolchain to keep CI reproducible across Rust
           # releases — new clippy lints in stable don't break builds until
           # this is bumped intentionally.
-          toolchain: "1.97"
+          toolchain: "1.98"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -58,7 +58,7 @@ jobs:
         with:
           # Pin to match the check job — shared cache keys require identical
           # toolchain versions to avoid incompatible artifacts.
-          toolchain: "1.96"
+          toolchain: "1.98"
       - uses: Swatinem/rust-cache@v2
         with:
           # Ubuntu shares the check job's cache (same shared-key); win/mac

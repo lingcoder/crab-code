@@ -3628,7 +3628,6 @@ members = ["crates/*", "xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.96"
 license = "MIT"
 repository = "https://github.com/lingcoder/crab-code"
 description = "Rust-native agentic coding CLI — open-source alternative to Claude Code"
@@ -3661,8 +3660,8 @@ opt-level = 3
 
 ```toml
 [toolchain]
-channel = "1.95"
-components = ["rustfmt", "clippy", "rust-analyzer"]
+channel = "1.98"
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
 ```
 
 ### 9.3 rustfmt.toml

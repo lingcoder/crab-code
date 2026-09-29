@@ -35,7 +35,7 @@ impl StdioTransport {
     ///
     /// The `command` is the executable and `args` are its arguments.
     /// Environment variables can be passed via `env`.
-    pub async fn spawn(
+    pub fn spawn(
         command: &str,
         args: &[String],
         env: Option<&HashMap<String, String>>,
@@ -292,9 +292,8 @@ mod tests {
             )
         };
 
-        let transport = StdioTransport::spawn(&command, &args, None)
-            .await
-            .expect("spawn short-lived server");
+        let transport =
+            StdioTransport::spawn(&command, &args, None).expect("spawn short-lived server");
 
         let req = JsonRpcRequest::new("initialize", None);
         // Bound the whole call so a regression (a real hang) fails the test

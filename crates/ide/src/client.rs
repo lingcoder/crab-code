@@ -76,7 +76,7 @@ impl IdeClient {
     /// Returns `Err` only for hard failures (bad home directory, etc.) —
     /// per-endpoint connect failures are logged and retried by the
     /// supervisor.
-    pub async fn try_connect() -> Result<Option<Self>, IdeClientError> {
+    pub fn try_connect() -> Result<Option<Self>, IdeClientError> {
         let endpoints = lockfile::discover()?;
         if endpoints.is_empty() {
             return Ok(None);
@@ -250,7 +250,7 @@ mod tests {
         // indirectly via discover()'s tolerance of missing dirs; the
         // surrounding CI env has no ~/.claude/ide populated.
         // This test documents the happy path for "no IDE running".
-        let result = IdeClient::try_connect().await;
+        let result = IdeClient::try_connect();
         // Either Ok(None) or Ok(Some(_)) if the dev machine has an IDE
         // lockfile in their home. We can't reliably assert None, but the
         // call must not error out.

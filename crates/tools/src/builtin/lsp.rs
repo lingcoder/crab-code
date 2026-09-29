@@ -84,7 +84,7 @@ struct LspClient {
 
 impl LspClient {
     /// Spawn a language server process and connect to it.
-    async fn spawn(command: &str, args: &[&str]) -> Result<Self> {
+    fn spawn(command: &str, args: &[&str]) -> Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
@@ -331,7 +331,7 @@ async fn get_or_spawn_client(file_path: &str) -> Result<(Arc<LspClient>, &'stati
     }
 
     // Slow path: spawn a new client.
-    let client = Arc::new(LspClient::spawn(spec.command, spec.args).await?);
+    let client = Arc::new(LspClient::spawn(spec.command, spec.args)?);
     client.initialize().await?;
 
     {
