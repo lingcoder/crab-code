@@ -127,7 +127,7 @@ aws-smithy-eventstream = "0.61"
 aws-smithy-types = "1"
 bytes = "1"
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
-agent-client-protocol = "2"
+agent-client-protocol = "3"
 async-trait = "0.1"
 webbrowser = "1"
 urlencoding = "2"
