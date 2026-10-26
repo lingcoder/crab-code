@@ -149,11 +149,11 @@
 | # | Function | TypeScript Original | Rust Alternative | Docs |
 |---|----------|---------------------|------------------|------|
 | 11 | JSON | Built-in JSON | serde + serde_json | [serde.rs](https://serde.rs) |
-| 12 | YAML | yaml | serde_yaml_ng | [docs.rs/serde_yaml_ng](https://docs.rs/serde_yaml_ng) |
+| 12 | YAML | yaml | serde-saphyr | [docs.rs/serde-saphyr](https://docs.rs/serde-saphyr) |
 | 13 | TOML | -- | toml | [docs.rs/toml](https://docs.rs/toml) |
 | 14 | Schema validation | Zod | schemars | [docs.rs/schemars](https://docs.rs/schemars) |
 
-> Note: `serde_yaml_ng` is the community successor to the archived `serde_yaml` (dtolnay). It is the correct modern choice.
+> Note: `serde-saphyr` is a pure safe-Rust YAML parser; `serde_yaml` and its forks depend on the unmaintained `unsafe-libyaml` (RUSTSEC-2024-0449).
 
 ### 3.4 File System / Search
 
@@ -2902,7 +2902,7 @@ src/
 └── ranker.rs           // LlmMemoryRanker — Sonnet sidequery (feature = "mem-ranker")
 ```
 
-**External Dependencies**: `crab-utils`, `crab-core`, `serde`, `serde_json`, `serde_yaml_ng`, `dunce`. Optional: `crab-api`, `tokio` (with `mem-ranker` feature)
+**External Dependencies**: `crab-utils`, `crab-core`, `serde`, `serde_json`, `serde-saphyr`, `dunce`. Optional: `crab-api`, `tokio` (with `mem-ranker` feature)
 
 **Feature Flags**
 
@@ -3660,7 +3660,7 @@ opt-level = 3
 
 ```toml
 [toolchain]
-channel = "1.98"
+channel = "1.99"
 components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
 ```
 

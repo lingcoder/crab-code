@@ -419,38 +419,8 @@ fn is_loopback(ip: &IpAddr) -> bool {
 /// Check if an IP address is in a private range.
 fn is_private(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            // 10.0.0.0/8
-            if octets[0] == 10 {
-                return true;
-            }
-            // 172.16.0.0/12
-            if octets[0] == 172 && (16..=31).contains(&octets[1]) {
-                return true;
-            }
-            // 192.168.0.0/16
-            if octets[0] == 192 && octets[1] == 168 {
-                return true;
-            }
-            // 169.254.0.0/16 (link-local)
-            if octets[0] == 169 && octets[1] == 254 {
-                return true;
-            }
-            false
-        }
-        IpAddr::V6(v6) => {
-            // fe80::/10 (link-local)
-            let segments = v6.segments();
-            if segments[0] & 0xffc0 == 0xfe80 {
-                return true;
-            }
-            // fc00::/7 (unique local)
-            if segments[0] & 0xfe00 == 0xfc00 {
-                return true;
-            }
-            false
-        }
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 

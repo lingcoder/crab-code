@@ -8,6 +8,7 @@
 use std::fmt;
 use std::io;
 use std::io::Write;
+use std::num::NonZeroU16;
 
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
@@ -25,7 +26,11 @@ impl VT100Backend {
     pub fn new(width: u16, height: u16) -> Self {
         crossterm::style::force_color_output(true);
         Self {
-            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
+            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(
+                NonZeroU16::new(height).expect("terminal height must be non-zero"),
+                NonZeroU16::new(width).expect("terminal width must be non-zero"),
+                0,
+            )),
         }
     }
 
@@ -90,12 +95,13 @@ impl Backend for VT100Backend {
 
     fn size(&self) -> io::Result<Size> {
         let (rows, cols) = self.vt100().screen().size();
-        Ok(Size::new(cols, rows))
+        Ok(Size::new(cols.get(), rows.get()))
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {
+        let (rows, cols) = self.vt100().screen().size();
         Ok(WindowSize {
-            columns_rows: self.vt100().screen().size().into(),
+            columns_rows: (rows.get(), cols.get()).into(),
             pixels: Size {
                 width: 640,
                 height: 480,

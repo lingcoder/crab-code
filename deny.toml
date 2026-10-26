@@ -10,6 +10,16 @@ ignore = [
     # Transitive via pdf_oxide -> crab-tools PDF extraction; single version,
     # the crate is abandoned so no upgrade clears the advisory.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained via pdf_oxide, no successor upgrade available" },
+    # crypto-bigint 0.5.5 timing sidechannel. Transitive via jsonwebtoken 11 →
+    # ecdsa → p256/p384. Latest jsonwebtoken 11.1.0 still uses old versions.
+    # Loopback-only usage (session-attach server); no network timing oracle.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint via jsonwebtoken, loopback-only usage, no upgrade available" },
+    # zbus ecosystem merged into zbus 6.0 (zvariant→wire, zbus_names→names).
+    # Transitive via keyring → secret-service → zbus 5.19.0. zbus 6 not yet
+    # released. Linux-only credential storage; no security impact from merge.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6 (unreleased), transitive via keyring" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6 (unreleased), transitive via keyring" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6 (unreleased), transitive via keyring" },
 ]
 
 [licenses]

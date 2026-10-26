@@ -21,7 +21,7 @@ futures = "0.3"
 # ─── Serialization ───
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10"
+serde-saphyr = "2"
 toml = "1.1.2"
 
 # ─── CLI ───
@@ -85,7 +85,7 @@ tokio-tungstenite = "0.30"
 rmcp = { version = "3", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # ─── WASM Plugin ───
-wasmtime = "49"
+wasmtime = "50"
 
 # ─── Process ───
 portable-pty = "0.9"
@@ -108,12 +108,12 @@ semver = "1"
 # ─── Misc ───
 uuid = { version = "1", features = ["v4"] }
 ulid = "3"
-lru = "0.18"
+lru = "0.19"
 unicode-width = "0.2"
 strip-ansi-escapes = "0.2"
 textwrap = "0.16"
 url = "2"
-jsonschema = "0.58"
+jsonschema = "0.60"
 toml_edit = "0.25"
 schemars = "1"
 nucleo-matcher = "0.3"
@@ -127,7 +127,7 @@ aws-smithy-eventstream = "0.61"
 aws-smithy-types = "1"
 bytes = "1"
 # Agent Client Protocol (Zed) — editor ↔ agent standard, official Rust SDK
-agent-client-protocol = "2"
+agent-client-protocol = "3"
 async-trait = "0.1"
 webbrowser = "1"
 urlencoding = "2"
@@ -152,7 +152,7 @@ enigo = "0.6"
 # ─── Testing ───
 tempfile = "3"
 wat = "1"
-vt100 = "0.16"
+vt100 = "0.18"
 
 # ─── Internal Crates ───
 crab-utils = { path = "crates/utils" }
@@ -214,6 +214,9 @@ if_same_then_else = "allow"
 # `from_hours(1)`. The lint (rust 1.95+) fires across retry/timeout
 # code with no functional benefit.
 duration_suboptimal_units = "allow"
+# Stylistic-only (rust 1.99+); `assert!(v.is_empty())` reads better than
+# `assert_eq!(v, "")` and the lint fires across test code.
+assert_is_empty = "allow"
 
 [profile.dev]
 opt-level = 0

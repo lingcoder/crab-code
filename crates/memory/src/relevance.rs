@@ -130,13 +130,15 @@ impl MemorySelector {
 
         // 3. Name-match bonus.
         let name_lower = entry.metadata.name.to_lowercase();
-        let name_bonus = if ctx_lower.contains(&name_lower) {
+        let name_bonus: f64 = if ctx_lower.contains(&name_lower) {
             0.2
         } else {
             0.0
         };
 
-        (type_bonus.mul_add(0.3, keyword_score * 0.6) + name_bonus * 0.1).min(1.0)
+        name_bonus
+            .mul_add(0.1, type_bonus.mul_add(0.3, keyword_score * 0.6))
+            .min(1.0)
     }
 }
 

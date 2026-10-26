@@ -16,7 +16,7 @@ crab-core.workspace = true
 globset.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
+serde-saphyr.workspace = true
 dunce.workspace = true
 # optional — only for mem-ranker feature
 crab-api = { workspace = true, optional = true }

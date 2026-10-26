@@ -268,7 +268,7 @@ pub fn parse_rule_frontmatter(content: &str) -> (String, Option<Vec<String>>) {
     };
 
     // Parse the YAML frontmatter
-    let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(frontmatter) {
+    let parsed: serde_json::Value = match serde_saphyr::from_str(frontmatter) {
         Ok(v) => v,
         Err(_) => return (content.to_string(), None),
     };
@@ -279,12 +279,12 @@ pub fn parse_rule_frontmatter(content: &str) -> (String, Option<Vec<String>>) {
 
     let patterns = match paths_value {
         // YAML list: paths:\n  - "src/**/*.rs"
-        serde_yaml_ng::Value::Sequence(seq) => seq
+        serde_json::Value::Array(seq) => seq
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect::<Vec<_>>(),
         // Single string or comma-separated: paths: "src/**/*.rs, tests/**/*.rs"
-        serde_yaml_ng::Value::String(s) => s.split(',').map(|p| p.trim().to_string()).collect(),
+        serde_json::Value::String(s) => s.split(',').map(|p| p.trim().to_string()).collect(),
         _ => return (body.to_string(), None),
     };
 
