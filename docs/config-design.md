@@ -406,8 +406,6 @@ Reasons for hand-written over auto-generated:
 ### 12.2 Load-Time Validation Pipeline
 
 ```rust
-use jsonschema::JSONSchema;
-
 const SCHEMA: &str = include_str!("../assets/config.schema.json");
 
 fn load_and_validate(path: &Path) -> Result<Config> {
@@ -419,8 +417,9 @@ fn load_and_validate(path: &Path) -> Result<Config> {
 
     // 3. Validate against schema; on failure, emit errors with JSON Pointer paths
     let schema: serde_json::Value = serde_json::from_str(SCHEMA)?;
-    let compiled = JSONSchema::compile(&schema)?;
-    if let Err(errors) = compiled.validate(&json) {
+    let validator = jsonschema::validator_for(&schema)?;
+    let errors: Vec<_> = validator.iter_errors(&json).collect();
+    if !errors.is_empty() {
         bail!(format_errors(errors, path));
     }
 

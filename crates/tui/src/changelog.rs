@@ -1,4 +1,4 @@
-//! Parser for `docs/CHANGELOG.md` → "What's new" bullets.
+//! Parser for `CHANGELOG.md` → "What's new" bullets.
 //!
 //! The full changelog is embedded at compile time via `include_str!` so the
 //! welcome cell can render release notes without any filesystem I/O at
@@ -25,7 +25,7 @@
 //! the top `max` items (typically 3–5 for the welcome cell).
 
 /// Full changelog embedded at compile time.
-const CHANGELOG: &str = include_str!("../../../docs/CHANGELOG.md");
+const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
 /// Maximum bullet length shown in the welcome panel.
 const MAX_BULLET_LEN: usize = 80;
