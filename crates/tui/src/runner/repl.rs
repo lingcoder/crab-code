@@ -46,7 +46,8 @@ pub(super) async fn run_loop(
 ) -> anyhow::Result<()> {
     // `state` starts as None (Initializing) and is populated by InitComplete.
     let mut state: Option<AgentRuntime> = None;
-    let slash_registry = CommandRegistry::new();
+    let mut slash_registry = CommandRegistry::new();
+    crab_commands::builtin::register_all(&mut slash_registry);
     app.set_slash_commands(builtin_slash_commands(&slash_registry));
     let mut init_rx = Some(init_rx);
 
