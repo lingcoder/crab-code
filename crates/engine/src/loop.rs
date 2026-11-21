@@ -215,6 +215,13 @@ pub async fn query_loop(
             return Ok(());
         }
 
+        if cost_tracker.budget_exhausted() {
+            return Err(crab_core::Error::Other(format!(
+                "cost budget exhausted: ${:.4} spent",
+                cost_tracker.total_cost_usd()
+            )));
+        }
+
         // Check context usage: first try upgrading to a larger-context model
         // variant; fall through to compaction if no upgrade is available.
         try_upgrade_or_compact(
