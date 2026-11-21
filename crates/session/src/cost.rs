@@ -1,5 +1,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use llm_budget::budget::AtomicBudget;
 
 use serde::{Deserialize, Serialize};
 
@@ -219,6 +222,8 @@ pub struct CostAccumulator {
     pub total_cost_usd: f64,
     /// Number of API calls recorded.
     pub api_calls: u64,
+    /// Optional hard dollar cap, shareable with sub-agents.
+    budget: Option<Arc<AtomicBudget>>,
 }
 
 impl CostAccumulator {
@@ -233,6 +238,9 @@ impl CostAccumulator {
         self.total_cache_creation_tokens += usage.cache_creation_tokens;
         self.total_cost_usd += cost;
         self.api_calls += 1;
+        if let Some(budget) = &self.budget {
+            budget.charge_force(cost);
+        }
     }
 
     /// Record usage with a pre-calculated cost (for callers that already know the cost).
@@ -243,6 +251,27 @@ impl CostAccumulator {
         self.total_cache_creation_tokens += usage.cache_creation_tokens;
         self.total_cost_usd += cost;
         self.api_calls += 1;
+        if let Some(budget) = &self.budget {
+            budget.charge_force(cost);
+        }
+    }
+
+    /// Attach a hard dollar cap. Pass the same `Arc` to sub-agent
+    /// accumulators so the whole team draws from one budget.
+    #[must_use]
+    pub fn with_budget(mut self, budget: Arc<AtomicBudget>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// The attached dollar cap, if any.
+    pub fn budget(&self) -> Option<&Arc<AtomicBudget>> {
+        self.budget.as_ref()
+    }
+
+    /// Whether the attached dollar cap has been reached.
+    pub fn budget_exhausted(&self) -> bool {
+        self.budget.as_ref().is_some_and(|b| b.is_exhausted())
     }
 
     pub fn merge(&mut self, other: &Self) {
@@ -291,6 +320,7 @@ impl CostAccumulator {
             total_cache_creation_tokens: summary.cache_creation_tokens,
             total_cost_usd: summary.total_cost_usd,
             api_calls: summary.api_calls,
+            budget: None,
         }
     }
 
@@ -362,6 +392,21 @@ pub fn load_cost_summary(path: &Path) -> crab_core::Result<Option<CostSummary>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_budget_caps_parent_and_sub_agent() {
+        let budget = Arc::new(AtomicBudget::new(0.05).unwrap());
+        let mut parent = CostAccumulator::default().with_budget(Arc::clone(&budget));
+        let mut worker = CostAccumulator::default().with_budget(Arc::clone(&budget));
+        let usage = TokenUsage::default();
+        parent.record(&usage, 0.03);
+        assert!(!parent.budget_exhausted());
+        worker.record(&usage, 0.03);
+        assert!(parent.budget_exhausted());
+        assert!(worker.budget_exhausted());
+        assert!((budget.spent_usd() - 0.06).abs() < 1e-9);
+        assert!(!CostAccumulator::default().budget_exhausted());
+    }
 
     #[test]
     fn default_is_zero() {

@@ -49,6 +49,7 @@ supports-hyperlinks = "3"
 
 # ─── Error Handling ───
 thiserror = "2"
+llm-budget = { version = "0.10.0", default-features = false }
 anyhow = "1"
 
 # ─── Logging / Tracing ───
